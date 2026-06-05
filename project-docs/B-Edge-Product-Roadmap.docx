@@ -1,0 +1,226 @@
+**B-EDGE**  Product Roadmap
+
+**B-EDGE**
+
+*Beauty at the Edge*
+
+الجمال عند الحافة
+
+**PRODUCT ROADMAP**
+
+Version 1.0  Confidential  2025
+
+| **Prepared By** | **Market** | **Launch Target** | **Version** |
+| --- | --- | --- | --- |
+| Edge (Founder) | Lebanon to MENA | 7 Weeks | 1.0 |
+
+# **Phase Overview**
+
+| **Phase** | **Timeline** | **Goal** | **Status** |
+| --- | --- | --- | --- |
+| MVP | Weeks 1 to 7 | Launch with core booking features. Get first 20 artists. | Build Now |
+| Phase 2 | Month 3 to 6 | Grow to 100 artists. Add Instagram integration. | After Validation |
+| Phase 3 | Month 6 to 12 | Expand beyond Lebanon. Add products catalogue. | After Revenue |
+| Phase 4 | Year 2 and beyond | Scale to MENA. Add payments. Enterprise features. | Future |
+
+| **Color** | **Meaning** |
+| --- | --- |
+| Green background | MVP feature — built in first 7 weeks |
+| Orange background | Phase 2 feature — built after first users |
+| Purple background | Phase 3 feature — built after first revenue |
+| Pink background | Phase 4 feature — long term vision |
+
+# **1. Customer Features**
+
+| **Feature** | **Phase** | **Description** | **Why This Phase** |
+| --- | --- | --- | --- |
+| Register and login | MVP | Email and password account creation with JWT auth | Core requirement for booking |
+| Browse artist profiles | MVP | View artist name, bio, city, photos, and rating | Customers need to discover artists |
+| Search and filter artists | MVP | Filter by service type, city, and price range | Essential for discovery |
+| View artist portfolio | MVP | See artist's work photos before booking | Trust builder before booking |
+| View services and prices | MVP | See all services an artist offers with prices | Needed to make booking decision |
+| Check availability | MVP | See available time slots for a specific date | Core booking requirement |
+| Create booking request | MVP | Request an appointment with chosen artist | Core platform function |
+| Receive booking confirmation | MVP | Email notification when artist confirms | Customer needs to know status |
+| View booking history | MVP | See past and upcoming appointments | Basic account feature |
+| Cancel a booking | MVP | Cancel with platform cancellation policy | Needed for user control |
+| Leave a review | MVP | Rate artist and leave comment after appointment | Builds platform trust |
+| Receive booking reminders | MVP | Email reminder 24 hours before appointment | Reduces no-shows |
+| PWA install prompt | MVP | Option to add B-Edge to home screen | Improves retention |
+| Instagram booking link | MVP | Artist shares B-Edge profile link in Instagram bio | First Instagram integration |
+| Arabic and English UI | MVP | Full bilingual interface | Lebanon market requirement |
+| Social login | Phase 2 | Login with Google or Apple account | Reduces signup friction |
+| Favourite artists | Phase 2 | Save preferred artists for quick rebooking | Improves retention |
+| Rebook previous service | Phase 2 | One tap to rebook a past appointment | Convenience feature |
+| Instagram Book Now button | Phase 2 | Book directly from artist Instagram profile | Major discovery channel |
+| In-app chat with artist | Phase 2 | Message artist before or after booking | Replaces WhatsApp for service queries |
+| Push notifications | Phase 2 | Browser push for booking updates | Better than email only |
+| Referral system | Phase 2 | Share B-Edge and earn discounts | Growth mechanism |
+| Browse by neighbourhood | Phase 2 | Find artists near specific Beirut areas | Hyper local discovery |
+| Gift a booking | Phase 3 | Send a booking as a gift to someone | New revenue stream |
+| Buy beauty products | Phase 3 | Purchase products sold by artists | New revenue stream |
+| Loyalty points | Phase 3 | Earn points per booking redeemable for discounts | Retention program |
+| Multi country support | Phase 3 | Use B-Edge in Jordan, Egypt, UAE | MENA expansion |
+| Video consultation | Phase 4 | Video call with artist before booking | Premium feature |
+| AI style recommendations | Phase 4 | AI suggests artists based on face shape and preferences | Differentiation |
+| Online payments | Phase 4 | Pay for booking online via local gateway | Requires payment partner |
+| Subscription packages | Phase 4 | Buy monthly bundles with favourite artist | Recurring revenue |
+
+# **2. Artist Features**
+
+| **Feature** | **Phase** | **Description** | **Why This Phase** |
+| --- | --- | --- | --- |
+| Register and create profile | MVP | Name, bio, city, phone, and Instagram link | Core onboarding |
+| Add services and prices | MVP | Create service list with name, duration, and price | Customers need to see this |
+| Upload portfolio photos | MVP | Upload up to 20 photos showing their work | Trust and discovery |
+| Set availability calendar | MVP | Define working days, hours, and break times | Prevents wrong bookings |
+| Block dates | MVP | Mark days as unavailable (vacation, personal) | Calendar management |
+| View incoming bookings | MVP | See all pending and confirmed appointments | Core dashboard feature |
+| Confirm or decline bookings | MVP | Accept or reject customer booking requests | Artist control |
+| View booking details | MVP | See customer name, service, date, and time | Appointment preparation |
+| Cancel a booking | MVP | Cancel with reason sent to customer | Emergency situations |
+| Mark booking as complete | MVP | Confirm appointment happened | Triggers review request |
+| Mark customer as no-show | MVP | Flag when customer does not appear | Platform integrity |
+| View client list | MVP | See all customers who have booked with them | Basic CRM |
+| View client history | MVP | See past bookings and notes per customer | Service personalization |
+| Add notes per client | MVP | Private notes about customer preferences | Professional service |
+| Receive email notifications | MVP | Email alerts for new bookings and cancellations | Stay informed |
+| View earnings summary | MVP | See daily, weekly, and monthly revenue | Business management |
+| Share booking link | MVP | Personal B-Edge profile link to share anywhere | Self marketing |
+| Import Instagram photos | Phase 2 | Pull portfolio photos directly from Instagram feed | Saves upload time |
+| Instagram Book Now button | Phase 2 | Add B-Edge booking button to Instagram profile | Direct booking channel |
+| SMS notifications | Phase 2 | SMS alerts in addition to email | Better reach in Lebanon |
+| Customer rebooking prompts | Phase 2 | Automated reminder to past customers to rebook | Retention tool |
+| Service packages | Phase 2 | Bundle multiple services at a package price | Upselling tool |
+| Waitlist management | Phase 2 | Allow customers to join waitlist for full slots | Revenue recovery |
+| Availability sync | Phase 2 | Sync calendar with Google Calendar | Avoid double booking |
+| Advanced CRM | Phase 2 | Track customer birthdays, preferences, spend history | Professional tool |
+| Sell products | Phase 3 | List beauty products for sale on B-Edge profile | New revenue stream |
+| Promo codes | Phase 3 | Create discount codes for new or returning customers | Marketing tool |
+| Analytics dashboard | Phase 3 | Detailed reports on bookings, revenue, and growth | Business intelligence |
+| Staff management | Phase 3 | Add team members if running a salon | Salon growth feature |
+| Multi location | Phase 3 | Manage multiple salon locations from one account | Salon chains |
+| Verified badge | Phase 3 | Apply for verified artist status | Trust and premium positioning |
+| Featured placement | Phase 4 | Pay to appear first in search results | Monetisation feature |
+| Video portfolio | Phase 4 | Upload video clips of work | Richer portfolio |
+| Online payment receiving | Phase 4 | Receive payments through B-Edge directly | Requires payment partner |
+| Subscription tiers | Phase 4 | Offer monthly packages to loyal customers | Recurring revenue |
+
+# **3. Platform and Admin Features**
+
+| **Feature** | **Phase** | **Description** | **Why This Phase** |
+| --- | --- | --- | --- |
+| Artist registration approval | MVP | Manual review of new artist registrations | Quality control |
+| Basic admin dashboard | MVP | View total artists, customers, and bookings | Platform oversight |
+| User management | MVP | View, suspend, or delete any account | Platform integrity |
+| Review moderation | MVP | Remove fake or abusive reviews | Platform quality |
+| Email notification system | MVP | Send booking emails via SendGrid | Core communication |
+| Health check endpoint | MVP | API health monitoring endpoint | Infrastructure requirement |
+| Error logging | MVP | Capture and log all API errors | Debugging and stability |
+| Automated backups | MVP | Daily database backups to AWS S3 | Data protection |
+| SMS notifications | Phase 2 | Send booking SMS via Twilio | Better reach |
+| Artist performance tracking | Phase 2 | Monitor rating trends and booking rates | Platform quality |
+| Dispute resolution system | Phase 2 | Formal process for customer and artist disputes | Trust and safety |
+| Fraud detection | Phase 2 | Detect and flag suspicious activity | Platform integrity |
+| Marketing email campaigns | Phase 2 | Send promotional emails to users | Growth tool |
+| SEO and landing pages | Phase 2 | Public artist pages indexable by Google | Organic growth |
+| Multi city launch dashboard | Phase 3 | Manage expansion to new Lebanese cities | Geographic growth |
+| Multi country management | Phase 3 | Manage Lebanon and MENA from one admin | MENA expansion |
+| Revenue analytics | Phase 3 | Track platform revenue, commissions, subscriptions | Business intelligence |
+| Partner integrations | Phase 3 | Integrate with Lebanese payment partners | Revenue collection |
+| API for third parties | Phase 4 | Public API for salon management software | Ecosystem growth |
+| White label solution | Phase 4 | B-Edge platform licensed to other businesses | New revenue model |
+
+# **4. Instagram Integration Roadmap**
+
+Given that the launch artist has 300K Instagram followers and an active Instagram shop, Instagram integration is a priority growth driver for B-Edge. The integration is planned in three stages of increasing depth.
+
+| **Stage** | **Phase** | **Feature** | **Business Value** |
+| --- | --- | --- | --- |
+| Stage 1 | MVP | Share B-Edge profile link in Instagram bio | Immediate traffic from 300K followers at zero cost |
+| Stage 1 | MVP | Instagram portfolio link on artist profile | Customers can see full Instagram before booking |
+| Stage 2 | Phase 2 | Official Instagram Book Now button on profile | Customers book without leaving Instagram |
+| Stage 2 | Phase 2 | Import portfolio photos from Instagram feed | Artists save time. Portfolio stays fresh automatically |
+| Stage 2 | Phase 2 | Instagram story deep link to booking page | Story viewers land directly on booking screen |
+| Stage 3 | Phase 3 | Instagram shop product sync | Artists sell products on B-Edge and Instagram from one catalogue |
+| Stage 3 | Phase 3 | Instagram insights integration | Artists see which Instagram posts drive most bookings |
+| Stage 3 | Phase 4 | Instagram DM to booking conversion | Convert Instagram DMs into B-Edge bookings automatically |
+
+The Stage 1 integration requires zero technical work and zero API access. It is simply a link in the Instagram bio. This alone is enough to drive significant traffic on launch day given the 300K follower audience.
+
+# **5. MVP Summary — What We Build in 7 Weeks**
+
+The MVP contains everything needed to validate B-Edge with real Lebanese beauty artists and their customers. Nothing more. Nothing less.
+
+## **5.1 Customer MVP**
+
+- **Register and login with email and password**
+
+- Search and filter artists by service, city, and price
+
+- View artist profile, portfolio, services, and reviews
+
+- Check availability and request a booking
+
+- Receive email confirmation of booking
+
+- View upcoming and past bookings
+
+- Cancel a booking
+
+- Leave a review after completed appointment
+
+- Arabic and English interface
+
+## **5.2 Artist MVP**
+
+- **Register and set up full profile**
+
+- Add services with prices and durations
+
+- Upload portfolio photos
+
+- Set working hours and block unavailable dates
+
+- Receive and manage booking requests
+
+- View client list with history and notes
+
+- View earnings summary
+
+- Share personal B-Edge booking link
+
+## **5.3 What Is NOT In MVP**
+
+| **Feature** | **Why Excluded** | **When Added** |
+| --- | --- | --- |
+| Online payments | No payment gateway available in Lebanon | Phase 4 |
+| Native mobile app | PWA covers this for MVP | Phase 3 |
+| Instagram Book Now button | Requires Meta business review process | Phase 2 |
+| In-app chat | WhatsApp still works for MVP | Phase 2 |
+| Product catalogue | Out of scope for booking platform MVP | Phase 3 |
+| SMS notifications | Email sufficient for MVP | Phase 2 |
+| Push notifications | PWA install not required for MVP | Phase 2 |
+| Analytics dashboard | Not needed until scale | Phase 3 |
+| Multi country | Lebanon only for MVP | Phase 3 |
+| Staff management | Solo artists only for MVP | Phase 3 |
+
+# **6. Development Timeline**
+
+| **Week** | **Focus** | **Deliverable** |
+| --- | --- | --- |
+| Week 1 | Backend setup and database | Project structure, PostgreSQL schema, Auth API |
+| Week 2 | Core API endpoints | Artist, booking, search, and review endpoints |
+| Week 3 | Artist PWA | Profile setup, portfolio upload, services, calendar |
+| Week 4 | Artist PWA | Bookings dashboard, client list, earnings view |
+| Week 5 | Customer PWA | Home, search, artist profile, availability view |
+| Week 6 | Customer PWA | Booking flow, confirmation screen, my bookings |
+| Week 7 | Testing and deployment | Bug fixes, AWS deploy, give access to first artist |
+| Month 2 to 3 | Feedback and fixes | Improve based on real usage from brother's girlfriend |
+| Month 3 to 6 | Phase 2 features | Instagram integration, SMS, chat, rebook |
+| Month 6 to 12 | Phase 3 features | MENA expansion, products, analytics |
+| Year 2 | Phase 4 features | Payments, AI, white label, API |
+
+*B-EDGE  Beauty at the Edge  الجمال عند الحافة*
+
+Confidential  B-Edge Beauty Platform  Page

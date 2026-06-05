@@ -1,0 +1,438 @@
+**B-EDGE**  Auth API Documentation
+
+**B-EDGE**
+
+*Beauty at the Edge*
+
+الجمال عند الحافة
+
+**AUTH API DOCUMENTATION**
+
+Version 1.0  Confidential  2025
+
+| **Prepared By** | **Module** | **Base URL** | **Version** |
+| --- | --- | --- | --- |
+| Edge (Founder) | Authentication | /api/v1/auth | 1.0 |
+
+# **1. Overview**
+
+This document covers the complete B-Edge authentication system. It explains every helper function, every database model, every controller method, and every API endpoint in the auth module.
+
+| **Attribute** | **Value** |
+| --- | --- |
+| Base URL | /api/v1/auth |
+| Auth Strategy | JWT dual token (access + refresh) |
+| Access Token Expiry | 15 minutes |
+| Refresh Token Storage | httpOnly cookie (30 days) |
+| Password Hashing | bcrypt 10 salt rounds |
+| Soft Delete | deleted_at timestamp — data preserved |
+| Account States | active  frozen  suspended  deleted |
+
+# **2. Helper Functions**
+
+Helper functions are private utilities inside auth.controller.ts. They are not exported. They handle single responsibilities and are reused across multiple controller methods.
+
+## **2.1 hashPassword**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Async function |
+| Input | password: string — plain text from user |
+| Output | Promise string — bcrypt hash safe for DB storage |
+| Used In | register  resetPassword  changePassword |
+
+Takes a plain text password and returns a bcrypt hash. Uses 10 salt rounds which is the recommended security and performance balance. The hash is a one-way transformation — it cannot be reversed.
+
+const passwordHash = await hashPassword('MyPassword123')
+
+// Returns: '$2b$10$N9qo8uLOickgx2ZMRZoMye...'
+
+## **2.2 isValidPassword**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Synchronous function |
+| Input | password: string — password to validate |
+| Output | boolean — true if valid, false if not |
+| Used In | register  resetPassword  changePassword |
+| Rules | Minimum 8 characters  One uppercase letter  One number |
+
+Validates password strength before hashing and storing. Returns false immediately if any rule fails. Called before hashPassword to avoid unnecessary bcrypt computation on invalid passwords.
+
+## **2.3 toSafeUser**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Synchronous function |
+| Input | user: UserRow — raw database row including password_hash |
+| Output | SafeUser — user object without password_hash |
+| Used In | register  login |
+| Why | Never expose password_hash in API responses |
+
+Strips the password_hash field before sending user data to the client. This is a critical security function. Even though the hash cannot be reversed, exposing it enables offline brute force attacks.
+
+## **2.4 generateAccessToken**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Synchronous function |
+| Input | userId: string  role: string |
+| Output | string — signed JWT access token |
+| Expiry | 15 minutes (ACCESS_TOKEN_EXPIRY constant) |
+| Used In | register  login  refresh |
+| Payload | userId  role  type: access |
+
+Generates a short-lived JWT access token. The client sends this in the Authorization header of every API request. Short expiry minimizes damage if the token is stolen. When it expires the client uses the refresh token to get a new one silently.
+
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+## **2.5 generateRefreshToken**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Synchronous function |
+| Input | userId: string  role: string |
+| Output | string — signed JWT refresh token |
+| Expiry | 30 days (REFRESH_TOKEN_EXPIRY constant) |
+| Used In | register  login |
+| Payload | userId  role  type: refresh |
+
+Generates a long-lived JWT refresh token. Stored in an httpOnly cookie — not in browser memory or localStorage. JavaScript cannot read httpOnly cookies which protects against XSS token theft. Used only to obtain new access tokens.
+
+## **2.6 setRefreshTokenCookie**
+
+| **Property** | **Value** |
+| --- | --- |
+| File | src/controllers/auth.controller.ts |
+| Type | Synchronous function |
+| Input | res: Response  refreshToken: string |
+| Output | void — sets cookie on response |
+| Used In | register  login |
+| Cookie Name | refreshToken |
+| httpOnly | true — JavaScript cannot read it |
+| secure | true in production — HTTPS only |
+| sameSite | strict — prevents CSRF attacks |
+| maxAge | 30 days in milliseconds |
+
+Attaches the refresh token as a secure httpOnly cookie to the response. The browser stores it automatically and sends it with every request to the same domain. The client application never sees or handles this token directly.
+
+# **3. Database Model Functions**
+
+All SQL queries for the auth module live in src/models/user.model.ts. Controllers never write SQL directly. All queries use parameterized inputs to prevent SQL injection.
+
+| **Function** | **Query Type** | **Purpose** |
+| --- | --- | --- |
+| findUserByEmail | SELECT | Find user by email for login. Excludes soft deleted accounts. |
+| findUserById | SELECT | Find user by UUID after JWT verification. |
+| createUser | INSERT | Create new user. Returns full user row. |
+| updatePassword | UPDATE | Update password_hash after change or reset. |
+| updateUserStatus | UPDATE | Change account status (freeze/unfreeze/suspend). |
+| softDeleteUser | UPDATE | Set deleted_at timestamp. Never hard deletes. |
+| emailExists | SELECT | Check if email is already registered before creating account. |
+| createPasswordReset | INSERT | Store reset token with 1 hour expiry. |
+| findValidResetToken | SELECT | Find unexpired and unused reset token. |
+| markResetTokenUsed | UPDATE | Set used_at on reset token to prevent reuse. |
+
+# **4. API Endpoints**
+
+All auth endpoints are prefixed with /api/v1/auth. Public endpoints require no token. Protected endpoints require a valid JWT Bearer token in the Authorization header. Admin endpoints require role: admin in the JWT payload.
+
+| **Method** | **Endpoint** | **Auth** | **Description** |
+| --- | --- | --- | --- |
+| POST | /register | Public | Create new customer or artist account |
+| POST | /login | Public | Login and receive JWT tokens |
+| POST | /refresh | Cookie | Get new access token using refresh cookie |
+| POST | /logout | Bearer | Clear refresh token cookie |
+| POST | /forgot-password | Public | Request password reset email |
+| POST | /reset-password | Public | Reset password using email token |
+| PATCH | /change-password | Bearer | Change password while logged in |
+| DELETE | /delete-account | Bearer | Soft delete own account |
+| PATCH | /freeze-account | Admin | Freeze artist account |
+| PATCH | /unfreeze-account | Admin | Unfreeze artist account |
+
+## **4.1 Register**
+
+** POST **  **/api/v1/auth/register**    *Public — No token required*
+
+*Creates a new customer or artist account. Returns user data and JWT tokens.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| name | string | Yes | Full name — 2 to 100 characters |
+| email | string | Yes | Valid email address — must be unique |
+| password | string | Yes | Min 8 chars with uppercase and number |
+| role | string | Yes | Either customer or artist |
+| phone | string | No | Lebanese format +961XXXXXXXX |
+
+**Success Response — 201**
+
+{
+
+  "success": true,
+
+  "message": "Account created successfully",
+
+  "data": {
+
+    "user": {
+
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+
+      "name": "Rania Kadour",
+
+      "email": "rania@bedge.app",
+
+      "role": "artist",
+
+      "phone": "+96170123456",
+
+      "status": "active",
+
+      "created_at": "2025-01-01T00:00:00.000Z"
+
+    },
+
+    "accessToken": "eyJhbGci...",
+
+    "refreshToken": "eyJhbGci..."
+
+  }
+
+}
+
+**Error Responses**
+
+| **Code** | **When** |
+| --- | --- |
+| 400 | Missing required fields  Invalid role  Weak password |
+| 409 | Email address is already registered |
+
+## **4.2 Login**
+
+** POST **  **/api/v1/auth/login**    *Public — No token required*
+
+*Authenticates user. Returns user data and tokens. Sets refresh token cookie.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| email | string | Yes | Registered email address |
+| password | string | Yes | Account password |
+
+**Account Status Checks**
+
+| **Status** | **HTTP Code** | **Message** |
+| --- | --- | --- |
+| active | 200 | Login successful |
+| frozen | 403 | Account frozen. Please renew your subscription. |
+| suspended | 403 | Account suspended. Please contact support. |
+| deleted | 401 | This account has been deleted |
+
+**Security Note**
+
+Wrong email and wrong password return the same error message — Invalid email or password. This prevents attackers from knowing whether an email is registered.
+
+## **4.3 Refresh Token**
+
+** POST **  **/api/v1/auth/refresh**    *Cookie — Refresh token cookie required*
+
+*Issues a new access token. Called automatically by client when access token expires.*
+
+**How It Works**
+
+| **Step** | **Action** |
+| --- | --- |
+| 1 | Client detects 401 Unauthorized response from any API call |
+| 2 | Client automatically calls POST /auth/refresh |
+| 3 | Browser sends refreshToken cookie automatically |
+| 4 | Server verifies cookie is valid and not expired |
+| 5 | Server verifies user still exists and is active |
+| 6 | Server returns new access token |
+| 7 | Client retries original request with new token |
+
+**Success Response — 200**
+
+{
+
+  "success": true,
+
+  "data": { "accessToken": "eyJhbGci..." },
+
+  "message": "Token refreshed successfully"
+
+}
+
+## **4.4 Logout**
+
+** POST **  **/api/v1/auth/logout**    *Bearer token required*
+
+*Clears the refresh token cookie. Client must discard access token locally.*
+
+Server clears the httpOnly cookie. The access token remains valid until it expires (max 15 minutes). Client application must delete the access token from memory on logout.
+
+## **4.5 Forgot Password**
+
+** POST **  **/api/v1/auth/forgot-password**    *Public — No token required*
+
+*Sends password reset email. Always returns success to prevent email enumeration.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| email | string | Yes | Email address to send reset link to |
+
+**Flow**
+
+| **Step** | **Action** |
+| --- | --- |
+| 1 | User submits email address |
+| 2 | Server checks if email exists silently |
+| 3 | If exists — generates UUID reset token |
+| 4 | Stores token in password_resets table with 1 hour expiry |
+| 5 | Phase 2 — Sends email via SendGrid with reset link |
+| 6 | Always returns success regardless of whether email exists |
+
+## **4.6 Reset Password**
+
+** POST **  **/api/v1/auth/reset-password**    *Public — Reset token required*
+
+*Resets password using token from email link. Token is single use.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| token | string | Yes | UUID token from reset email link |
+| new_password | string | Yes | New password — min 8 chars uppercase and number |
+
+**Token Validation Rules**
+
+- **Token must exist in password_resets table**
+
+- Token expires_at must be in the future (1 hour window)
+
+- Token used_at must be NULL (not already used)
+
+- After use — used_at is set to prevent reuse
+
+## **4.7 Change Password**
+
+** PATCH **  **/api/v1/auth/change-password**    *Bearer token required*
+
+*Changes password for logged in user. Requires current password verification.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| current_password | string | Yes | Current account password for verification |
+| new_password | string | Yes | New password — min 8 chars uppercase and number |
+
+**Validation Steps**
+
+| **Step** | **Check** | **Error If Fails** |
+| --- | --- | --- |
+| 1 | current_password matches stored hash | 401 Current password is incorrect |
+| 2 | new_password meets strength requirements | 400 Password too weak |
+| 3 | new_password is different from current | 400 Must be different from current |
+
+## **4.8 Delete Account**
+
+** DELETE **  **/api/v1/auth/delete-account**    *Bearer token required*
+
+*Soft deletes own account. Sets deleted_at timestamp. Data is preserved.*
+
+**What Soft Delete Means**
+
+| **What** | **Behaviour** |
+| --- | --- |
+| users row | NOT deleted — deleted_at is set to current timestamp |
+| Booking history | Preserved — all past bookings remain in database |
+| Reviews | Preserved — reviews remain visible on artists |
+| Login attempts | Blocked — deleted accounts cannot login |
+| Data recovery | Possible within 30 days by admin |
+
+## **4.9 Freeze Account**
+
+** PATCH **  **/api/v1/auth/freeze-account**    *Admin Bearer token required*
+
+*Freezes an artist account. Used when subscription expires.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| user_id | string | Yes | UUID of the artist account to freeze |
+| reason | string | No | Optional reason for freezing |
+
+**What Happens When Frozen**
+
+- **Artist cannot login — 403 response with renewal message**
+
+- Existing bookings remain — customers are not affected
+
+- Profile remains visible — customers cannot make new bookings
+
+- Artist can unfreeze by renewing subscription
+
+## **4.10 Unfreeze Account**
+
+** PATCH **  **/api/v1/auth/unfreeze-account**    *Admin Bearer token required*
+
+*Restores frozen artist account to active status after payment.*
+
+**Request Body**
+
+| **Field** | **Type** | **Required** | **Description** |
+| --- | --- | --- | --- |
+| user_id | string | Yes | UUID of the frozen artist account to restore |
+
+Can only unfreeze accounts with status frozen. Suspended accounts require manual admin review and cannot be unfrozen through this endpoint.
+
+# **5. JWT Token Strategy**
+
+B-Edge uses a dual token strategy. Two tokens work together to balance security and user experience. The user never needs to re-login during normal use.
+
+| **Property** | **Access Token** | **Refresh Token** |
+| --- | --- | --- |
+| Expiry | 15 minutes | 30 days |
+| Storage | Client memory only | httpOnly cookie |
+| JavaScript access | Yes | No — httpOnly |
+| Sent with requests | Authorization header | Cookie header (automatic) |
+| Purpose | Authorize API calls | Obtain new access tokens |
+| Payload | userId  role  type:access | userId  role  type:refresh |
+| Secret key | JWT_SECRET env var | JWT_REFRESH_SECRET env var |
+
+## **5.1 Token Lifecycle**
+
+| **Time** | **Event** | **Action** |
+| --- | --- | --- |
+| T=0 | User logs in | Gets access token (15min) and refresh cookie (30 days) |
+| T=15min | Access token expires | Client calls POST /auth/refresh automatically |
+| T=15min+1s | New access token issued | Client continues without interruption |
+| T=30days | Refresh token expires | User must login again |
+
+## **5.2 Security Properties**
+
+- **Access token in memory only — lost on browser close or page refresh**
+
+- Refresh token in httpOnly cookie — JavaScript cannot steal it via XSS
+
+- sameSite strict cookie — CSRF attacks cannot use the cookie cross-site
+
+- short access token expiry — stolen tokens expire quickly
+
+- Token type field — access tokens rejected at refresh endpoint and vice versa
+
+*B-EDGE  Beauty at the Edge  الجمال عند الحافة*
+
+Confidential  B-Edge  Page

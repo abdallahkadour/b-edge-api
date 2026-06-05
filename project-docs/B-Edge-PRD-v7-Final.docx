@@ -1,0 +1,694 @@
+**B-Edge  **Product Requirements Document  ·  v7 Final  ·  May 2026
+
+**Product Requirements Document**
+
+*Beauty at the Edge  ·  الجمال عند الحافة*
+
+Version 7  ·  Final  ·  May 2026
+
+Launch Partner: Rania  ·  Beirut Downtown & Tripoli
+
+*Validated against Fresha, Vagaro, GlossGenius, Zenoti, DINGG, Square, Booksy, Boulevard*
+
+*Reviewed by Gemini, ChatGPT, and Claude  ·  34 gaps identified and resolved*
+
+*Companion document: B-Edge Technical Decisions **&** Engineering Principles v1*
+
+*Prepared by Spark (Claude)  ·  B-Edge Engineering  ·  Confidential*
+
+# Table of Contents
+
+*Configurable defaults: Every number in this document is a confirmed default value from Rania. All values are stored in the database and configurable by any salon owner at any time without code changes. Nothing is hardcoded in the application. Currency is USD at launch.*
+
+# 1. Platform Vision
+
+B-Edge is a beauty booking platform built for Lebanon and the MENA region. It is an open platform where any salon, studio, or independent artist can register, onboard their team, define their services and pricing, and accept bookings online.
+
+Rania is the launch partner and the most complex case: multi-artist, two stores across two cities, cross-city travel buffers, bridal packages, home visits, international travel, courses, flexible pricing, discounts, and a product store. If B-Edge works for Rania, it works for every simpler salon in the region.
+
+| **Principle** | **Detail** | **Industry reference** |
+| --- | --- | --- |
+| Open platform | Any salon or independent artist in Lebanon and MENA can register. | Fresha, Vagaro open marketplace model |
+| Rania as benchmark | Rania is the hardest case. Every feature designed for her complexity first. | B-Edge unique positioning |
+| Configurable by design | Every rule, fee, and time window configurable per salon. Nothing hardcoded. | Vagaro, Zenoti configurable model |
+| Custom services | Every salon can add custom services beyond the platform catalogue. No approval needed. | Vagaro, Square custom service model |
+| Arabic-first | Arabic RTL support from day one. WhatsApp as primary communication channel. | B-Edge MENA differentiator. No competitor does this properly. |
+| Build once, activate later | All services defined in DB at launch. Salons activate what they offer. | B-Edge unique feature |
+| Currency | USD only at launch. Multi-currency in Phase 3 MENA expansion. | Industry standard for Lebanese market |
+
+# 2. Launch Partner
+
+Rania is a beauty artist based in Lebanon with 400,000 Instagram followers and two physical studios in Beirut Downtown and Tripoli. She leads a team of specialist artists covering makeup, hair, and skincare. She also runs a product store on Instagram selling makeup and hair products.
+
+Rania represents the hardest scheduling and pricing scenario on the platform. All features are validated against her requirements first.
+
+# 3. Entity Relationships and Roles
+
+## 3.1 Platform Hierarchy
+
+| **Level** | **Entity** | **Description** |
+| --- | --- | --- |
+| 1 | Platform (B-Edge) | The platform. Contains all salons and independent artists. |
+| 2 | Salon | A business entity. One owner, one or more stores, a team of staff. Example: Rania Studio. |
+| 2 | Independent artist | An artist with no salon. Their profile is their own store. No team. |
+| 3 | Store | A physical location belonging to a salon. Example: Rania Studio Beirut. |
+| 3 | Staff | Artists, assistants, managers, and receptionists belonging to a salon. |
+| 3 | Product store | Optional online store per salon. Sells physical products. Cash on delivery at launch. |
+| 4 | Customer | Any person who books a service or orders a product. |
+
+## 3.2 Staff Roles and Permissions
+
+Based on Fresha 5-level permission model and GlossGenius role-based access control. Every staff member has their own login. Credentials are never shared.
+
+| **Role** | **Rania team** | **Can do** | **Cannot do** |
+| --- | --- | --- | --- |
+| Owner | Rania | Everything. Full access for the salon. | Nothing restricted. |
+| Manager | Future hire | Manage staff, bookings, pricing, reports for their store. | Delete salon, change billing, access other store financials. |
+| Receptionist | Future hire | Manage bookings, customers, approvals, refund queue. | Change pricing, manage staff, view financial reports. |
+| Artist | Hadia, Mirvat, Hair Girl 1, Hair Girl 2 | Own calendar, own services, own bookings only. | See other artists revenue, change store settings. |
+| Assistant | Makeup assistant | View own schedule only. | Manage anything. |
+
+*Note: Rania currently fills Owner, Manager, and Receptionist simultaneously. These roles exist for when she hires dedicated staff.*
+
+## 3.3 Artist Onboarding
+
+- Any artist can register and create a profile. Linked to a salon or standalone.
+
+- No approval required from B-Edge platform. Artists go live after completing onboarding.
+
+- Salon owner invites staff. Staff creates their own account linked to the salon.
+
+- During onboarding the artist sets: services, pricing, availability, deposit amounts, travel buffers.
+
+- All values are configurable after onboarding. Artist updates pricing at any time.
+
+# 4. Team Structure (Rania's Salon)
+
+| **Artist** | **Role** | **Speciality** | **Stores** | **Weekday buffer** | **Weekend buffer** |
+| --- | --- | --- | --- | --- | --- |
+| Rania | Owner | Eyes makeup, engagement, bridal, layliye, sahra, home visit, travel abroad, courses | Both | 2.5 hours | 1.5 hours |
+| Assistant | Assistant | Base makeup (pairs with Rania for eyes sessions only) | Both | 2.5 hours | 1.5 hours |
+| Hadia | Artist | Daily makeup, full makeup | Both | 2.5 hours | 1.5 hours |
+| Mirvat | Artist | Daily makeup, full makeup | Both | 2.5 hours | 1.5 hours |
+| Hair Girl 1 | Artist | All hair services | Both | 2.5 hours | 1.5 hours |
+| Hair Girl 2 | Artist | All hair services | Both | 2.5 hours | 1.5 hours |
+
+*Note: Travel buffer values are Rania**'**s confirmed defaults for Beirut-Tripoli. Configurable per artist per store pair. For international travel, buffer calculated per trip.*
+
+# 5. Service Catalogue
+
+The platform catalogue is a set of pre-defined service templates that make salon onboarding faster. Every salon also has the ability to create fully custom services with any name, category, price, and duration. Custom services require no platform approval. The catalogue below is a starting point, not a limit.
+
+*Custom service examples: hawajeb (eyebrows), threading, waxing, lash extensions, lash lift, tinting, dermaplaning, Moroccan bath, and any other service specific to the salon**'**s operation.*
+
+## 5.1 Makeup
+
+| **Service** | **Arabic / local name** | **Who performs (Rania)** | **Time restriction** | **Notes** |
+| --- | --- | --- | --- | --- |
+| Daily makeup | مكياج يومي | Hadia / Mirvat | None | Standard everyday makeup. |
+| Eyes + base makeup | عيون + أساس | Eyes: Rania. Base: assistant. | None | Combined two-artist service. $70 Tripoli. |
+| Full makeup with assistant | مكياج كامل مع مساعدة | Assistant | From 11am |  |
+| Full makeup | مكياج كامل | Hadia / Mirvat | From 11am |  |
+| Sahra makeup | مكياج سهرة | Hadia / Mirvat / Rania | None | Evening and party makeup. Standard Lebanese occasion type. |
+| Engagement makeup | مكياج خطوبة | Rania | None | Special occasion. |
+| Bridal makeup | مكياج عروس | Rania | None | Special occasion. |
+| Henna night makeup | مكياج ليلة الحنة | Rania / team | None | Pre-wedding henna celebration. Common across Lebanon and MENA. |
+| Layliye makeup | مكياج ليليه | Rania | None | Night-before-wedding celebration. Levantine-specific. |
+| Bridal + hijab | عروس + حجاب | Rania | None | Same service, different price per store. |
+| Bridal + hijab + free daily with assistant | باقة عروس + حجاب + مكياج يومي | Rania | None | Package. |
+| Bridal + bridal hair | عروس + تسريحة | Rania | None | Package. |
+| Bridal package with bridesmaids | باقة عروس مع وصيفات | Rania | None | Bridal hair + bridesmaid hair + full makeup. |
+| Bride and layliye | عروس وليليه | Rania | None | Hijab bride + hair layliye + makeup bride and layliye. |
+
+## 5.2 Hair
+
+| **Service** | **Notes** |
+| --- | --- |
+| Kreatin treatment | Has processing gap. Artist free during processing time for another client. |
+| Highlight | Has processing gap during color development. |
+| Lowlight | Has processing gap during color development. |
+| Hair coloring | Full or partial. Has processing gap. |
+| Cut | No processing gap. |
+| Blowout and styling | Special requests field for styling preferences. |
+| Extensions | Staff calls customer after booking to confirm type, color, and length. |
+| Henna hair treatment | Natural hair coloring/conditioning. Common in MENA. |
+| Moroccan treatment | Argan oil deep conditioning. Widely offered across Lebanon and GCC. |
+
+*Note: Processing gap: during color development or kreatin processing the artist is free to take another client. System blocks the chair but not the artist for the processing duration. Configurable per service.*
+
+## 5.3 Skincare
+
+| **Service** | **Rania price** | **Store** | **Notes** |
+| --- | --- | --- | --- |
+| Deep facial | $50 | Both stores |  |
+| Hydra facial | $25 | Tripoli only | Not available in Beirut. |
+| Deep cleansing | Configurable | TBD |  |
+| Hydration treatment | Configurable | TBD |  |
+| Acne treatment | Configurable | TBD |  |
+| Anti-aging treatment | Configurable | TBD |  |
+| Peeling | Configurable | TBD |  |
+| Filler and injectables | N/A | Other salons | Medspa. Not in Rania scope. |
+
+## 5.4 Face and Brow Services
+
+These are among the most common custom services added by Lebanese and MENA salons. Available as custom services for any salon.
+
+| **Service** | **Arabic** | **Notes** |
+| --- | --- | --- |
+| Eyebrow shaping (hawajeb) | حواجب | Threading, waxing, or razor. One of the most booked services in Lebanese salons. |
+| Eyebrow tinting | صبغ حواجب |  |
+| Eyebrow lamination | لامينيشن حواجب | Growing demand across Lebanon and GCC. |
+| Lash extensions | وضع رموش |  |
+| Lash lift and tint | رفع و صبغ رموش |  |
+| Threading | خيوط | Face, eyebrows, upper lip. |
+| Waxing | شمع | Face or body. |
+| Upper lip hair removal | شارب | Very common standalone service. |
+
+## 5.5 Spa and Massage
+
+Available for other salons. Not in Rania launch scope.
+
+| **Service** | **Notes** |
+| --- | --- |
+| Relaxation massage |  |
+| Deep tissue massage |  |
+| Hot stone massage |  |
+| Moroccan bath (hammam) | حمام مغربي - Very popular across Lebanon and GCC. |
+| Aromatherapy |  |
+| Body wrap |  |
+| Scrub treatment |  |
+
+## 5.6 Nails
+
+Available from day one. Rania activates when she has a nail technician.
+
+| **Service** | **Notes** |
+| --- | --- |
+| Manicure |  |
+| Pedicure |  |
+| Gel manicure |  |
+| Gel pedicure |  |
+| Nail art |  |
+| Nail extensions |  |
+| French manicure |  |
+| Nail removal | Gel or extension removal. |
+
+## 5.7 Special Services (Rania)
+
+| **Service** | **Base price** | **Deposit** | **Additional person** | **Notes** |
+| --- | --- | --- | --- | --- |
+| Home visit inside Lebanon | $1,500 flat | $500 | +$300 per person | No fixed duration. Base covers 1 person. |
+| Travel outside Lebanon | $2,000 fee + actual expenses | $500 | +$500 per person | Hotel, transport, visa billed at actual cost. |
+| Private course | Beirut $1,000 / Tripoli $600 per person | Configurable | N/A | 1 person per session. |
+| Class course | Beirut $400 / Tripoli $300 per person | Configurable | N/A | Up to 14 persons per session. |
+
+*Note: Special requests field on every booking. For complex services staff calls the customer after booking to confirm details before approval.*
+
+## 5.8 Custom Services
+
+Every salon can define custom services beyond the platform catalogue. No approval required. Custom services support all the same features as catalogue services.
+
+| **Field** | **Description** |
+| --- | --- |
+| Service name | Any name in Arabic, English, or both. Artist defines freely. |
+| Category | Assigned to any existing category, or a new custom category. |
+| Price | Set by the artist. Per store if different prices apply. |
+| Duration | In minutes. Any value. Processing gap configurable if applicable. |
+| Deposit amount | Configurable per service. |
+| Available from time | Optional time restriction (e.g. from 11am). |
+| Location type | in_store, home_visit, or outside_lebanon. |
+| Includes | Free-text list of what is bundled (e.g. hijab, assistant, lash tint). |
+| is_custom flag | True for salon-defined services. False for platform catalogue services. |
+
+# 6. Pricing
+
+## 6.1 Tripoli Store (Rania 2026)
+
+| **Service** | **Artist** | **Price** |
+| --- | --- | --- |
+| Daily makeup | Assistant | $40 |
+| Eyes + base makeup | Rania + assistant | $70 |
+| Full makeup | Hadia / Mirvat | $50 to $100 |
+| Engagement | Rania | $200 |
+| Bridal | Rania | $300 |
+| Bridal + hijab + free daily with assistant | Rania | $350 |
+| Bridal + bridal hair | Rania | $450 |
+| Bridal package with bridesmaids | Rania | $550 |
+| Bride and layliye | Rania | $600 |
+| Deep facial | TBD | $50 |
+| Hydra facial | TBD | $25 |
+| Private course | Rania | $600 per person |
+| Class course | Rania | $300 per person |
+
+## 6.2 Beirut Downtown Store (Rania 2026)
+
+| **Service** | **Artist** | **Price** |
+| --- | --- | --- |
+| Daily makeup | Assistant | $75 |
+| Full makeup with assistant | Assistant | $90 |
+| Full makeup | Hadia / Mirvat | $150 |
+| Engagement | Rania | $250 |
+| Bridal with hijab | Rania | $450 |
+| Bridal with bridal hair | Rania | $600 |
+| Deep facial | TBD | $50 |
+| Private course | Rania | $1,000 per person |
+| Class course | Rania | $400 per person |
+
+*Note: Missing Beirut prices for bridal variants (eyes + base, bridal package, bride and layliye) will be set by Rania during onboarding. All prices are configurable at any time.*
+
+## 6.3 Pricing Rules
+
+| **Rule** | **Default value** | **Configurable** |
+| --- | --- | --- |
+| Price model | Per artist per service per store | Yes per artist |
+| Early bird cutoff (Beirut) | Before 9am | Yes per store |
+| Early bird cutoff (Tripoli) | Before 7:30am | Yes per store |
+| Early bird fee | Configurable amount per store | Yes per store |
+| Closing time | 6pm | Yes per store |
+| Opening time | Configurable per store | Yes per store |
+| Full makeup available from | 11am | Yes per service |
+| Same-day minimum notice | 4 hours | Yes per store |
+| Outside store per person (Lebanon) | +$300 | Yes per artist |
+| Outside store per person (abroad) | +$500 | Yes per artist |
+| Discount limit | One per booking. No stacking. | Platform rule |
+| Currency | USD only at launch | Multi-currency in Phase 3 |
+
+## 6.4 Discounts and Promotions
+
+| **Type** | **Example** | **Notes** |
+| --- | --- | --- |
+| Percentage off all services | 10% off all services this week | All artist or salon services |
+| Percentage off specific service | 15% off bridal in July | Selected services only |
+| Fixed amount off | $20 off bookings over $100 | All or selected |
+| Promo code | RANIA10 gives 10% off | Customer enters at booking |
+| Seasonal sale | 20% off hair during Ramadan | Time-limited with configurable dates |
+
+- One discount per booking. No stacking. Highest applicable wins.
+
+- Discount has configurable validity dates and optional usage cap.
+
+- Deposit calculated on discounted price.
+
+- Product store has separate discount rules.
+
+# 7. Deposit and Cancellation Policy
+
+## 7.1 Deposit Rules
+
+| **Booking type** | **Rania deposit default** | **Configurable** |
+| --- | --- | --- |
+| In-store booking | $50 | Yes per artist |
+| Home visit inside Lebanon | $500 | Yes per artist |
+| Travel outside Lebanon | $500 (part of $2,000 fee) | Yes per artist |
+| Private course | Configurable | Yes per artist |
+| Class course | Configurable | Yes per artist |
+
+*Default value: Deposit deadline: 48 hours before appointment. Auto-cancels if unpaid. Slot released.. Configurable per salon.*
+
+*Default value: Payment methods: Wish Money (primary), cash (secondary), bank transfer (outside Lebanon).. Configurable per salon.*
+
+## 7.2 Deposit Verification
+
+Deposit verification is manual at launch. Rania confirms payment on her Wish Money account and marks the deposit as received in her dashboard. The system tracks verification status.
+
+| **Verification step** | **Who** | **System action** |
+| --- | --- | --- |
+| Customer sends deposit via Wish Money | Customer | No system action. Customer optionally notes transaction reference in special requests field. |
+| Rania checks her Wish Money account | Rania | No system action. |
+| Rania marks deposit received in dashboard | Rania | Booking status changes from approved to deposit_paid. Customer notified. |
+
+*Note: Phase 3: Wish Money or payment gateway API integration will automate deposit verification.*
+
+## 7.3 Cancellation Policy
+
+| **Scenario** | **Deposit outcome** | **System action** |
+| --- | --- | --- |
+| Customer cancels more than 24 hours before | Returned to customer | Booking marked refund_due. Artist notified. Customer sees refund pending. |
+| Customer cancels less than 24 hours before | Forfeited | Booking cancelled. Deposit kept. Customer notified. |
+| Customer no-show | Forfeited | Artist marks no-show. Deposit kept. Slot freed. |
+| Artist cancels or reschedules | Returned to customer in full | Booking marked refund_due. Artist notified. Customer sees refund pending. |
+| Deposit deadline passed (48h before appointment) | No deposit. Slot released. | Booking auto-expires. Waitlist triggered. |
+
+*Default value: Cancellation window: 24 hours before appointment.. Configurable per salon.*
+
+- Refund is manual. Rania transfers via Wish Money. System tracks: refund_due, refund_completed, refund_amount, refunded_at.
+
+- Customer sees refund status in their profile.
+
+- Phase 3: automated refunds via payment gateway.
+
+# 8. Booking Flow
+
+## 8.1 Booking State Machine
+
+| **Status** | **Meaning** | **Triggered by** | **Next states** |
+| --- | --- | --- | --- |
+| held | Slot reserved during checkout. 10 minutes. First-write-wins at DB level via GIST constraint. | Customer begins booking form. | pending, released |
+| released | Hold expired. Slot freed. | Background job after 10 minutes. | Final state. |
+| pending | Customer submitted. Awaiting artist review. | Customer completes booking form. | approved, cancelled |
+| approved | Artist approved. Awaiting deposit. Deadline: 48 hours before appointment. | Artist approves in dashboard. | deposit_paid, expired, cancelled |
+| deposit_paid | Deposit received. Booking confirmed. | Artist marks deposit received. | completed, no_show, cancelled |
+| completed | Appointment done. | Artist marks completed. | Final state. |
+| cancelled | Cancelled by customer or artist. | Either party cancels. | Final state. |
+| no_show | Customer did not arrive. | Artist marks no-show. | Final state. |
+| expired | Deposit deadline passed. Slot released. | Background job. | Final state. |
+
+*Note: Slot holding race condition: two customers simultaneously trying to hold the same slot — first write wins at database level via GIST exclusion constraint. Second customer receives immediate slot unavailable response. No application-level queue needed.*
+
+## 8.2 Multiple Bookings per Session
+
+- Customer can book multiple services in one session.
+
+- Each booking has its own approval and deposit flow independently.
+
+- Deposit is per service. Each service has its own deposit amount.
+
+## 8.3 Special Requests Field
+
+- Every booking has a free-text special requests field.
+
+- Customer uses it for: color preferences, hair length, skin type, extension type, number of additional persons, Wish Money transaction reference, any other need.
+
+- For complex services, staff calls the customer after booking to confirm details before approving.
+
+## 8.4 Outside Store: Additional Persons
+
+| **Location** | **Base covers** | **Additional person fee (Rania default)** |
+| --- | --- | --- |
+| Home visit inside Lebanon | 1 person | +$300 per person. Configurable per artist. |
+| Outside Lebanon | 1 person | +$500 per person. Configurable per artist. |
+
+## 8.5 Reimbursable Expenses (Outside Lebanon)
+
+- Total cost: $2,000 service fee + additional persons fees + sum of all actual expenses.
+
+- Expense types: hotel, transportation, visa fees, other.
+
+- Added by artist as line items before or after the trip.
+
+- Customer notified when expenses are added and shown the updated total.
+
+- UI for adding expenses ships in Phase 1 for Rania. Full expense management UI in Phase 2.
+
+# 9. Scheduling Rules
+
+## 9.1 Operating Hours
+
+| **Rule** | **Beirut default** | **Tripoli default** | **Configurable** |
+| --- | --- | --- | --- |
+| Opening time | Configurable | Configurable | Yes per store |
+| Closing time | 6pm | 6pm | Yes per store |
+| Early bird cutoff | Before 9am | Before 7:30am | Yes per store |
+| Early bird fee | Configurable | Configurable | Yes per store |
+| Full makeup from | 11am | 11am | Yes per service |
+| Same-day minimum notice | 4 hours | 4 hours | Yes per store |
+| Holidays and blackout dates | Configurable per store | Configurable per store | Yes per store |
+
+*Note: Business hours exceptions: Each store can define holiday closures and blackout dates. These are stored in the business_hours_exceptions table and take precedence over regular operating hours.*
+
+## 9.2 Multi-Store Travel Buffer
+
+| **Day type** | **Default buffer** | **Example** | **Configurable** |
+| --- | --- | --- | --- |
+| Weekdays (Mon-Thu) | 2.5 hours (150 min) | Tripoli ends 9:10am. Earliest Beirut: 11:40am. | Yes per artist per store pair |
+| Weekends (Fri-Sun) | 1.5 hours (90 min) | Tripoli ends 9:10am. Earliest Beirut: 10:40am. | Yes per artist per store pair |
+
+- Buffer applies in BOTH directions before and after any cross-store booking.
+
+- Example reverse: Beirut starts 8am weekday. Tripoli slots before 6:30am are blocked.
+
+- Two stores in the same city can have a shorter buffer (e.g. 30 minutes).
+
+- For international travel, buffer calculated per trip.
+
+- Store-only artists never appear in other stores availability.
+
+## 9.3 Service Duration and Processing Gap
+
+- System validates: start time + service duration must not exceed store closing time.
+
+- Rejected bookings show the latest valid start time for that service.
+
+- Services with processing gaps: artist is free during the processing window for another client. System blocks the chair but not the artist.
+
+- Home visit and outside Lebanon: no closing time validation.
+
+## 9.4 Rescheduling
+
+- Artist can reschedule a single booking to a new time.
+
+- Artist can bulk reschedule all bookings on a day by a time offset.
+
+- Bulk reschedule returns moved list and failed list. Partial success allowed.
+
+- Cascading conflicts detected before committing. Full chain shown to artist.
+
+- Customer notified automatically of any reschedule.
+
+- Artist reschedule always triggers full deposit refund to customer.
+
+## 9.5 Waitlist
+
+- Customer joins waitlist for a fully booked slot.
+
+- Notification goes to the first in queue when a slot opens.
+
+- Notified customer gets a configurable window (e.g. 30 minutes) to confirm before next in line is notified.
+
+- No time limit on waitlist entry duration.
+
+- Customer can waitlist multiple services simultaneously.
+
+- Waitlist entry has no deposit. Deposit only required after confirmation.
+
+# 10. Notifications
+
+All notifications are sent asynchronously. The booking transaction always commits first. A background worker sends notifications after. If WhatsApp is down, the booking still succeeds. Notifications never block a transaction.
+
+## 10.1 Notification Events
+
+| **Event** | **Channel** | **Recipient** | **Timing** |
+| --- | --- | --- | --- |
+| Booking received | WhatsApp + app | Artist | Immediately |
+| Booking approved | WhatsApp + SMS | Customer | Immediately. Includes deposit deadline. |
+| Deposit reminder | WhatsApp + SMS | Customer | Configurable. Default: 24 hours before deadline. |
+| Booking confirmed (deposit paid) | WhatsApp + SMS | Both | Immediately. |
+| Appointment reminder | WhatsApp + SMS | Customer | Configurable. Default: 24 hours before appointment. |
+| Appointment reminder | WhatsApp + SMS | Customer | Configurable. Default: 2 hours before appointment. |
+| Booking cancelled by artist | WhatsApp + SMS | Customer | Immediately. Includes refund notice. |
+| Booking rescheduled by artist | WhatsApp + SMS | Customer | Immediately. Shows new time. |
+| Booking expired (deposit not paid) | WhatsApp + SMS | Customer | Immediately on expiry. |
+| Refund due | App dashboard | Artist | Immediately on cancellation qualifying for refund. |
+| Refund completed | WhatsApp + SMS | Customer | When artist marks refund sent. |
+| Waitlist slot available | WhatsApp + SMS | Customer | Immediately on slot opening. |
+| Product order placed | WhatsApp + app | Artist | Immediately. |
+| Product order confirmed | WhatsApp + SMS | Customer | Immediately. |
+| Product order shipped | WhatsApp + SMS | Customer | When artist marks shipped. |
+
+## 10.2 Notification Reliability
+
+- WhatsApp is primary channel. SMS is automatic fallback if WhatsApp delivery fails.
+
+- Retry policy: 3 attempts with exponential backoff (1 min, 5 min, 15 min).
+
+- Dead-letter queue: notifications that fail all 3 attempts are moved to failed status and flagged for manual review.
+
+- Deduplication: same notification cannot be sent twice to the same user for the same event within a 5-minute window.
+
+- Customer opt-out: customers can set notification preferences (which events they receive, which channels).
+
+- Template versioning: notification templates are versioned in the database. Changes do not affect in-flight notifications.
+
+- All notification timing is configurable per salon.
+
+# 11. Security
+
+Security requirements validated against OWASP API Security Top 10 and industry best practices. Full technical implementation details are in the companion document: B-Edge Technical Decisions and Engineering Principles v1.
+
+| **Area** | **Requirement** | **Implementation** |
+| --- | --- | --- |
+| Passwords | bcrypt hashed. Never stored plain. | Cost 10 in production. Cost 1 in tests. |
+| JWT secrets | 64+ random hex chars minimum. | Validated on startup. Fails fast if too short. |
+| Token expiry | Access: 15 minutes. Refresh: 7 days. | httpOnly cookie for refresh token. Never in JS. |
+| Token rotation | New refresh token on every /refresh call. | Old token invalidated immediately. |
+| Email enumeration | Wrong email returns same message as wrong password. | Timing-safe comparison. |
+| Rate limiting | 100 requests per 15 minutes per IP on all /api/ routes. | Configurable. Applied on all endpoints. |
+| Input validation | Every endpoint validated before business logic runs. | go-playground/validator v10. |
+| SQL injection | Parameterized queries everywhere. Never string interpolation. | pgx parameterized queries. |
+| Multi-tenant isolation | salon_id always from JWT. Never from request body. | Enforced in service layer via context. |
+| CORS | Whitelist only. CLIENT_URL env var. | Fiber CORS middleware. |
+| Data in transit | HTTPS only in production. SSL via Let's Encrypt. | Nginx reverse proxy. |
+| Audit access | audit_events readable by Owner only for their salon. | Role check on audit log endpoints. |
+
+# 12. Non-Functional Requirements
+
+Minimum targets for launch on AWS EC2 t3.medium. These gate infrastructure decisions. All targets are for the Lebanese market at launch scale.
+
+| **Requirement** | **Target** | **Notes** |
+| --- | --- | --- |
+| Availability query response time | < 300ms p95 | Artist availability for a given date and store. |
+| Booking creation response time | < 500ms p95 | Includes hold creation and conflict check. |
+| API response time (general) | < 200ms p95 | For all non-availability endpoints. |
+| Concurrent users at launch | 50 simultaneous | Rania's customer base at launch. Scales horizontally on K8s. |
+| Uptime SLA | 99.5% monthly | Maximum 3.6 hours downtime per month. |
+| Database read/write ratio | Estimated 80% reads, 20% writes | Read replicas added when needed in Phase 3. |
+| Background job frequency | Every 1 minute | Expired hold cleanup, deposit deadline checks. |
+
+# 13. Product Store
+
+Optional per salon. Cash on delivery at launch. Rania uses her own courier. B-Edge tracks order status only.
+
+## 13.1 Rania Launch Catalogue
+
+| **Category** | **Product** | **Price** |
+| --- | --- | --- |
+| Makeup | Glitter | $15 |
+| Makeup | Lip liner | $10 |
+| Makeup | Beauty blender | $9 |
+| Makeup | Liquid glue | $16 |
+| Makeup | Blush | $17 |
+| Makeup | Gel eyeliner | $13 |
+| Hair | Shampoo kreatin sulfate-free | $8 |
+| Hair | Mask kreatin sulfate-free | $10 |
+| Hair | Scissors Japanese steel | $25 |
+| Hair | Scissors carbon style | $8 |
+| Nails | Nail pusher | $5 |
+
+## 13.2 Order State Machine
+
+| **Status** | **Meaning** | **Next states** |
+| --- | --- | --- |
+| placed | Customer placed order. Awaiting salon confirmation. | confirmed, cancelled |
+| confirmed | Salon confirmed. Preparing order. | shipped, cancelled |
+| shipped | Handed to courier. In transit. | delivered, returned |
+| delivered | Customer received. | Final state. |
+| cancelled | Cancelled by customer or salon. | Final state. |
+| returned | Customer returned order. | Final state. |
+
+# 14. Features Roadmap
+
+## 14.1 Phase 1: Launch
+
+| **Feature** | **Description** | **Industry reference** |
+| --- | --- | --- |
+| Online booking 24/7 | Customer PWA. Any service, artist, store. | Fresha, Vagaro standard |
+| Real-time availability | Per artist per store. Travel buffers. Processing gaps. | Standard + B-Edge extensions |
+| Custom services | Any salon adds custom services beyond the catalogue. | Vagaro, Square custom service model |
+| Staff roles and permissions | 5 roles. Hub-and-spoke. Location-level permissions. | Fresha 5-level model |
+| Booking approval + deposit | Artist approves. Customer pays deposit. Confirmed. | Fresha, Vagaro configurable deposit |
+| Slot holding during checkout | 10-minute hold. First-write-wins at DB level. | Airbnb held status pattern |
+| Deposit verification (manual) | Rania marks deposit received. Customer sees status. | B-Edge manual flow |
+| Multiple bookings per session | Book multiple services. Per-service deposit. | Fresha group bookings |
+| Special requests field | Free text. Staff callback for complex services. | Vagaro client notes |
+| Processing gap support | Artist free during kreatin / color development. | Boulevard, GlossGenius |
+| Outside store surcharge | Additional persons charged per person. | B-Edge unique feature |
+| WhatsApp + SMS notifications | Async. Configurable timing. Retry policy. Opt-out. | B-Edge WhatsApp for MENA |
+| Notification reliability | Retry 3x, dead-letter queue, deduplication, templates. | B-Edge notification reliability spec |
+| Cancellation policy | 24hr window enforced automatically. | Vagaro, GlossGenius no-show protection |
+| Refund tracking queue | Artist sees pending refunds. Customer sees status. | B-Edge manual flow |
+| Discounts and promotions | Percentage, fixed, promo codes, seasonal. | Fresha, Vagaro promotional tools |
+| Waitlist | Queue-based notification when slot opens. | Fresha intelligent waitlist |
+| Business hours exceptions | Holidays and blackout dates per store. | Industry standard |
+| Multi-store + travel buffer | Weekday and weekend buffers per artist. | B-Edge unique feature |
+| Artist onboarding | Self-service. Catalogue or custom services. | Fresha, Vagaro self-service |
+| Customer profiles | History, favourites, refund status. | Vagaro detailed profiles |
+| Product store | Optional. Sell products. Cash on delivery. | Vagaro, Square retail module |
+| Audit log | Append-only. Every financial and status action. | Financial system best practice |
+| Admin dashboard | Owner sees all stores, staff, bookings, refund queue. | Hub-and-spoke industry standard |
+| Arabic RTL interface | Full Arabic in both PWAs. | B-Edge MENA differentiator |
+
+## 14.2 Phase 2: Growth (Month 2 to 3)
+
+| **Feature** | **Description** |
+| --- | --- |
+| Client intake forms | Customizable per service. Allergies, skin type, previous treatments. GlossGenius Genius Forms model. |
+| Instagram integration | Artist portfolio linked from Instagram. |
+| Client notes and history | Treatment notes per client visible before appointment. |
+| Referral programme | Customer refers friend. Both get discount. |
+| Rebooking reminders | Remind clients to rebook after configurable weeks. |
+| SMS marketing | Artist sends campaigns to client list. |
+| Course management | Full participant list management for class courses. |
+| Full expense management UI | Add and track outside-Lebanon reimbursable expenses. |
+| Repeat no-show policy | Auto-require deposit from clients with multiple no-shows. |
+| Product store enhancements | Discounts, featured products, product reviews. |
+| Ramadan seasonal pricing | Time-limited pricing windows for peak demand. MENA exclusive. |
+| WhatsApp booking bot | Handle booking requests conversationally via WhatsApp. |
+| Reviews and ratings | Public ratings on artist profiles. Moderation workflow. |
+
+## 14.3 Phase 3: Expansion (Month 6+)
+
+| **Feature** | **Description** |
+| --- | --- |
+| Open platform | Any salon or artist in Lebanon can register. |
+| Online payments | Stripe or regional gateway. Replaces Wish Money. Enables online product payment. |
+| Automated refunds | Refunds via payment gateway. No manual step. |
+| Multi-currency | LBP, SAR, AED, JOD. MENA expansion. |
+| Dynamic pricing | Demand-based and time-of-day pricing. Up to 25% occupancy increase. |
+| Loyalty programme | Points per booking and purchase. |
+| AI scheduling | Smart slot suggestions and team allocation. |
+| Analytics dashboard | Revenue, peak hours, top services, no-show rates, top products. |
+| MENA expansion | Jordan, UAE, KSA. |
+| White label | Salons operate B-Edge under their own brand. |
+
+# 15. Database Schema
+
+Technical implementation details — indexes, constraints, migration rules — are in the companion document: B-Edge Technical Decisions and Engineering Principles v1.
+
+| **Table** | **Key fields** | **Purpose** |
+| --- | --- | --- |
+| users | id UUID, name, email, password_hash, role, phone, status, created_at, deleted_at TIMESTAMPTZ | Every person on the platform. |
+| salons | id UUID, name, owner_id FK users, created_at | A beauty business. One owner, many stores and staff. |
+| stores | id UUID, salon_id, name, city, country, open_time, close_time, same_day_booking_enabled, min_advance_hours | A physical location. Operating hours and booking rules per store. |
+| business_hours_exceptions | id UUID, store_id, date DATE, is_closed BOOLEAN, open_time, close_time, reason, created_at | Holiday closures and exceptional hours overrides per store. |
+| salon_staff | id UUID, salon_id, user_id, role (owner/manager/receptionist/artist/assistant) | Staff membership and role per salon. |
+| worker_stores | id UUID, user_id, store_id, is_primary | Which stores each artist works at. Many-to-many. |
+| artist_travel_buffers | id UUID, artist_id, from_store_id, to_store_id, weekday_buffer_minutes, weekend_buffer_minutes | Travel time between stores per artist. Weekday and weekend separately. |
+| service_categories | id UUID, salon_id, name, is_custom BOOLEAN, display_order | Service categories. Platform defaults and custom salon categories. |
+| services | id UUID, artist_id, store_id, salon_id, category_id, name, description, duration_min, processing_gap_minutes, price NUMERIC, currency, deposit_amount NUMERIC, location_type, available_from TIME, outside_per_person_fee NUMERIC, includes TEXT[], requires_consultation BOOLEAN, is_custom BOOLEAN, template_id UUID, is_active, created_at, deleted_at | Service offered by artist at store. Custom or catalogue. |
+| bookings | id UUID, customer_id, artist_id, service_id, store_id, salon_id, date DATE, start_time TIMESTAMPTZ, end_time TIMESTAMPTZ, status, held_until TIMESTAMPTZ, deposit_amount NUMERIC, deposit_paid_at, deposit_method, deposit_deadline TIMESTAMPTZ, approved_at, approved_by, additional_persons, cancellation_reason, discount_applied, refund_status, refund_amount, refunded_at, special_requests, created_at, deleted_at | Central transactional table. Every appointment. |
+| booking_expenses | id UUID, booking_id, type (hotel/transport/visa/other), description, amount NUMERIC, currency, created_at | Reimbursable expenses for outside Lebanon bookings. |
+| waitlist | id UUID, artist_id, store_id, service_id, customer_id, date, time, requested_at, notified_at, notified_until TIMESTAMPTZ, expires_at, status | Waitlist queue per slot. |
+| reviews | id UUID, booking_id UNIQUE, customer_id, artist_id, rating INTEGER (1-5), comment, is_visible BOOLEAN, created_at | One review per completed booking. Phase 2 visibility and moderation. |
+| discounts | id UUID, artist_id, salon_id, type, value NUMERIC, code, scope, valid_from, valid_until, max_uses, uses_count, is_active | Promotional discounts. |
+| early_bird_fees | id UUID, store_id, before_time TIME, fee_amount NUMERIC | Early bird surcharge configuration per store. |
+| audit_events | id UUID, entity_type, entity_id, action, old_value JSONB, new_value JSONB, performed_by, source (app/admin/system/background), created_at TIMESTAMPTZ | Append-only. Every status change and financial action. Retention: 7 years. |
+| notifications | id UUID, user_id, type, channel (whatsapp/sms/email), status (pending/sent/failed/dead_letter), attempt_count, payload JSONB, sent_at, created_at | Async notification queue with retry tracking. |
+| notification_templates | id UUID, salon_id, event_type, channel, language, template_body, version INTEGER, is_active, created_at | Versioned notification templates per salon per language. |
+| notification_preferences | id UUID, user_id, event_type, channel, is_enabled, updated_at | Customer opt-out preferences per event and channel. |
+| course_bookings | id UUID, booking_id, course_type (private/class), participants TEXT[], price_per_person NUMERIC, max_participants INTEGER | Course booking data. |
+| products | id UUID, salon_id, category_id, name, description, price NUMERIC, stock_count, is_active, created_at, deleted_at | Product store catalogue. |
+| product_categories | id UUID, salon_id, name, display_order | Product categories per salon. |
+| product_images | id UUID, product_id, url, cloudinary_id, display_order | Product photos via Cloudinary. |
+| product_orders | id UUID, customer_id, salon_id, status, delivery_address, total_amount NUMERIC, payment_method (cash_on_delivery), notes, created_at | Product orders. |
+| product_order_items | id UUID, order_id, product_id, quantity, unit_price NUMERIC, subtotal NUMERIC | Line items per order. |
+| media | id UUID, owner_id, owner_type (artist/salon/service/product), url, cloudinary_id, type (photo/video), display_order, created_at | All media assets. Artist portfolio, service photos, product images. |
+| password_resets | id UUID, user_id, token VARCHAR UNIQUE, expires_at TIMESTAMPTZ, used_at, created_at | Forgot password tokens. 1 hour expiry. |
+
+*Note: Cloudinary handles all media: artist profiles, service photos, portfolio, and product images. All tables use UUID v4 primary keys, TIMESTAMPTZ for all timestamps, NUMERIC(10,2) for all money, and soft delete with deleted_at. See Technical Decisions document for full indexing and constraint specifications.*
+
+# 16. Glossary
+
+| **Term** | **Definition** |
+| --- | --- |
+| Layliye (ليليه) | The night before the wedding celebration. A Lebanese and Levantine tradition. Guests gather the evening before the wedding for music, dancing, and festivities. Bride gets special makeup for this event. |
+| Sahra (سهرة) | Evening or party occasion. A woman going to a dinner, concert, or social event. Distinct makeup service type between daily and engagement. Common occasion type in Lebanese salons. |
+| Khitbe (خطبة) | Engagement ceremony. Formal occasion where the couple announces their engagement. One of the major beauty booking occasions. |
+| Henna night (ليلة الحنة) | Pre-wedding celebration featuring henna body art. Common across Lebanon, GCC, and MENA. Separate beauty event requiring makeup and hair styling. |
+| Hawajeb (حواجب) | Eyebrow shaping and grooming service. One of the most frequently booked services in Lebanese salons. Can be done by threading, waxing, or razor. |
+| Kreatin | Keratin hair smoothing and strengthening treatment. Applied and processed over 1 to 3 hours. The processing time creates a scheduling gap where the artist is free. |
+| Wish Money | Lebanese digital payment platform. The primary deposit payment method for B-Edge at launch before online payment integration. |
+| PWA | Progressive Web App. A web application that behaves like a native mobile app. B-Edge uses PWA for both the customer and artist interfaces. |
+| GIST constraint | PostgreSQL Generalized Search Tree exclusion constraint. Used to prevent double booking at the database level. Enforces that no two confirmed bookings can overlap in time for the same artist. |
+| Keyset pagination | A pagination technique that uses the last seen record as a cursor instead of an offset. Equally fast for any page number regardless of dataset size. |
+| Travel buffer | Blocked time around a cross-store booking to account for travel time between locations. Configurable per artist per store pair with separate values for weekdays and weekends. |
+| Processing gap | Time during a service where the artist is not actively working on the client. For example during kreatin processing or hair color development. Artist can take another client during this window. |
+| Held status | Temporary booking status during checkout. Slot is reserved for 10 minutes while the customer completes the booking form. Prevents the slot from being taken by another customer simultaneously. |
+| Dead-letter queue | A queue for notifications that have failed all retry attempts. Flagged for manual review rather than silently discarded. |
+
+*Document prepared by Spark (Claude)  ·  B-Edge Engineering  ·  Version 7 Final  ·  May 2026  ·  Confidential*
+
+*Companion document: B-Edge Technical Decisions and Engineering Principles v1*
+
+*Reviewed by Gemini, ChatGPT, and Claude  ·  34 gaps identified  ·  All resolved or deferred with rationale*
+
+Confidential  ·  B-Edge  ·  May 2026

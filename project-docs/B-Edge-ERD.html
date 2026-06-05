@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>B-Edge — Database ERD</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; overflow: hidden; }
+
+#toolbar {
+  position: fixed; top: 0; left: 0; right: 0; height: 48px;
+  background: #1a1d27; border-bottom: 1px solid #2d3148;
+  display: flex; align-items: center; padding: 0 16px; gap: 12px; z-index: 100;
+}
+#toolbar h1 { font-size: 14px; font-weight: 600; color: #a78bfa; margin-right: 8px; }
+#toolbar span { font-size: 12px; color: #64748b; }
+.tb-btn {
+  padding: 4px 12px; border-radius: 6px; border: 1px solid #2d3148;
+  background: #252836; color: #94a3b8; font-size: 12px; cursor: pointer;
+  transition: all .15s;
+}
+.tb-btn:hover { background: #2d3148; color: #e2e8f0; }
+#zoom-label { font-size: 12px; color: #64748b; min-width: 40px; text-align: center; }
+
+#legend {
+  position: fixed; bottom: 16px; left: 16px; z: 100;
+  background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px;
+  padding: 12px 16px; font-size: 11px;
+}
+#legend h3 { font-size: 11px; color: #64748b; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
+.leg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: #94a3b8; }
+.leg-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+#canvas-wrap { position: fixed; top: 48px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }
+#canvas-wrap.dragging { cursor: grabbing; }
+#canvas { position: absolute; transform-origin: 0 0; }
+
+svg.erd { pointer-events: none; position: absolute; top: 0; left: 0; }
+svg.erd line, svg.erd path { pointer-events: none; }
+
+.table-card {
+  position: absolute; border-radius: 10px; border: 1px solid;
+  overflow: hidden; min-width: 200px; cursor: pointer;
+  transition: box-shadow .2s;
+}
+.table-card:hover { box-shadow: 0 0 0 2px #a78bfa88; }
+.table-card.selected { box-shadow: 0 0 0 2px #a78bfa; }
+
+.card-header {
+  padding: 8px 12px; font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.card-header .icon { font-size: 14px; }
+
+.card-body { padding: 0; }
+.col-row {
+  display: flex; align-items: center; padding: 3px 12px;
+  font-size: 11px; gap: 6px; border-top: 1px solid rgba(255,255,255,.04);
+}
+.col-row.pk { background: rgba(167,139,250,.08); }
+.col-row.fk { background: rgba(96,165,250,.05); }
+.col-name { flex: 1; color: #e2e8f0; }
+.col-name.pk-name { color: #a78bfa; font-weight: 600; }
+.col-name.fk-name { color: #60a5fa; }
+.col-type { color: #64748b; font-size: 10px; }
+.col-badge {
+  font-size: 9px; padding: 1px 4px; border-radius: 3px;
+  font-weight: 600; letter-spacing: .03em;
+}
+.badge-pk { background: #a78bfa22; color: #a78bfa; }
+.badge-fk { background: #60a5fa22; color: #60a5fa; }
+.badge-nn { background: #34d39922; color: #34d399; }
+.badge-u  { background: #fbbf2422; color: #fbbf24; }
+
+/* color themes per table group */
+.t-core   { background: #1e1f2e; border-color: #a78bfa44; }
+.t-core .card-header { background: #a78bfa18; color: #a78bfa; }
+.t-booking { background: #1e2030; border-color: #60a5fa44; }
+.t-booking .card-header { background: #60a5fa18; color: #60a5fa; }
+.t-store  { background: #1e2820; border-color: #34d39944; }
+.t-store .card-header { background: #34d39918; color: #34d399; }
+.t-artist { background: #2a1e20; border-color: #f8717144; }
+.t-artist .card-header { background: #f8717118; color: #f87171; }
+.t-service { background: #2a2218; border-color: #fbbf2444; }
+.t-service .card-header { background: #fbbf2418; color: #fbbf24; }
+.t-ops    { background: #1e2028; border-color: #94a3b844; }
+.t-ops .card-header { background: #94a3b818; color: #94a3b8; }
+
+.fk-line { stroke-width: 1.5; fill: none; opacity: .5; }
+.fk-line:hover { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>⬡ B-Edge ERD</h1>
+  <span>17 tables · PostgreSQL 15</span>
+  <div style="flex:1"></div>
+  <button class="tb-btn" onclick="resetView()">Reset view</button>
+  <button class="tb-btn" onclick="zoom(-0.15)">−</button>
+  <span id="zoom-label">100%</span>
+  <button class="tb-btn" onclick="zoom(0.15)">+</button>
+  <button class="tb-btn" onclick="toggleLines()">Toggle FK lines</button>
+</div>
+
+<div id="legend">
+  <h3>Legend</h3>
+  <div class="leg-row"><div class="leg-dot" style="background:#a78bfa"></div>Core identity</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#60a5fa"></div>Bookings</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#34d399"></div>Store / hours</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#f87171"></div>Artists</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#fbbf24"></div>Services</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#94a3b8"></div>Operations</div>
+</div>
+
+<div id="canvas-wrap">
+  <svg class="erd" id="svg-lines" width="4000" height="3000"></svg>
+  <div id="canvas"></div>
+</div>
+
+<script>
+const tables = [
+  // ── Core identity ──────────────────────────────────────────────────────
+  { id: 'users', label: 'users', theme: 't-core', icon: '👤', x: 60, y: 80,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'name', t:'VARCHAR(100)', nn:true },
+      { n:'email', t:'VARCHAR(255)', nn:true, u:true },
+      { n:'password_hash', t:'VARCHAR(255)', nn:true },
+      { n:'role', t:'VARCHAR(20)', nn:true },
+      { n:'phone', t:'VARCHAR(20)' },
+      { n:'status', t:'VARCHAR(20)', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'deleted_at', t:'TIMESTAMPTZ' },
+    ]
+  },
+  { id: 'salons', label: 'salons', theme: 't-core', icon: '💅', x: 340, y: 80,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'owner_id', t:'UUID FK → users', fk:'users' },
+      { n:'name', t:'VARCHAR(200)', nn:true },
+      { n:'name_ar', t:'VARCHAR(200)' },
+      { n:'subscription_plan', t:'VARCHAR(20)', nn:true },
+      { n:'plan_expires_at', t:'TIMESTAMPTZ' },
+      { n:'is_active', t:'BOOLEAN', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'deleted_at', t:'TIMESTAMPTZ' },
+    ]
+  },
+
+  // ── Store / hours ──────────────────────────────────────────────────────
+  { id: 'stores', label: 'stores', theme: 't-store', icon: '🏠', x: 640, y: 60,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
+      { n:'name', t:'VARCHAR(200)', nn:true },
+      { n:'name_ar', t:'VARCHAR(200)' },
+      { n:'address', t:'TEXT' },
+      { n:'city', t:'VARCHAR(100)', nn:true },
+      { n:'country', t:'VARCHAR(100)', nn:true },
+      { n:'phone', t:'VARCHAR(20)' },
+      { n:'same_day_notice_hours', t:'INTEGER', nn:true },
+      { n:'early_bird_cutoff', t:'TIME' },
+      { n:'early_bird_fee', t:'NUMERIC(10,2)', nn:true },
+      { n:'weekday_buffer_min', t:'INTEGER', nn:true },
+      { n:'weekend_buffer_min', t:'INTEGER', nn:true },
+      { n:'is_active', t:'BOOLEAN', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'business_hours', label: 'business_hours', theme: 't-store', icon: '🕐', x: 940, y: 60,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'day_of_week', t:'INTEGER(0-6)', nn:true },
+      { n:'open_time', t:'TIME', nn:true },
+      { n:'close_time', t:'TIME', nn:true },
+      { n:'is_open', t:'BOOLEAN', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'business_hours_exceptions', label: 'business_hours_exceptions', theme: 't-store', icon: '📅', x: 940, y: 320,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'exception_date', t:'DATE', nn:true },
+      { n:'is_closed', t:'BOOLEAN', nn:true },
+      { n:'open_time', t:'TIME' },
+      { n:'close_time', t:'TIME' },
+      { n:'reason', t:'VARCHAR(255)' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+
+  // ── Artists ────────────────────────────────────────────────────────────
+  { id: 'artists', label: 'artists', theme: 't-artist', icon: '🎨', x: 60, y: 420,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'user_id', t:'UUID FK → users', fk:'users' },
+      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
+      { n:'bio', t:'TEXT' },
+      { n:'bio_ar', t:'TEXT' },
+      { n:'instagram', t:'VARCHAR(255)' },
+      { n:'rating', t:'NUMERIC(3,2)', nn:true },
+      { n:'review_count', t:'INTEGER', nn:true },
+      { n:'is_verified', t:'BOOLEAN', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'artist_stores', label: 'artist_stores', theme: 't-artist', icon: '🔗', x: 340, y: 420,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
+      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'artist_store_buffers', label: 'artist_store_buffers', theme: 't-artist', icon: '🚗', x: 340, y: 620,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
+      { n:'from_store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'to_store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'weekday_buffer_min', t:'INTEGER', nn:true },
+      { n:'weekend_buffer_min', t:'INTEGER', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+
+  // ── Services ───────────────────────────────────────────────────────────
+  { id: 'service_categories', label: 'service_categories', theme: 't-service', icon: '🏷️', x: 640, y: 570,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'name', t:'VARCHAR(100)', nn:true, u:true },
+      { n:'name_ar', t:'VARCHAR(100)' },
+      { n:'has_processing_gap', t:'BOOLEAN', nn:true },
+      { n:'earliest_start_time', t:'TIME' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'services', label: 'services', theme: 't-service', icon: '✂️', x: 640, y: 800,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
+      { n:'category_id', t:'UUID FK → service_categories', fk:'service_categories' },
+      { n:'name', t:'VARCHAR(200)', nn:true },
+      { n:'name_ar', t:'VARCHAR(200)' },
+      { n:'description', t:'TEXT' },
+      { n:'duration_min', t:'INTEGER', nn:true },
+      { n:'active_duration_min', t:'INTEGER' },
+      { n:'price', t:'NUMERIC(10,2)', nn:true },
+      { n:'deposit_amount', t:'NUMERIC(10,2)', nn:true },
+      { n:'deposit_deadline_hours', t:'INTEGER', nn:true },
+      { n:'is_active', t:'BOOLEAN', nn:true },
+      { n:'is_custom', t:'BOOLEAN', nn:true },
+      { n:'template_id', t:'UUID FK → services', fk:'services' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+
+  // ── Bookings ───────────────────────────────────────────────────────────
+  { id: 'bookings', label: 'bookings', theme: 't-booking', icon: '📋', x: 1200, y: 400,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
+      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
+      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
+      { n:'customer_id', t:'UUID FK → users', fk:'users' },
+      { n:'service_id', t:'UUID FK → services', fk:'services' },
+      { n:'session_id', t:'UUID (multi-artist)' },
+      { n:'start_time', t:'TIMESTAMPTZ', nn:true },
+      { n:'end_time', t:'TIMESTAMPTZ', nn:true },
+      { n:'held_until', t:'TIMESTAMPTZ' },
+      { n:'status', t:'VARCHAR(30)', nn:true },
+      { n:'original_price', t:'NUMERIC(10,2)', nn:true },
+      { n:'discount_amount', t:'NUMERIC(10,2)', nn:true },
+      { n:'final_price', t:'NUMERIC(10,2)', nn:true },
+      { n:'deposit_amount', t:'NUMERIC(10,2)', nn:true },
+      { n:'deposit_deadline', t:'TIMESTAMPTZ' },
+      { n:'deposit_paid_at', t:'TIMESTAMPTZ' },
+      { n:'channel', t:'VARCHAR(30)', nn:true },
+      { n:'special_requests', t:'TEXT' },
+      { n:'cancellation_reason', t:'TEXT' },
+      { n:'cancelled_at', t:'TIMESTAMPTZ' },
+      { n:'completed_at', t:'TIMESTAMPTZ' },
+      { n:'no_show_at', t:'TIMESTAMPTZ' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'deleted_at', t:'TIMESTAMPTZ' },
+    ]
+  },
+  { id: 'reviews', label: 'reviews', theme: 't-booking', icon: '⭐', x: 1200, y: 900,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'booking_id', t:'UUID FK → bookings', fk:'bookings', u:true },
+      { n:'customer_id', t:'UUID FK → users', fk:'users' },
+      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
+      { n:'rating', t:'INTEGER(1-5)', nn:true },
+      { n:'comment', t:'TEXT' },
+      { n:'is_visible', t:'BOOLEAN', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'media', label: 'media', theme: 't-booking', icon: '🖼️', x: 1500, y: 900,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'owner_type', t:'VARCHAR(20)', nn:true },
+      { n:'owner_id', t:'UUID', nn:true },
+      { n:'url', t:'VARCHAR(500)', nn:true },
+      { n:'cloudinary_id', t:'VARCHAR(255)' },
+      { n:'type', t:'VARCHAR(20)', nn:true },
+      { n:'display_order', t:'INTEGER', nn:true },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+
+  // ── Operations ─────────────────────────────────────────────────────────
+  { id: 'notifications', label: 'notifications', theme: 't-ops', icon: '🔔', x: 1500, y: 400,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'booking_id', t:'UUID FK → bookings', fk:'bookings' },
+      { n:'user_id', t:'UUID FK → users', fk:'users' },
+      { n:'template_name', t:'VARCHAR(100)', nn:true },
+      { n:'channel', t:'VARCHAR(20)', nn:true },
+      { n:'status', t:'VARCHAR(20)', nn:true },
+      { n:'payload', t:'JSONB' },
+      { n:'attempts', t:'INTEGER', nn:true },
+      { n:'last_attempted_at', t:'TIMESTAMPTZ' },
+      { n:'sent_at', t:'TIMESTAMPTZ' },
+      { n:'error_message', t:'TEXT' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'audit_events', label: 'audit_events', theme: 't-ops', icon: '📝', x: 1500, y: 650,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
+      { n:'actor_id', t:'UUID FK → users', fk:'users' },
+      { n:'actor_role', t:'VARCHAR(20)' },
+      { n:'entity_type', t:'VARCHAR(50)', nn:true },
+      { n:'entity_id', t:'UUID', nn:true },
+      { n:'action', t:'VARCHAR(50)', nn:true },
+      { n:'old_values', t:'JSONB' },
+      { n:'new_values', t:'JSONB' },
+      { n:'ip_address', t:'INET' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'refresh_tokens', label: 'refresh_tokens', theme: 't-ops', icon: '🔑', x: 60, y: 800,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'user_id', t:'UUID FK → users', fk:'users' },
+      { n:'token_hash', t:'VARCHAR(255)', nn:true, u:true },
+      { n:'expires_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'revoked_at', t:'TIMESTAMPTZ' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+  { id: 'password_resets', label: 'password_resets', theme: 't-ops', icon: '🔒', x: 60, y: 1010,
+    cols: [
+      { n:'id', t:'UUID PK', pk:true },
+      { n:'user_id', t:'UUID FK → users', fk:'users' },
+      { n:'token', t:'VARCHAR(255)', nn:true, u:true },
+      { n:'expires_at', t:'TIMESTAMPTZ', nn:true },
+      { n:'used_at', t:'TIMESTAMPTZ' },
+      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
+    ]
+  },
+];
+
+// FK lines to draw
+const fkLines = [
+  { from:'salons', to:'users', color:'#a78bfa' },
+  { from:'stores', to:'salons', color:'#34d399' },
+  { from:'business_hours', to:'stores', color:'#34d399' },
+  { from:'business_hours_exceptions', to:'stores', color:'#34d399' },
+  { from:'artists', to:'users', color:'#f87171' },
+  { from:'artists', to:'salons', color:'#f87171' },
+  { from:'artist_stores', to:'artists', color:'#f87171' },
+  { from:'artist_stores', to:'stores', color:'#f87171' },
+  { from:'artist_store_buffers', to:'artists', color:'#f87171' },
+  { from:'services', to:'salons', color:'#fbbf24' },
+  { from:'services', to:'service_categories', color:'#fbbf24' },
+  { from:'bookings', to:'salons', color:'#60a5fa' },
+  { from:'bookings', to:'stores', color:'#60a5fa' },
+  { from:'bookings', to:'artists', color:'#60a5fa' },
+  { from:'bookings', to:'users', color:'#60a5fa' },
+  { from:'bookings', to:'services', color:'#60a5fa' },
+  { from:'reviews', to:'bookings', color:'#60a5fa' },
+  { from:'reviews', to:'users', color:'#60a5fa' },
+  { from:'reviews', to:'artists', color:'#60a5fa' },
+  { from:'notifications', to:'bookings', color:'#94a3b8' },
+  { from:'notifications', to:'users', color:'#94a3b8' },
+  { from:'audit_events', to:'salons', color:'#94a3b8' },
+  { from:'audit_events', to:'users', color:'#94a3b8' },
+  { from:'refresh_tokens', to:'users', color:'#94a3b8' },
+  { from:'password_resets', to:'users', color:'#94a3b8' },
+];
+
+// ─── Build DOM ──────────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const svgEl  = document.getElementById('svg-lines');
+const cardMap = {};
+
+tables.forEach(t => {
+  const card = document.createElement('div');
+  card.className = `table-card ${t.theme}`;
+  card.id = `card-${t.id}`;
+  card.style.left = t.x + 'px';
+  card.style.top  = t.y + 'px';
+
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  header.innerHTML = `<span class="icon">${t.icon}</span>${t.label}`;
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+  t.cols.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'col-row' + (c.pk ? ' pk' : '') + (c.fk ? ' fk' : '');
+    const nameClass = c.pk ? 'pk-name' : (c.fk ? 'fk-name' : '');
+    const badges = [
+      c.pk ? '<span class="col-badge badge-pk">PK</span>' : '',
+      c.fk ? '<span class="col-badge badge-fk">FK</span>' : '',
+      c.nn ? '<span class="col-badge badge-nn">NN</span>' : '',
+      c.u  ? '<span class="col-badge badge-u">U</span>'  : '',
+    ].join('');
+    row.innerHTML = `<span class="col-name ${nameClass}">${c.n}</span><span class="col-type">${c.t}</span>${badges}`;
+    body.appendChild(row);
+  });
+  card.appendChild(body);
+
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.table-card').forEach(c => c.classList.remove('selected'));
+    card.classList.toggle('selected');
+  });
+
+  // Make draggable
+  let ox, oy, mx, my, dragging = false;
+  card.addEventListener('mousedown', e => {
+    e.stopPropagation();
+    dragging = true;
+    ox = parseInt(card.style.left); oy = parseInt(card.style.top);
+    mx = e.clientX; my = e.clientY;
+    card.style.zIndex = 50;
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const dx = (e.clientX - mx) / scale;
+    const dy = (e.clientY - my) / scale;
+    card.style.left = (ox + dx) + 'px';
+    card.style.top  = (oy + dy) + 'px';
+    drawLines();
+  });
+  document.addEventListener('mouseup', () => { dragging = false; card.style.zIndex = ''; });
+
+  canvas.appendChild(card);
+  cardMap[t.id] = card;
+});
+
+// ─── FK Lines ───────────────────────────────────────────────────────────────
+let showLines = true;
+
+function getCenter(card) {
+  return {
+    x: parseInt(card.style.left) + card.offsetWidth / 2,
+    y: parseInt(card.style.top)  + card.offsetHeight / 2,
+  };
+}
+
+function drawLines() {
+  svgEl.innerHTML = '';
+  if (!showLines) return;
+  fkLines.forEach(fl => {
+    const fc = cardMap[fl.from];
+    const tc = cardMap[fl.to];
+    if (!fc || !tc) return;
+    const fs = { x: parseInt(fc.style.left), y: parseInt(fc.style.top), w: fc.offsetWidth, h: fc.offsetHeight };
+    const ts = { x: parseInt(tc.style.left), y: parseInt(tc.style.top), w: tc.offsetWidth, h: tc.offsetHeight };
+    const fx = fs.x + fs.w / 2, fy = fs.y + fs.h / 2;
+    const tx = ts.x + ts.w / 2, ty = ts.y + ts.h / 2;
+    const mx = (fx + tx) / 2;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M${fx},${fy} C${mx},${fy} ${mx},${ty} ${tx},${ty}`);
+    path.setAttribute('stroke', fl.color);
+    path.setAttribute('class', 'fk-line');
+    svgEl.appendChild(path);
+  });
+}
+
+function toggleLines() { showLines = !showLines; drawLines(); }
+
+// ─── Pan & Zoom ─────────────────────────────────────────────────────────────
+let scale = 0.75, tx = 40, ty = 40;
+const wrap = document.getElementById('canvas-wrap');
+const lbl  = document.getElementById('zoom-label');
+
+function applyTransform() {
+  canvas.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+  svgEl.style.transform  = `translate(${tx}px,${ty}px) scale(${scale})`;
+  lbl.textContent = Math.round(scale * 100) + '%';
+}
+applyTransform();
+drawLines();
+setTimeout(drawLines, 100);
+
+function zoom(delta) {
+  scale = Math.max(0.2, Math.min(2, scale + delta));
+  applyTransform();
+}
+function resetView() { scale = 0.75; tx = 40; ty = 40; applyTransform(); }
+
+let panning = false, px, py;
+wrap.addEventListener('mousedown', e => { panning = true; px = e.clientX; py = e.clientY; wrap.classList.add('dragging'); });
+document.addEventListener('mousemove', e => {
+  if (!panning) return;
+  tx += e.clientX - px; ty += e.clientY - py;
+  px = e.clientX; py = e.clientY;
+  applyTransform();
+});
+document.addEventListener('mouseup', () => { panning = false; wrap.classList.remove('dragging'); });
+
+wrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoom(e.deltaY < 0 ? 0.08 : -0.08);
+}, { passive: false });
+</script>
+</body>
+</html>

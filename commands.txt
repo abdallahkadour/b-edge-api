@@ -1,0 +1,205 @@
+# B-Edge — Command Reference
+
+> Every command run during development, in order, with explanation.
+
+---
+
+## Session 1 — Repo Setup
+
+```bash
+git clone git@github.com:abdallahkadour/b-edge-api-node.git
+```
+Cloned the old Node.js repo. Reference only — not touched again.
+
+```bash
+ls
+```
+Listed files in the current directory to see what exists.
+
+```bash
+cd b-edge-api
+```
+Moved into the active Go repo where all development happens.
+
+```bash
+find . -type f | grep -v ".git" | sort
+```
+Listed every file in the repo excluding git internals. Verified the scaffold was in place.
+
+```bash
+cat docker-compose.yml
+```
+Read the Docker config — confirmed PostgreSQL 15 and Jaeger are defined.
+
+```bash
+cat go.mod
+```
+Read the Go module file — confirmed all dependencies are installed.
+
+```bash
+cat Makefile
+```
+Read the build commands — confirmed run, dev, test, migrate, swagger all exist.
+
+```bash
+cat .env.example
+```
+Read the environment variable template — confirmed all required vars are defined.
+
+```bash
+cat .air.toml
+```
+Read the hot reload configuration — air watches .go files, rebuilds on change.
+
+---
+
+## Session 2 — Foundation Layer
+
+```bash
+mkdir -p cmd/migrate internal/config internal/middleware internal/pkg/apperror internal/pkg/response internal/pkg/hash internal/pkg/jwt
+```
+Created all required directories. `-p` means create parent directories too and don't error if they already exist.
+
+```bash
+cat > cmd/main.go << 'EOF' ... EOF
+```
+Created the server entry point. This is the first Go file — starts the server, connects the database, registers middleware.
+
+```bash
+bash setup-foundation.sh
+```
+Ran the foundation setup script. Created all remaining 12 Go files across config, middleware, and pkg layers.
+
+---
+
+## Session 3 — First Run (NEXT)
+
+```bash
+find . -type f -name "*.go" | sort
+```
+Lists every `.go` file alphabetically. Verifies all 13 foundation files exist before compiling.
+
+```bash
+make docker-up
+```
+Starts PostgreSQL and Jaeger in Docker containers in the background. Reads `docker-compose.yml`.
+
+```bash
+make migrate
+```
+Runs the 4 SQL migration files in `db/migrations/` against the PostgreSQL database. Creates all tables.
+
+```bash
+make dev
+```
+Starts the Go server with hot reload via `air`. Every time you save a `.go` file, the server rebuilds and restarts automatically.
+
+```bash
+curl http://localhost:3000/api/v1/health
+```
+Sends a GET request to the health endpoint. Should return `{"status":"ok","service":"b-edge-api","env":"development"}`. Confirms the server is running correctly.
+
+---
+
+## Makefile Commands Reference
+
+| Command | What it does |
+|---|---|
+| `make run` | Compile and run the server once. No hot reload. |
+| `make dev` | Run with air hot reload. Use this during development. |
+| `make test` | Run all tests in the project. |
+| `make coverage` | Run tests and show coverage percentage per package. |
+| `make migrate` | Apply pending migrations to the development database. |
+| `make migrate-test` | Apply pending migrations to the test database. |
+| `make swagger` | Generate Swagger docs from code annotations into `docs/`. |
+| `make build` | Compile to a binary at `bin/b-edge`. Used for production builds. |
+| `make docker-up` | Start PostgreSQL and Jaeger containers in the background. |
+| `make docker-down` | Stop and remove the Docker containers. |
+| `make lint` | Run golangci-lint against all Go files. |
+
+---
+
+## find Command Breakdown
+
+```bash
+find . -type f -name "*.go" | sort
+```
+
+| Part | Meaning |
+|---|---|
+| `find` | The search command |
+| `.` | Start from the current directory |
+| `-type f` | Only return files (`f`). Excludes directories (`d`) and symlinks. |
+| `-name "*.go"` | Only return items whose name ends in `.go` |
+| `\| sort` | Pipe results to `sort` — display alphabetically |
+
+---
+
+## air Hot Reload Flow
+
+When you run `make dev`, this happens automatically on every file save:
+
+```
+You save a .go file
+    → air detects the change
+    → runs: go build -o ./tmp/main ./cmd/main.go
+    → if build succeeds: kills old process, starts ./tmp/main
+    → if build fails: logs error to build-errors.log, keeps old process running
+```
+
+---
+
+## What Each Foundation File Does
+
+| File | Purpose |
+|---|---|
+| `cmd/main.go` | Entry point. Starts everything in sequence: logger → env validation → database → telemetry → HTTP server. |
+| `cmd/migrate/main.go` | Runs database migrations. Called by `make migrate` and `make migrate-test`. |
+| `internal/config/logger.go` | Creates Zap logger. Readable output in development. JSON output in production. |
+| `internal/config/env.go` | Validates all required env vars exist on startup. Fails immediately if anything is missing. |
+| `internal/config/database.go` | Opens pgx connection pool to PostgreSQL. Pings DB to confirm connection works. |
+| `internal/config/telemetry.go` | Starts OpenTelemetry tracing. Sends traces to Jaeger at `localhost:16686`. |
+| `internal/pkg/apperror/apperror.go` | Defines AppError type. Every error in the API uses this — consistent JSON format every time. |
+| `internal/pkg/response/response.go` | Success response helpers: OK, Created, List, NoContent. Handlers never call c.JSON directly. |
+| `internal/pkg/hash/hash.go` | bcrypt password hashing and verification. Slower cost in production, faster in tests. |
+| `internal/pkg/jwt/jwt.go` | JWT access token (15min) and refresh token (7 days) — generate and verify. |
+| `internal/middleware/auth.go` | Reads Bearer token from request, verifies it, injects user_id + salon_id + role into context. |
+| `internal/middleware/register.go` | Attaches global middleware in order: recover → requestid → logger → cors → rate limiter. |
+| `internal/middleware/logger.go` | Logs every request: method, path, status, latency, IP, request ID. |
+
+---
+
+*B-Edge  ·  Beauty at the Edge  ·  الجمال عند الحافة  ·  May 2026*
+
+
+go get — download a package
+go mod tidy — clean up unused dependencies
+go mod download — download all dependencies listed in go.mod
+
+
+
+clean dirty record 
+
+docker exec -it bedge-postgres psql -U postgres -d bedge -c "DELETE FROM schema_migrations;"
+
+
+What this command does: sed is a text editor that runs in the terminal. -i '' means edit the file in place. 's/old/new/g' means replace every occurrence of old with new. So this replaces every CREATE INDEX CONCURRENTLY with CREATE INDEX throughout the file.
+
+sed -i '' 's/CREATE INDEX CONCURRENTLY/CREATE INDEX/g' db/migrations/002_indexes.up.sql
+
+
+When someone clones your repo and wants to run the code:
+bashgit clone ...
+cd b-edge-api
+go mod tidy
+make dev
+
+
+go mod tidy
+What go mod tidy does:
+
+Scans all your .go files
+Finds every import
+Adds missing entries to go.sum
+Removes unused entries from go.mod and go.sum
+Upgrades indirect to direct where needed

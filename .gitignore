@@ -1,0 +1,22 @@
+# Binary
+bin/
+tmp/
+
+# Environment
+.env
+
+# Logs
+logs/
+
+# Swagger generated
+docs/
+
+# Test cache
+*.test
+*.out
+
+# OS
+.DS_Store
+
+# Air
+build-errors.log

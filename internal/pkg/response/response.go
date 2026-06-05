@@ -4,6 +4,28 @@ package response
 
 import "github.com/gofiber/fiber/v2"
 
+// Body is the standard success response envelope.
+// Used only for Swagger documentation — never instantiated directly.
+type Body struct {
+	Data  interface{} `json:"data"`
+	Error interface{} `json:"error"`
+	Meta  *Meta       `json:"meta"`
+}
+
+// ErrorBody is the standard error response envelope.
+// Used only for Swagger documentation — never instantiated directly.
+type ErrorBody struct {
+	Data  interface{}  `json:"data"`
+	Error ErrorDetails `json:"error"`
+	Meta  interface{}  `json:"meta"`
+}
+
+// ErrorDetails contains the machine-readable error code and human-readable message.
+type ErrorDetails struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // Meta holds pagination metadata for list responses.
 // NextCursor is the keyset cursor for fetching the next page.
 type Meta struct {

@@ -15,8 +15,10 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/gofiber/fiber/v2"
 
+	_ "github.com/abdallahkadour/b-edge-api/docs"
 	"github.com/abdallahkadour/b-edge-api/internal/domain/auth"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	fiberSwagger "github.com/gofiber/swagger"
 )
 
 // @title        B-Edge API
@@ -76,6 +78,8 @@ func main() {
 			"env":     os.Getenv("APP_ENV"),
 		})
 	})
+
+	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
 
 	auth.RegisterRoutes(app, pool, logger)
 

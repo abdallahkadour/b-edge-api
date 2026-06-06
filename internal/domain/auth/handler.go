@@ -1,5 +1,23 @@
 // Package auth implements the authentication domain for B-Edge,
 // including user registration, login, token management, and password flows.
+
+// HTTP request
+//
+//	→ Handler     parse body · BodyParser fills RegisterRequest
+//	→ Handler     validate fields · email format · password min 8
+//	→ Service     check email not taken · GetUserByEmail
+//	→ Service     hash password · bcrypt cost 10
+//	→ Service     build User struct · uuid.New()
+//	→ Service     generate JWT access token · 15 min
+//	→ Service     generate refresh token · sha256 hash stored
+//	→ Repository  INSERT INTO users · RETURNING created_at
+//	→ Repository  INSERT INTO refresh_tokens
+//	→ PostgreSQL  stores row · unique constraint on email
+//	→ Repository  returns ErrEmailConflict on 23505
+//	→ Service     converts to apperror.Conflict EMAIL_TAKEN
+//	→ Handler     setRefreshTokenCookie · httpOnly · Secure
+//	→ Handler     response.Created · access_token + UserInfo
+//	→ Client      receives 201 · refresh token in cookie
 package auth
 
 import (

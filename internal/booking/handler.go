@@ -1,4 +1,14 @@
 // Package booking implements the booking domain for B-Edge.
+// HTTP request
+//
+//	→ Handler    parses + validates
+//	→ Service    applies business rules
+//	→ Repository runs SQL
+//	→ PostgreSQL stores/returns data
+//	→ Repository returns data or sentinel error
+//	→ Service    converts to response or AppError
+//	→ Handler    writes JSON
+//	→ Client     receives result
 package booking
 
 import (

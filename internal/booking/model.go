@@ -312,3 +312,9 @@ func toResponse(b *Booking) *BookingResponse {
 		CreatedAt:          b.CreatedAt,
 	}
 }
+
+const (
+	RoleCustomer = "customer"
+	RoleArtist   = "artist"
+	RoleAdmin    = "admin"
+)

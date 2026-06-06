@@ -177,8 +177,17 @@ type BusinessHoursException struct {
 	Reason        *string   `db:"reason"`
 }
 
+var BlockingStatuses = []string{
+	StatusPending,
+	StatusApproved,
+	StatusHeld,
+	StatusDepositPending,
+	StatusDepositPaid,
+	StatusConfirmed,
+}
+
 // Service holds the booking-relevant fields from the services table.
-type Service struct {
+type SalonService struct {
 	ID                   uuid.UUID       `db:"id"`
 	SalonID              uuid.UUID       `db:"salon_id"`
 	Name                 string          `db:"name"`

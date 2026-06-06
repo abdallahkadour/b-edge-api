@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>B-Edge — Booking Domain Visual Flows</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#f8f9fc;color:#1a1a2e;line-height:1.6}
+.cover{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:60px 48px;min-height:280px;display:flex;flex-direction:column;justify-content:flex-end}
+.cover h1{font-size:48px;font-weight:700;letter-spacing:-1px;margin-bottom:8px}
+.cover h2{font-size:22px;font-weight:400;opacity:.7;margin-bottom:24px}
+.cover-meta{display:flex;gap:24px;flex-wrap:wrap}
+.cover-badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:8px 16px;font-size:13px}
+.container{max-width:1100px;margin:0 auto;padding:48px 32px}
+.section{margin-bottom:64px}
+.section-header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.section-num{width:36px;height:36px;border-radius:50%;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0}
+.section-title{font-size:28px;font-weight:700;color:#1a1a2e}
+.section-subtitle{font-size:15px;color:#666;margin-bottom:28px;padding-left:48px}
+.divider{height:1px;background:#e5e7eb;margin:48px 0}
+
+/* STATE MACHINE */
+.states-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.state-card{border-radius:12px;border:1.5px solid;padding:16px;cursor:pointer;transition:all .2s}
+.state-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.1)}
+.state-card.active{box-shadow:0 0 0 3px rgba(99,102,241,.4)}
+.sc-dot{width:12px;height:12px;border-radius:50%;margin-bottom:8px}
+.sc-name{font-size:14px;font-weight:700;margin-bottom:4px}
+.sc-desc{font-size:12px;opacity:.75}
+.sc-badge{font-size:10px;padding:2px 8px;border-radius:10px;margin-top:6px;display:inline-block;font-weight:600}
+.detail-panel{border-radius:16px;background:#fff;border:1px solid #e5e7eb;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.detail-name{font-size:22px;font-weight:700;margin-bottom:4px}
+.detail-who{font-size:14px;color:#666;margin-bottom:16px}
+.arrows-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.arrow-pill{font-size:12px;padding:5px 12px;border-radius:20px;border:1px solid #e5e7eb;font-weight:500}
+.arrow-to{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
+.arrow-from{background:#f8fafc;color:#64748b}
+.detail-rule{font-size:14px;line-height:1.7;color:#444;margin-top:16px;padding-top:16px;border-top:1px solid #e5e7eb}
+.blocking-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600}
+
+/* FLOW */
+.flow-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.flow-col-title{font-size:16px;font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e5e7eb}
+.flow-step{display:flex;gap:14px;margin-bottom:12px}
+.flow-num{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
+.flow-body{flex:1;padding-bottom:12px}
+.flow-title{font-size:14px;font-weight:600;margin-bottom:3px}
+.flow-detail{font-size:12px;color:#666;line-height:1.5}
+.flow-connector{width:2px;height:8px;background:#e5e7eb;margin-left:14px}
+.info-card{border-radius:10px;border:1px solid #e5e7eb;padding:14px;margin-bottom:10px;background:#fff}
+.info-card.danger{border-color:#fca5a5;background:#fff5f5}
+.info-card-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.info-card-body{font-size:12px;color:#555;line-height:1.5}
+
+/* CANCELLATION */
+.cancel-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.cancel-card{border-radius:12px;border:1px solid #e5e7eb;padding:18px;background:#fff}
+.cancel-scenario{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:10px}
+.cancel-deposit{font-size:14px;margin-bottom:6px}
+.cancel-status{font-size:14px;margin-bottom:8px}
+.cancel-note{font-size:12px;color:#555;line-height:1.5}
+.tag{display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:700}
+.tag-green{background:#d1fae5;color:#065f46}
+.tag-red{background:#fee2e2;color:#991b1b}
+.tag-amber{background:#fef3c7;color:#92400e}
+.refund-flow{border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px}
+.refund-title{font-size:14px;font-weight:600;margin-bottom:12px}
+.refund-steps{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.refund-pill{padding:8px 16px;border-radius:20px;font-size:13px;font-weight:600}
+
+/* ALGORITHM */
+.algo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.algo-card{border-radius:12px;border:1px solid #e5e7eb;padding:20px;background:#fff;position:relative}
+.algo-card.special{border-color:#6366f1;background:#fafafa}
+.algo-step-num{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:6px}
+.algo-step-title{font-size:16px;font-weight:700;margin-bottom:8px}
+.algo-step-body{font-size:13px;color:#555;line-height:1.7}
+.algo-db{font-size:11px;padding:4px 10px;border-radius:20px;background:#f1f5f9;color:#475569;display:inline-block;margin-top:10px;font-weight:500}
+.algo-check{display:flex;gap:8px;margin-top:8px;font-size:13px;color:#555}
+.algo-check::before{content:'✓';color:#059669;font-weight:700;flex-shrink:0}
+.algo-gist{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-top:12px}
+.algo-gist-title{font-size:13px;font-weight:700;color:#1d4ed8;margin-bottom:4px}
+.algo-gist-body{font-size:12px;color:#3730a3;line-height:1.5}
+
+/* FOOTER */
+footer{background:#1a1a2e;color:rgba(255,255,255,.6);padding:24px 48px;font-size:13px;display:flex;justify-content:space-between;align-items:center;flex-wrap:gap}
+
+/* PRINT */
+@media print{
+  body{background:#fff}
+  .cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .state-card,.detail-panel,.flow-grid,.cancel-grid,.algo-grid{page-break-inside:avoid}
+}
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <h1>B-Edge</h1>
+  <h2>Booking Domain — Visual Flows</h2>
+  <div class="cover-meta">
+    <div class="cover-badge">Version 1.0</div>
+    <div class="cover-badge">2026 · Confidential</div>
+    <div class="cover-badge">Companion to Booking Domain Specification v1.0</div>
+    <div class="cover-badge">Beauty at the Edge · الجمال عند الحافة</div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- 1. STATE MACHINE -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <div class="section-title">Booking Status — State Machine</div>
+  </div>
+  <div class="section-subtitle">Every booking has a status. Transitions are one-way. Click any status to see full details.</div>
+
+  <div class="states-grid" id="states-grid"></div>
+  <div class="detail-panel" id="state-detail">
+    <div style="color:#888;font-size:14px">Click any status above to see its details, transitions, and business rules.</div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- 2. FULL FLOW -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">2</div>
+    <div class="section-title">Full Booking Flow</div>
+  </div>
+  <div class="section-subtitle">The complete journey from slot selection to completed appointment.</div>
+
+  <div class="flow-grid">
+    <div>
+      <div class="flow-col-title">👤 Customer journey</div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#e0e7ff;color:#4338ca">1</div>
+        <div class="flow-body">
+          <div class="flow-title">Browse available slots</div>
+          <div class="flow-detail">Selects artist, store, service, and date. The slot algorithm runs and returns available windows.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#ede9fe;color:#7c3aed">2</div>
+        <div class="flow-body">
+          <div class="flow-title">Tap a slot → <code>held</code></div>
+          <div class="flow-detail">Slot locked for 10 minutes. GIST constraint ensures first-write-wins. If two customers tap simultaneously, one succeeds instantly — the other gets SLOT_UNAVAILABLE.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#dbeafe;color:#1d4ed8">3</div>
+        <div class="flow-body">
+          <div class="flow-title">Submit form → <code>pending</code></div>
+          <div class="flow-detail">Fills in special requests (optional). Submits. Artist receives a WhatsApp notification immediately.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#f0fdf4;color:#15803d">4</div>
+        <div class="flow-body">
+          <div class="flow-title">Wait for artist approval</div>
+          <div class="flow-detail">Artist reviews in their dashboard. Approves or rejects. No time limit on pending duration.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#fef3c7;color:#92400e">5</div>
+        <div class="flow-body">
+          <div class="flow-title">Pay deposit → <code>approved</code></div>
+          <div class="flow-detail">Transfer deposit via Wish Money before the 48-hour deadline. Artist verifies and marks deposit received → <code>deposit_paid</code>. Artist then confirms → <code>confirmed</code>.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#d1fae5;color:#065f46">6</div>
+        <div class="flow-body">
+          <div class="flow-title">Booking confirmed ✓</div>
+          <div class="flow-detail">Both parties receive WhatsApp confirmation. System automatically sends 24h and 2h reminders.</div>
+        </div>
+      </div>
+      <div class="flow-connector"></div>
+      <div class="flow-step">
+        <div class="flow-num" style="background:#f1f5f9;color:#475569">7</div>
+        <div class="flow-body">
+          <div class="flow-title">Attend → <code>completed</code></div>
+          <div class="flow-detail">Artist performs service and marks completed. Customer receives a review link via WhatsApp.</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="flow-col-title">🎨 Artist journey</div>
+      <div class="info-card">
+        <div class="info-card-title">📱 WhatsApp notification arrives</div>
+        <div class="info-card-body">"New booking request from [Customer]" — includes service name, time, and any special requests.</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-title">✅ Approve or reject</div>
+        <div class="info-card-body">Approve → system sets deposit_deadline = appointment_time − 48 hours. Customer is notified via WhatsApp with the exact deadline and deposit amount.<br><br>Reject → booking becomes cancelled. Slot freed immediately. Customer notified.</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-title">💰 Deposit verification queue</div>
+        <div class="info-card-body">Artist sees pending deposits in their dashboard. Verifies transfer in Wish Money app. Taps "Mark deposit received" (deposit_paid). Then taps "Confirm booking" (confirmed).<br><br>Two-step process prevents accidental confirmations.</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-title">📅 Day of appointment</div>
+        <div class="info-card-body">Perform the service. Mark as completed, no-show, or cancel from the dashboard.</div>
+      </div>
+      <div class="info-card danger">
+        <div class="info-card-title" style="color:#b91c1c">⏰ If deposit deadline passes</div>
+        <div class="info-card-body" style="color:#7f1d1d">Background job runs every minute. Booking auto-transitions to expired. Slot released immediately. Waitlist triggered. No action required from artist.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- 3. CANCELLATION -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">3</div>
+    <div class="section-title">Cancellation Policy</div>
+  </div>
+  <div class="section-subtitle">The 24-hour cancellation window is configurable per salon. Default is 24 hours before the appointment.</div>
+
+  <div class="cancel-grid">
+    <div class="cancel-card">
+      <div class="cancel-scenario">Customer cancels · &gt;24h before</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-green">Full refund</span></div>
+      <div class="cancel-status">Status: <code>refund_due</code></div>
+      <div class="cancel-note">Artist must transfer via Wish Money. System tracks through refund_due → refunded. Customer gets WhatsApp confirmation when refund is sent.</div>
+    </div>
+    <div class="cancel-card">
+      <div class="cancel-scenario">Customer cancels · &lt;24h before</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-red">Forfeited</span></div>
+      <div class="cancel-status">Status: <code>cancelled</code></div>
+      <div class="cancel-note">Artist keeps the full deposit. No refund is issued. Customer notified immediately via WhatsApp.</div>
+    </div>
+    <div class="cancel-card">
+      <div class="cancel-scenario">Customer no-show</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-red">Forfeited</span></div>
+      <div class="cancel-status">Status: <code>no_show</code></div>
+      <div class="cancel-note">Artist marks no-show in dashboard. Deposit kept. No-show recorded for analytics. Customer receives no refund.</div>
+    </div>
+    <div class="cancel-card">
+      <div class="cancel-scenario">Artist cancels · any time</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-green">Full refund — always</span></div>
+      <div class="cancel-status">Status: <code>refund_due</code></div>
+      <div class="cancel-note">Artist always bears the cost of cancelling. Customer receives WhatsApp with refund notice and amount. No exceptions.</div>
+    </div>
+    <div class="cancel-card">
+      <div class="cancel-scenario">Deposit deadline passes</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-amber">N/A — never paid</span></div>
+      <div class="cancel-status">Status: <code>expired</code></div>
+      <div class="cancel-note">Background job auto-transitions. No deposit was ever paid. Slot freed immediately. Waitlist triggered.</div>
+    </div>
+    <div class="cancel-card">
+      <div class="cancel-scenario">No deposit required</div>
+      <div class="cancel-deposit">Deposit: <span class="tag tag-amber">N/A</span></div>
+      <div class="cancel-status">Status: <code>cancelled</code></div>
+      <div class="cancel-note">Service had deposit_amount = 0. No financial impact. Slot freed immediately on cancellation.</div>
+    </div>
+  </div>
+
+  <div class="refund-flow">
+    <div class="refund-title">Refund flow</div>
+    <div class="refund-steps">
+      <div class="refund-pill" style="background:#fef3c7;color:#92400e">refund_due</div>
+      <div style="font-size:20px;color:#ccc">→</div>
+      <div style="font-size:13px;color:#666">Artist transfers amount<br>via Wish Money</div>
+      <div style="font-size:20px;color:#ccc">→</div>
+      <div style="font-size:13px;color:#666">Artist taps<br>"Mark refund sent"</div>
+      <div style="font-size:20px;color:#ccc">→</div>
+      <div class="refund-pill" style="background:#d1fae5;color:#065f46">refunded</div>
+      <div style="font-size:20px;color:#ccc">→</div>
+      <div style="font-size:13px;color:#666">Customer receives<br>WhatsApp confirmation</div>
+    </div>
+    <div style="font-size:12px;color:#888;margin-top:12px">Phase 1: Manual refunds via Wish Money. Phase 3: Automated refunds via payment gateway.</div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- 4. SLOT ALGORITHM -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">4</div>
+    <div class="section-title">Slot Availability Algorithm</div>
+  </div>
+  <div class="section-subtitle">Runs every time a customer requests available slots. All 7 steps must pass for a slot to appear. If any step fails, the slot is excluded.</div>
+
+  <div class="algo-grid">
+    <div class="algo-card">
+      <div class="algo-step-num">Step 1</div>
+      <div class="algo-step-title">Check store is open</div>
+      <div class="algo-step-body">
+        Fetch business_hours for the day_of_week. Check business_hours_exceptions for holidays on that exact date.<br><br>
+        → Store closed: return empty list<br>
+        → Holiday (is_closed = true): return empty list<br>
+        → Exception with custom hours: use those instead
+      </div>
+      <span class="algo-db">business_hours · business_hours_exceptions</span>
+    </div>
+
+    <div class="algo-card">
+      <div class="algo-step-num">Step 2</div>
+      <div class="algo-step-title">Apply same-day minimum notice</div>
+      <div class="algo-step-body">
+        If the requested date is today: earliest slot = NOW() + same_day_notice_hours.<br><br>
+        Default: 4 hours. Configurable per store.<br><br>
+        Prevents booking a 2-hour makeup session that starts in 30 minutes.
+      </div>
+      <span class="algo-db">stores.same_day_notice_hours</span>
+    </div>
+
+    <div class="algo-card">
+      <div class="algo-step-num">Step 3</div>
+      <div class="algo-step-title">Build blocked ranges from existing bookings</div>
+      <div class="algo-step-body">
+        Fetch all bookings for this artist on this date with a blocking status:<br><br>
+        <strong>held · pending · approved · deposit_paid · confirmed</strong><br><br>
+        Each booking = blocked time range. New slot cannot overlap any of these.
+      </div>
+      <span class="algo-db">bookings WHERE status IN blocking_statuses</span>
+    </div>
+
+    <div class="algo-card">
+      <div class="algo-step-num">Step 4</div>
+      <div class="algo-step-title">Apply travel buffer for cross-store bookings</div>
+      <div class="algo-step-body">
+        Fetch artist bookings at OTHER stores on this date.<br><br>
+        Weekday (Mon–Thu): block 150 minutes before + after<br>
+        Weekend (Fri–Sun): block 90 minutes before + after<br><br>
+        Example: Tripoli ends 9:10am on a weekday → no Beirut slots before 11:40am.
+      </div>
+      <span class="algo-db">artist_store_buffers · bookings (other stores)</span>
+    </div>
+
+    <div class="algo-card">
+      <div class="algo-step-num">Step 5</div>
+      <div class="algo-step-title">Apply processing gap support</div>
+      <div class="algo-step-body">
+        For services with active_duration_min (kreatin, hair color):<br><br>
+        • CHAIR blocked for full service duration<br>
+        • ARTIST only blocked for active_duration_min<br>
+        • Artist can take another client during processing gap
+      </div>
+      <span class="algo-db">services.active_duration_min</span>
+    </div>
+
+    <div class="algo-card">
+      <div class="algo-step-num">Step 6</div>
+      <div class="algo-step-title">Flag early bird slots</div>
+      <div class="algo-step-body">
+        If the store has early_bird_cutoff set:<br><br>
+        • Slots before cutoff → is_early_bird = true<br>
+        • Early bird slots carry an additional early_bird_fee<br>
+        • Still offered — just priced differently<br><br>
+        Beirut default: before 9:00 AM. Tripoli: before 7:30 AM.
+      </div>
+      <span class="algo-db">stores.early_bird_cutoff · stores.early_bird_fee</span>
+    </div>
+
+    <div class="algo-card special" style="grid-column:span 2">
+      <div class="algo-step-num">Step 7 — Final</div>
+      <div class="algo-step-title">Generate valid slots</div>
+      <div class="algo-step-body" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          Iterate through the store open window in service_duration_min increments. For each candidate slot [start, end):
+          <div class="algo-check">start ≥ earliest_allowed_time (after minimum notice)</div>
+          <div class="algo-check">end ≤ store closing time</div>
+          <div class="algo-check">[start, end) does not overlap any blocked range</div>
+          <div class="algo-check">start + service_duration ≤ closing time</div>
+          <br>
+          If all pass → add to available list. Tag as early_bird if applicable.
+        </div>
+        <div>
+          <div class="algo-gist">
+            <div class="algo-gist-title">🔒 GIST constraint — the final atomic guard</div>
+            <div class="algo-gist-body">Even after all 7 steps pass, the GIST exclusion constraint on the bookings table is the last line of defence.<br><br>If two customers race for the same slot at exactly the same moment, only one INSERT succeeds. The second receives SLOT_UNAVAILABLE instantly. No application-level check can provide this guarantee — only the database constraint can.</div>
+          </div>
+          <span class="algo-db" style="margin-top:10px">Output: TimeSlot[] with start_time, end_time, is_early_bird, early_bird_fee</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- 5. QUICK REFERENCE -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">5</div>
+    <div class="section-title">Quick Reference</div>
+  </div>
+  <div class="section-subtitle">The most important numbers and rules to know.</div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px;text-align:center">
+      <div style="font-size:36px;font-weight:800;color:#7c3aed">10</div>
+      <div style="font-size:13px;color:#666;margin-top:4px">minutes slot hold</div>
+    </div>
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px;text-align:center">
+      <div style="font-size:36px;font-weight:800;color:#1d4ed8">48</div>
+      <div style="font-size:13px;color:#666;margin-top:4px">hours deposit deadline</div>
+    </div>
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px;text-align:center">
+      <div style="font-size:36px;font-weight:800;color:#0891b2">150</div>
+      <div style="font-size:13px;color:#666;margin-top:4px">min weekday travel buffer</div>
+    </div>
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px;text-align:center">
+      <div style="font-size:36px;font-weight:800;color:#059669">90</div>
+      <div style="font-size:13px;color:#666;margin-top:4px">min weekend travel buffer</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:12px">Blocking statuses (slot taken)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <span style="background:#ede9fe;color:#7c3aed;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">held</span>
+        <span style="background:#dbeafe;color:#1d4ed8;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">pending</span>
+        <span style="background:#cffafe;color:#0891b2;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">approved</span>
+        <span style="background:#ccfbf1;color:#0d9488;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">deposit_paid</span>
+        <span style="background:#d1fae5;color:#059669;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">confirmed</span>
+      </div>
+    </div>
+    <div style="border-radius:12px;background:#fff;border:1px solid #e5e7eb;padding:20px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:12px">Non-blocking statuses (slot free)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">completed</span>
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">cancelled</span>
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">expired</span>
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">no_show</span>
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">refund_due</span>
+        <span style="background:#f1f5f9;color:#475569;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600">refunded</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<footer>
+  <span>B-Edge · Beauty at the Edge · الجمال عند الحافة · 2026 · Confidential</span>
+  <span>Companion to B-Edge-Booking-Domain-Spec-v1.docx</span>
+</footer>
+
+<script>
+const states = [
+  { id:'held', name:'held', desc:'Slot reserved, 10 min', who:'Customer begins checkout', color:'#7c3aed', bg:'#ede9fe', border:'#c4b5fd', from:[], to:['pending','expired'], blocks:true, rule:'Lasts exactly 10 minutes. The GIST exclusion constraint treats this the same as confirmed — no other customer can book this slot. If the customer does not complete checkout in 10 minutes, a background job expires the hold and the slot is freed immediately.' },
+  { id:'pending', name:'pending', desc:'Awaiting artist approval', who:'Customer submits form', color:'#1d4ed8', bg:'#dbeafe', border:'#93c5fd', from:['held'], to:['approved','cancelled'], blocks:true, rule:'Artist receives a WhatsApp notification the moment the booking enters pending status. The artist reviews in their dashboard and must approve or reject. There is no automatic timeout — a booking can stay pending until the artist acts.' },
+  { id:'approved', name:'approved', desc:'Approved, awaiting deposit', who:'Artist approves', color:'#0891b2', bg:'#cffafe', border:'#67e8f9', from:['pending'], to:['deposit_paid','expired','cancelled'], blocks:true, rule:'System sets deposit_deadline = appointment_time − 48 hours. Customer is notified via WhatsApp with the deposit amount, Wish Money details, and exact deadline. If the deadline passes without payment, a background job transitions to expired.' },
+  { id:'deposit_paid', name:'deposit_paid', desc:'Deposit received', who:'Artist marks deposit received', color:'#0d9488', bg:'#ccfbf1', border:'#5eead4', from:['approved'], to:['confirmed','cancelled'], blocks:true, rule:'Artist verified the Wish Money transfer in their app. Tapped "Mark deposit received." The booking is now in deposit_paid. Artist must then tap "Confirm booking" to finalize — this two-step process prevents accidental confirmations.' },
+  { id:'confirmed', name:'confirmed', desc:'Booking confirmed and live', who:'Artist confirms deposit', color:'#059669', bg:'#d1fae5', border:'#6ee7b7', from:['deposit_paid'], to:['completed','no_show','cancelled'], blocks:true, rule:'Both parties receive a WhatsApp confirmation. System schedules automatic 24-hour and 2-hour reminder notifications. The appointment is live and appears in the artist\'s calendar.' },
+  { id:'completed', name:'completed', desc:'Service delivered. Final.', who:'Artist marks completed', color:'#374151', bg:'#f8fafc', border:'#e2e8f0', from:['confirmed'], to:[], blocks:false, rule:'Final state. The service was delivered. Customer receives a WhatsApp message with a review link. The booking is preserved forever via soft delete — deleted_at is never set.' },
+  { id:'cancelled', name:'cancelled', desc:'Cancelled by either party', who:'Artist or customer cancels', color:'#374151', bg:'#f8fafc', border:'#e2e8f0', from:['pending','approved','deposit_paid','confirmed'], to:[], blocks:false, rule:'If artist cancels: status goes to refund_due (always). If customer cancels >24h before: refund_due. If customer cancels <24h before: cancelled with deposit forfeited. Slot freed immediately in all cases.' },
+  { id:'expired', name:'expired', desc:'Deadline passed. Slot released.', who:'Background job', color:'#374151', bg:'#f8fafc', border:'#e2e8f0', from:['held','approved'], to:[], blocks:false, rule:'Two scenarios: (1) Hold expired — customer did not complete checkout in 10 minutes. (2) Deposit deadline passed — customer did not pay the deposit before the 48-hour deadline. In both cases: slot freed immediately, waitlist triggered, customer notified.' },
+  { id:'no_show', name:'no_show', desc:'Customer did not arrive', who:'Artist marks no-show', color:'#374151', bg:'#f8fafc', border:'#e2e8f0', from:['confirmed'], to:[], blocks:false, rule:'Final state. Artist marks this in their dashboard after the appointment time. Deposit is forfeited — artist keeps the full deposit. No-show recorded for analytics.' },
+  { id:'refund_due', name:'refund_due', desc:'Refund approved, not sent', who:'Artist or customer cancels (with refund)', color:'#b45309', bg:'#fef3c7', border:'#fcd34d', from:['cancelled'], to:['refunded'], blocks:false, rule:'Triggers when: artist cancels (always), or customer cancels >24h before the appointment. Artist sees this in their refund queue. Must transfer the amount via Wish Money and mark as sent.' },
+  { id:'refunded', name:'refunded', desc:'Refund sent. Final.', who:'Artist marks refund sent', color:'#374151', bg:'#f8fafc', border:'#e2e8f0', from:['refund_due'], to:[], blocks:false, rule:'Final state. Artist transferred the refund via Wish Money and marked it as sent in the dashboard. Customer receives a WhatsApp confirmation.' },
+];
+
+let selected = null;
+
+function renderGrid() {
+  const grid = document.getElementById('states-grid');
+  grid.innerHTML = states.map(s => `
+    <div class="state-card${selected===s.id?' active':''}" onclick="selectState('${s.id}')"
+      style="background:${s.bg};border-color:${s.border}">
+      <div class="sc-dot" style="background:${s.color}"></div>
+      <div class="sc-name" style="color:${s.color}">${s.name}</div>
+      <div class="sc-desc">${s.desc}</div>
+      ${s.blocks
+        ? `<span class="sc-badge" style="background:${s.color}20;color:${s.color}">🔒 blocks slot</span>`
+        : `<span class="sc-badge" style="background:#f0fdf4;color:#166534">✓ frees slot</span>`}
+    </div>
+  `).join('');
+}
+
+function selectState(id) {
+  selected = id;
+  renderGrid();
+  const s = states.find(x=>x.id===id);
+  document.getElementById('state-detail').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div style="width:14px;height:14px;border-radius:50%;background:${s.color};flex-shrink:0"></div>
+      <div class="detail-name" style="color:${s.color}">${s.name}</div>
+      ${s.blocks
+        ? `<span class="blocking-badge" style="background:${s.color}15;color:${s.color}">🔒 blocks slot</span>`
+        : `<span class="blocking-badge" style="background:#d1fae5;color:#065f46">✓ frees slot</span>`}
+    </div>
+    <div class="detail-who">Triggered by: ${s.who}</div>
+    ${s.from.length?`<div style="font-size:12px;color:#888;margin-bottom:6px">Reached from:</div><div class="arrows-row">${s.from.map(f=>`<span class="arrow-pill arrow-from">← ${f}</span>`).join('')}</div>`:''}
+    ${s.to.length
+      ?`<div style="font-size:12px;color:#888;margin-bottom:6px">Can transition to:</div><div class="arrows-row">${s.to.map(t=>`<span class="arrow-pill arrow-to">${t} →</span>`).join('')}</div>`
+      :`<div class="arrows-row"><span class="arrow-pill" style="background:#fef2f2;color:#991b1b;border-color:#fecaca">Final state — no further transitions possible</span></div>`}
+    <div class="detail-rule">${s.rule}</div>
+  `;
+}
+
+renderGrid();
+selectState('held');
+</script>
+</body>
+</html>
+<!-- SECTION 6: SWIMLANE -->
+<div class="divider"></div>
+<div class="container" style="padding-top:0">
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">6</div>
+    <div class="section-title">Swimlane — Full Booking Flow</div>
+  </div>
+  <div class="section-subtitle">Three actors. Every step. Every notification. Every decision point.</div>
+  <div style="background:#fff;border-radius:16px;border:1px solid #e5e7eb;padding:24px;overflow-x:auto">
+    <svg width="100%" viewBox="0 0 680 920" xmlns="http://www.w3.org/2000/svg" style="min-width:500px">
+      <defs><marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <!-- Lanes -->
+      <rect x="20" y="44" width="200" height="860" fill="none" stroke="#e5e7eb" stroke-width="0.5"/>
+      <rect x="220" y="44" width="220" height="860" fill="none" stroke="#e5e7eb" stroke-width="0.5"/>
+      <rect x="440" y="44" width="220" height="860" fill="none" stroke="#e5e7eb" stroke-width="0.5"/>
+      <rect x="20" y="20" width="200" height="28" fill="#1a1a2e"/>
+      <text font-family="Arial,sans-serif" font-size="13" font-weight="600" x="120" y="34" text-anchor="middle" fill="#fff" dominant-baseline="central">Customer</text>
+      <rect x="220" y="20" width="220" height="28" fill="#334155"/>
+      <text font-family="Arial,sans-serif" font-size="13" font-weight="600" x="330" y="34" text-anchor="middle" fill="#fff" dominant-baseline="central">System</text>
+      <rect x="440" y="20" width="220" height="28" fill="#7c3aed"/>
+      <text font-family="Arial,sans-serif" font-size="13" font-weight="600" x="550" y="34" text-anchor="middle" fill="#fff" dominant-baseline="central">Artist</text>
+      <!-- Start -->
+      <rect x="40" y="60" width="160" height="34" rx="17" fill="#f1f5f9" stroke="#94a3b8" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="77" text-anchor="middle" fill="#1a1a2e" dominant-baseline="central">Opens B-Edge</text>
+      <line x1="120" y1="94" x2="120" y2="110" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Step 1 -->
+      <rect x="40" y="110" width="160" height="44" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="128" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Selects artist,</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="144" text-anchor="middle" fill="#3b82f6" dominant-baseline="central">service, date, slot</text>
+      <line x1="200" y1="132" x2="238" y2="132" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <rect x="240" y="110" width="180" height="44" rx="6" fill="#ccfbf1" stroke="#5eead4" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="128" text-anchor="middle" fill="#0d9488" dominant-baseline="central">Algorithm runs</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="144" text-anchor="middle" fill="#14b8a6" dominant-baseline="central">returns available slots</text>
+      <line x1="240" y1="132" x2="202" y2="132" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+      <!-- Held -->
+      <rect x="240" y="172" width="180" height="44" rx="6" fill="#ede9fe" stroke="#c4b5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="190" text-anchor="middle" fill="#7c3aed" dominant-baseline="central">status: held</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="206" text-anchor="middle" fill="#8b5cf6" dominant-baseline="central">GIST: first-write-wins</text>
+      <line x1="200" y1="188" x2="238" y2="188" stroke="#7c3aed" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="219" y="182" text-anchor="middle" fill="#7c3aed">tap</text>
+      <line x1="330" y1="216" x2="330" y2="232" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Pending -->
+      <rect x="40" y="232" width="160" height="44" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="250" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Fills form</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="266" text-anchor="middle" fill="#3b82f6" dominant-baseline="central">special requests</text>
+      <line x1="200" y1="254" x2="238" y2="254" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <rect x="240" y="232" width="180" height="44" rx="6" fill="#ede9fe" stroke="#c4b5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="250" text-anchor="middle" fill="#7c3aed" dominant-baseline="central">status: pending</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="266" text-anchor="middle" fill="#8b5cf6" dominant-baseline="central">WhatsApp to artist</text>
+      <line x1="420" y1="254" x2="458" y2="254" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Artist approve -->
+      <rect x="460" y="232" width="180" height="44" rx="6" fill="#fce7f3" stroke="#f9a8d4" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="550" y="250" text-anchor="middle" fill="#be185d" dominant-baseline="central">Reviews booking</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="550" y="266" text-anchor="middle" fill="#ec4899" dominant-baseline="central">approve or reject</text>
+      <polygon points="550,296 580,316 550,336 520,316" fill="none" stroke="#6b7280" stroke-width="1"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="550" y="316" text-anchor="middle" fill="#374151" dominant-baseline="central">approve?</text>
+      <line x1="550" y1="276" x2="550" y2="296" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="605" y="312" fill="#94a3b8">no</text>
+      <line x1="580" y1="316" x2="636" y2="316" stroke="#ef4444" stroke-width="1"/>
+      <line x1="636" y1="316" x2="636" y2="780" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="648" y="540" fill="#ef4444" dominant-baseline="central" transform="rotate(90,648,540)">cancelled</text>
+      <text font-family="Arial,sans-serif" font-size="10" x="528" y="350" text-anchor="middle" fill="#94a3b8">yes</text>
+      <line x1="550" y1="336" x2="550" y2="374" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Approved -->
+      <rect x="240" y="352" width="180" height="44" rx="6" fill="#ede9fe" stroke="#c4b5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="370" text-anchor="middle" fill="#7c3aed" dominant-baseline="central">status: approved</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="386" text-anchor="middle" fill="#8b5cf6" dominant-baseline="central">deposit deadline set</text>
+      <line x1="550" y1="374" x2="422" y2="374" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <line x1="240" y1="374" x2="202" y2="374" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+      <rect x="40" y="352" width="160" height="44" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="370" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Gets deadline</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="386" text-anchor="middle" fill="#3b82f6" dominant-baseline="central">WhatsApp + amount</text>
+      <!-- Pay deposit -->
+      <line x1="120" y1="396" x2="120" y2="412" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <rect x="40" y="412" width="160" height="44" rx="6" fill="#fef3c7" stroke="#fcd34d" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="430" text-anchor="middle" fill="#92400e" dominant-baseline="central">Sends deposit</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="446" text-anchor="middle" fill="#b45309" dominant-baseline="central">via Wish Money</text>
+      <!-- Artist verifies -->
+      <rect x="460" y="412" width="180" height="44" rx="6" fill="#fce7f3" stroke="#f9a8d4" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="550" y="430" text-anchor="middle" fill="#be185d" dominant-baseline="central">Verifies transfer</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="550" y="446" text-anchor="middle" fill="#ec4899" dominant-baseline="central">marks deposit received</text>
+      <line x1="550" y1="456" x2="550" y2="472" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Confirmed -->
+      <rect x="240" y="472" width="180" height="44" rx="6" fill="#ede9fe" stroke="#c4b5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="490" text-anchor="middle" fill="#7c3aed" dominant-baseline="central">status: confirmed</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="506" text-anchor="middle" fill="#8b5cf6" dominant-baseline="central">WhatsApp both parties</text>
+      <line x1="550" y1="494" x2="422" y2="494" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <line x1="240" y1="494" x2="202" y2="494" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+      <rect x="40" y="472" width="160" height="44" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="490" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Booking confirmed</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="506" text-anchor="middle" fill="#3b82f6" dominant-baseline="central">24h + 2h reminders</text>
+      <!-- Day of -->
+      <line x1="120" y1="516" x2="120" y2="552" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <line x1="550" y1="516" x2="550" y2="552" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <rect x="40" y="552" width="160" height="36" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="570" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Attends appointment</text>
+      <rect x="460" y="552" width="180" height="36" rx="6" fill="#fce7f3" stroke="#f9a8d4" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="550" y="570" text-anchor="middle" fill="#be185d" dominant-baseline="central">Performs service</text>
+      <line x1="550" y1="588" x2="550" y2="608" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Completed -->
+      <rect x="460" y="608" width="180" height="36" rx="6" fill="#d1fae5" stroke="#6ee7b7" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="550" y="626" text-anchor="middle" fill="#065f46" dominant-baseline="central">Marks completed</text>
+      <line x1="550" y1="644" x2="422" y2="740" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <!-- Completed system -->
+      <rect x="240" y="728" width="180" height="44" rx="6" fill="#ede9fe" stroke="#c4b5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="330" y="746" text-anchor="middle" fill="#7c3aed" dominant-baseline="central">status: completed</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="330" y="762" text-anchor="middle" fill="#8b5cf6" dominant-baseline="central">review link via WhatsApp</text>
+      <line x1="240" y1="750" x2="202" y2="750" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+      <rect x="40" y="728" width="160" height="44" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="746" text-anchor="middle" fill="#1d4ed8" dominant-baseline="central">Leaves review</text>
+      <text font-family="Arial,sans-serif" font-size="11" x="120" y="762" text-anchor="middle" fill="#3b82f6" dominant-baseline="central">(optional)</text>
+      <line x1="120" y1="772" x2="120" y2="810" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <rect x="40" y="810" width="160" height="34" rx="17" fill="#f1f5f9" stroke="#94a3b8" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="12" font-weight="600" x="120" y="827" text-anchor="middle" fill="#1a1a2e" dominant-baseline="central">Booking complete ✓</text>
+      <!-- Legend -->
+      <rect x="240" y="810" width="180" height="76" rx="8" fill="none" stroke="#e5e7eb" stroke-width="0.5"/>
+      <text font-family="Arial,sans-serif" font-size="11" font-weight="600" x="330" y="826" text-anchor="middle" fill="#374151" dominant-baseline="central">Legend</text>
+      <line x1="256" y1="842" x2="290" y2="842" stroke="#94a3b8" stroke-width="1" marker-end="url(#arr2)"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="298" y="842" fill="#374151" dominant-baseline="central">action flow</text>
+      <line x1="256" y1="858" x2="290" y2="858" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="298" y="858" fill="#374151" dominant-baseline="central">notification</text>
+      <line x1="256" y1="874" x2="290" y2="874" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+      <text font-family="Arial,sans-serif" font-size="10" x="298" y="874" fill="#ef4444" dominant-baseline="central">rejection path</text>
+    </svg>
+  </div>
+</div>
+</div>

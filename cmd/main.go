@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/booking"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/gofiber/fiber/v2"
@@ -82,6 +83,7 @@ func main() {
 	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
 
 	auth.RegisterRoutes(app, pool, logger)
+	booking.RegisterRoutes(app, pool, logger)
 
 	// Start server in background goroutine
 	port := os.Getenv("PORT")

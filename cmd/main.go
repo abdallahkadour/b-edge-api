@@ -11,12 +11,12 @@ import (
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
+	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
 	"github.com/abdallahkadour/b-edge-api/internal/booking"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
+	review "github.com/abdallahkadour/b-edge-api/internal/review"
 	"github.com/gofiber/fiber/v2"
-
-	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
 
 	_ "github.com/abdallahkadour/b-edge-api/docs"
 	"github.com/abdallahkadour/b-edge-api/internal/domain/auth"
@@ -87,6 +87,7 @@ func main() {
 	auth.RegisterRoutes(app, pool, logger)
 	booking.RegisterRoutes(app, pool, logger)
 	artist.RegisterRoutes(app, pool, logger)
+	review.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

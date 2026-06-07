@@ -16,6 +16,8 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/gofiber/fiber/v2"
 
+	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
+
 	_ "github.com/abdallahkadour/b-edge-api/docs"
 	"github.com/abdallahkadour/b-edge-api/internal/domain/auth"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
@@ -84,7 +86,7 @@ func main() {
 
 	auth.RegisterRoutes(app, pool, logger)
 	booking.RegisterRoutes(app, pool, logger)
-
+	artist.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

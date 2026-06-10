@@ -3,20 +3,21 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/joho/godotenv"
-	"go.uber.org/zap"
-
 	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
 	"github.com/abdallahkadour/b-edge-api/internal/booking"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
+	"github.com/abdallahkadour/b-edge-api/internal/notification"
 	review "github.com/abdallahkadour/b-edge-api/internal/review"
 	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 
 	_ "github.com/abdallahkadour/b-edge-api/docs"
 	"github.com/abdallahkadour/b-edge-api/internal/domain/auth"
@@ -101,12 +102,17 @@ func main() {
 		}
 	}()
 
-	// Block until SIGINT or SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+
+	notifWorker := notification.NewWorker(pool, logger)
+	go notifWorker.Start(ctx)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	logger.Info("Shutting down server gracefully...")
+	cancel()
 	if err := app.Shutdown(); err != nil {
 		logger.Error("Error during server shutdown", zap.Error(err))
 	}

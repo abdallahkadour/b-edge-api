@@ -34,98 +34,98 @@ var (
 
 // Artist represents a beauty professional's profile from the artists table.
 type Artist struct {
-	ID          uuid.UUID       `db:"id"`
-	UserID      uuid.UUID       `db:"user_id"`
-	SalonID     *uuid.UUID      `db:"salon_id"`
-	Bio         *string         `db:"bio"`
-	BioAr       *string         `db:"bio_ar"`
-	Instagram   *string         `db:"instagram"`
-	Rating      decimal.Decimal `db:"rating"`
-	ReviewCount int             `db:"review_count"`
-	IsVerified  bool            `db:"is_verified"`
-	CreatedAt   time.Time       `db:"created_at"`
-	UpdatedAt   time.Time       `db:"updated_at"`
+	ID          uuid.UUID       `db:"id"           json:"id"`
+	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
+	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
+	Bio         *string         `db:"bio"          json:"bio,omitempty"`
+	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
+	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
+	Rating      decimal.Decimal `db:"rating"       json:"rating"`
+	ReviewCount int             `db:"review_count" json:"review_count"`
+	IsVerified  bool            `db:"is_verified"  json:"is_verified"`
+	CreatedAt   time.Time       `db:"created_at"   json:"created_at"`
+	UpdatedAt   time.Time       `db:"updated_at"   json:"updated_at"`
 }
 
 // ArtistProfile is the full public profile returned to clients.
 // Combines artist fields with user fields (name, phone).
 type ArtistProfile struct {
-	ID          uuid.UUID       `db:"id"`
-	UserID      uuid.UUID       `db:"user_id"`
-	SalonID     *uuid.UUID      `db:"salon_id"`
-	Name        string          `db:"name"`
-	Email       string          `db:"email"`
-	Phone       *string         `db:"phone"`
-	Bio         *string         `db:"bio"`
-	BioAr       *string         `db:"bio_ar"`
-	Instagram   *string         `db:"instagram"`
-	Rating      decimal.Decimal `db:"rating"`
-	ReviewCount int             `db:"review_count"`
-	IsVerified  bool            `db:"is_verified"`
-	CreatedAt   time.Time       `db:"created_at"`
-	UpdatedAt   time.Time       `db:"updated_at"`
+	ID          uuid.UUID       `db:"id"           json:"id"`
+	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
+	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
+	Name        string          `db:"name"         json:"name"`
+	Email       string          `db:"email"        json:"email"`
+	Phone       *string         `db:"phone"        json:"phone,omitempty"`
+	Bio         *string         `db:"bio"          json:"bio,omitempty"`
+	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
+	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
+	Rating      decimal.Decimal `db:"rating"       json:"rating"`
+	ReviewCount int             `db:"review_count" json:"review_count"`
+	IsVerified  bool            `db:"is_verified"  json:"is_verified"`
+	CreatedAt   time.Time       `db:"created_at"   json:"created_at"`
+	UpdatedAt   time.Time       `db:"updated_at"   json:"updated_at"`
 }
 
 // Store represents a physical salon location from the stores table.
 type Store struct {
-	ID                 uuid.UUID       `db:"id"`
-	SalonID            uuid.UUID       `db:"salon_id"`
-	Name               string          `db:"name"`
-	NameAr             *string         `db:"name_ar"`
-	Address            *string         `db:"address"`
-	City               string          `db:"city"`
-	Country            string          `db:"country"`
-	Phone              *string         `db:"phone"`
-	SameDayNoticeHours int             `db:"same_day_notice_hours"`
-	EarlyBirdCutoff    *string         `db:"early_bird_cutoff"`
-	EarlyBirdFee       decimal.Decimal `db:"early_bird_fee"`
-	WeekdayBufferMin   int             `db:"weekday_buffer_min"`
-	WeekendBufferMin   int             `db:"weekend_buffer_min"`
-	IsActive           bool            `db:"is_active"`
-	CreatedAt          time.Time       `db:"created_at"`
-	UpdatedAt          time.Time       `db:"updated_at"`
+	ID                 uuid.UUID       `db:"id"                    json:"id"`
+	SalonID            uuid.UUID       `db:"salon_id"              json:"salon_id"`
+	Name               string          `db:"name"                  json:"name"`
+	NameAr             *string         `db:"name_ar"               json:"name_ar,omitempty"`
+	Address            *string         `db:"address"               json:"address,omitempty"`
+	City               string          `db:"city"                  json:"city"`
+	Country            string          `db:"country"               json:"country"`
+	Phone              *string         `db:"phone"                 json:"phone,omitempty"`
+	SameDayNoticeHours int             `db:"same_day_notice_hours" json:"same_day_notice_hours"`
+	EarlyBirdCutoff    *string         `db:"early_bird_cutoff"     json:"early_bird_cutoff,omitempty"`
+	EarlyBirdFee       decimal.Decimal `db:"early_bird_fee"        json:"early_bird_fee"`
+	WeekdayBufferMin   int             `db:"weekday_buffer_min"    json:"weekday_buffer_min"`
+	WeekendBufferMin   int             `db:"weekend_buffer_min"    json:"weekend_buffer_min"`
+	IsActive           bool            `db:"is_active"             json:"is_active"`
+	CreatedAt          time.Time       `db:"created_at"            json:"created_at"`
+	UpdatedAt          time.Time       `db:"updated_at"            json:"updated_at"`
 }
 
-// Service represents a service offered by a salon.
+// SalonServiceRecord represents a service offered by a salon from the services table.
 type SalonServiceRecord struct {
-	ID                   uuid.UUID       `db:"id"`
-	SalonID              uuid.UUID       `db:"salon_id"`
-	CategoryID           *uuid.UUID      `db:"category_id"`
-	Name                 string          `db:"name"`
-	NameAr               *string         `db:"name_ar"`
-	Description          *string         `db:"description"`
-	DurationMin          int             `db:"duration_min"`
-	ActiveDurationMin    *int            `db:"active_duration_min"`
-	Price                decimal.Decimal `db:"price"`
-	DepositAmount        decimal.Decimal `db:"deposit_amount"`
-	DepositDeadlineHours int             `db:"deposit_deadline_hours"`
-	IsActive             bool            `db:"is_active"`
-	IsCustom             bool            `db:"is_custom"`
-	CreatedAt            time.Time       `db:"created_at"`
-	UpdatedAt            time.Time       `db:"updated_at"`
+	ID                   uuid.UUID       `db:"id"                     json:"id"`
+	SalonID              uuid.UUID       `db:"salon_id"               json:"salon_id"`
+	CategoryID           *uuid.UUID      `db:"category_id"            json:"category_id,omitempty"`
+	Name                 string          `db:"name"                   json:"name"`
+	NameAr               *string         `db:"name_ar"                json:"name_ar,omitempty"`
+	Description          *string         `db:"description"            json:"description,omitempty"`
+	DurationMin          int             `db:"duration_min"           json:"duration_min"`
+	ActiveDurationMin    *int            `db:"active_duration_min"    json:"active_duration_min,omitempty"`
+	Price                decimal.Decimal `db:"price"                  json:"price"`
+	DepositAmount        decimal.Decimal `db:"deposit_amount"         json:"deposit_amount"`
+	DepositDeadlineHours int             `db:"deposit_deadline_hours" json:"deposit_deadline_hours"`
+	IsActive             bool            `db:"is_active"              json:"is_active"`
+	IsCustom             bool            `db:"is_custom"              json:"is_custom"`
+	CreatedAt            time.Time       `db:"created_at"             json:"created_at"`
+	UpdatedAt            time.Time       `db:"updated_at"             json:"updated_at"`
 }
 
 // BusinessHours represents working hours for a store on a specific day.
 type BusinessHours struct {
-	ID        uuid.UUID `db:"id"`
-	StoreID   uuid.UUID `db:"store_id"`
-	DayOfWeek int       `db:"day_of_week"`
-	OpenTime  string    `db:"open_time"`
-	CloseTime string    `db:"close_time"`
-	IsOpen    bool      `db:"is_open"`
-	CreatedAt time.Time `db:"created_at"`
+	ID        uuid.UUID `db:"id"          json:"id"`
+	StoreID   uuid.UUID `db:"store_id"    json:"store_id"`
+	DayOfWeek int       `db:"day_of_week" json:"day_of_week"`
+	OpenTime  string    `db:"open_time"   json:"open_time"`
+	CloseTime string    `db:"close_time"  json:"close_time"`
+	IsOpen    bool      `db:"is_open"     json:"is_open"`
+	CreatedAt time.Time `db:"created_at"  json:"created_at"`
 }
 
 // BusinessHoursException overrides regular hours for a specific date.
 type BusinessHoursException struct {
-	ID            uuid.UUID `db:"id"`
-	StoreID       uuid.UUID `db:"store_id"`
-	ExceptionDate time.Time `db:"exception_date"`
-	IsClosed      bool      `db:"is_closed"`
-	OpenTime      *string   `db:"open_time"`
-	CloseTime     *string   `db:"close_time"`
-	Reason        *string   `db:"reason"`
-	CreatedAt     time.Time `db:"created_at"`
+	ID            uuid.UUID `db:"id"             json:"id"`
+	StoreID       uuid.UUID `db:"store_id"       json:"store_id"`
+	ExceptionDate time.Time `db:"exception_date" json:"exception_date"`
+	IsClosed      bool      `db:"is_closed"      json:"is_closed"`
+	OpenTime      *string   `db:"open_time"      json:"open_time,omitempty"`
+	CloseTime     *string   `db:"close_time"     json:"close_time,omitempty"`
+	Reason        *string   `db:"reason"         json:"reason,omitempty"`
+	CreatedAt     time.Time `db:"created_at"     json:"created_at"`
 }
 
 // ── Request structs ───────────────────────────────────────────────────────────
@@ -182,6 +182,7 @@ type CreateExceptionRequest struct {
 // ── Response structs ──────────────────────────────────────────────────────────
 
 // ArtistResponse is the safe public representation of an artist.
+// Rating serializes as a string to preserve decimal precision on the client.
 type ArtistResponse struct {
 	ID          uuid.UUID       `json:"id"`
 	Name        string          `json:"name"`
@@ -194,6 +195,7 @@ type ArtistResponse struct {
 }
 
 // ServiceResponse is the safe representation of a service.
+// Money fields (price, deposit_amount) serialize as strings via decimal.Decimal.
 type ServiceResponse struct {
 	ID                   uuid.UUID       `json:"id"`
 	SalonID              uuid.UUID       `json:"salon_id"`

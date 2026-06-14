@@ -40,9 +40,10 @@ func Register(app *fiber.App, logger *zap.Logger) {
 		clientURL = "http://localhost:4200"
 	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: clientURL,
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Request-ID",
-		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowOrigins:     clientURL,
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Request-ID",
+		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowCredentials: true,
 	}))
 
 	// 5. Rate limiter — 100 requests per 15 minutes per IP

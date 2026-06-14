@@ -118,6 +118,10 @@ func isExclusionViolation(err error) bool {
 
 // scanBooking scans a pgx row into a Booking struct.
 // Column order must match every SELECT that uses this function.
+//
+// NOTE: b.SessionID is intentionally NOT scanned here. The bookings table has
+// no session_id column yet — it will be added by migration 005 alongside
+// multi-artist session support. Until then SessionID always remains nil.
 func scanBooking(row pgx.Row, b *Booking) error {
 	return row.Scan(
 		&b.ID,
@@ -126,7 +130,6 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.ArtistID,
 		&b.CustomerID,
 		&b.ServiceID,
-		&b.SessionID,
 		&b.StartTime,
 		&b.EndTime,
 		&b.HeldUntil,
@@ -150,10 +153,12 @@ func scanBooking(row pgx.Row, b *Booking) error {
 }
 
 // bookingSelectCols is the canonical column list for booking SELECT queries.
-// Must match scanBooking exactly.
+// Must match scanBooking and scanBookings exactly.
+//
+// NOTE: session_id is intentionally excluded — see scanBooking.
 const bookingSelectCols = `
 	id, salon_id, store_id, artist_id, customer_id, service_id,
-	session_id, start_time, end_time, held_until, status,
+	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price,
 	deposit_amount, deposit_deadline, deposit_paid_at,
 	channel, special_requests, cancellation_reason,
@@ -319,22 +324,26 @@ func (r *pgRepo) GetArtistStoreBuffer(ctx context.Context, artistID uuid.UUID, f
 // CreateBooking inserts a new booking.
 // The GIST exclusion constraint on the database is the final atomic guard.
 // If two requests race for the same slot, one wins and the other gets ErrSlotUnavailable.
+//
+// NOTE: session_id is intentionally NOT inserted here — the bookings table has
+// no such column yet. See scanBooking for details. b.SessionID always remains
+// nil until migration 005 adds the column and this INSERT is updated alongside it.
 func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking) error {
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO bookings (
 			id, salon_id, store_id, artist_id, customer_id, service_id,
-			session_id, start_time, end_time, held_until, status,
+			start_time, end_time, held_until, status,
 			original_price, discount_amount, final_price,
 			deposit_amount, deposit_deadline, channel, special_requests
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11,
-			$12, $13, $14,
-			$15, $16, $17, $18
+			$7, $8, $9, $10,
+			$11, $12, $13,
+			$14, $15, $16, $17
 		)
 		RETURNING created_at, updated_at`,
 		b.ID, b.SalonID, b.StoreID, b.ArtistID, b.CustomerID, b.ServiceID,
-		b.SessionID, b.StartTime, b.EndTime, b.HeldUntil, b.Status,
+		b.StartTime, b.EndTime, b.HeldUntil, b.Status,
 		b.OriginalPrice, b.DiscountAmount, b.FinalPrice,
 		b.DepositAmount, b.DepositDeadline, b.Channel, b.SpecialRequests,
 	).Scan(&b.CreatedAt, &b.UpdatedAt)
@@ -586,13 +595,15 @@ func (r *pgRepo) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 // ── Scan helpers ──────────────────────────────────────────────────────────────
 
 // scanBookings scans multiple rows into a slice of Booking pointers.
+//
+// NOTE: b.SessionID is intentionally NOT scanned here — see scanBooking.
 func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 	var bookings []*Booking
 	for rows.Next() {
 		b := &Booking{}
 		if err := rows.Scan(
 			&b.ID, &b.SalonID, &b.StoreID, &b.ArtistID, &b.CustomerID, &b.ServiceID,
-			&b.SessionID, &b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
+			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice,
 			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,

@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,33 +10,48 @@ import (
 )
 
 // NewLogger returns a Fiber middleware that logs each request using Zap.
-// Logs: method, path, status, latency, IP, and request ID.
-func NewLogger(logger *zap.Logger) fiber.Handler {
+func NewLogger(rootLogger *zap.Logger) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		start := time.Now()
 
-		// Process request
+		// 1. Let the request process completely down the pipeline first
 		err := c.Next()
 
-		// Log after response is sent
+		// 2. Scan the text string of the URL path to determine the domain module
+		module := "generic"
+		path := c.Path()
+
+		if strings.HasPrefix(path, "/api/v1/auth") {
+			module = "auth"
+		} else if strings.HasPrefix(path, "/api/v1/artists") {
+			module = "artist"
+		} else if strings.HasPrefix(path, "/api/v1/bookings") {
+			module = "booking"
+		} else if strings.HasPrefix(path, "/api/v1/reviews") {
+			module = "review"
+		}
+
+		// 3. Assemble standard metadata properties (forcing "module" to be explicitly first)
 		fields := []zap.Field{
+			zap.String("module", module),
 			zap.String("method", c.Method()),
-			zap.String("path", c.Path()),
+			zap.String("path", path),
 			zap.Int("status", c.Response().StatusCode()),
 			zap.Duration("latency", time.Since(start)),
 			zap.String("ip", c.IP()),
 			zap.String("request_id", c.GetRespHeader("X-Request-Id")),
 		}
 
+		// 4. Output logs safely based on status codes
 		if err != nil {
 			fields = append(fields, zap.Error(err))
-			logger.Error("Request error", fields...)
+			rootLogger.Error("Request error", fields...)
 		} else if c.Response().StatusCode() >= 500 {
-			logger.Error("Server error", fields...)
+			rootLogger.Error("Server error", fields...)
 		} else if c.Response().StatusCode() >= 400 {
-			logger.Warn("Client error", fields...)
+			rootLogger.Warn("Client error", fields...)
 		} else {
-			logger.Info("Request", fields...)
+			rootLogger.Info("Request", fields...)
 		}
 
 		return err

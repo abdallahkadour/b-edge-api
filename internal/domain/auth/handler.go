@@ -48,7 +48,11 @@ type Handler struct {
 
 // NewHandler creates a new auth Handler with the given service and logger.
 func NewHandler(svc *Service, log *zap.Logger) *Handler {
-	return &Handler{svc: svc, log: log}
+	return &Handler{
+		svc: svc,
+		// This attaches "module: auth" to every log inside this file
+		log: log.With(zap.String("module", "auth")),
+	}
 }
 
 // RegisterRoutes attaches all auth routes to the Fiber app.

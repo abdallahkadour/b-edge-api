@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
 )
 
 // AppError is a structured application error containing an HTTP status code,
@@ -77,9 +78,30 @@ func Internal(code, message string) *AppError {
 //
 // ErrorHandler is a global Fiber error handler that converts AppError values
 // and native Fiber errors into the standard B-Edge JSON response envelope.
+// ErrorHandler is a global Fiber error handler that converts AppError values
+// and native Fiber errors into the standard B-Edge JSON response envelope.
 func ErrorHandler(c *fiber.Ctx, err error) error {
+	// 1. Safely extract your pre-tagged logger from context locals
+	log, ok := c.Locals("logger").(*zap.Logger)
+	if !ok {
+		log, _ = zap.NewDevelopment() // Fallback developer default if context isn't ready
+	}
+
 	// Handle typed AppError
 	if appErr, ok := err.(*AppError); ok {
+		// Operational rule: Log everything 404 (Not Found/Data Drift) or higher.
+		// This automatically captures your missing artist profile bug while ignoring input typos!
+		if appErr.HTTPStatus >= http.StatusNotFound {
+			log.Warn("Operational domain exception intercepted",
+				zap.Int("status", appErr.HTTPStatus),
+				zap.String("code", appErr.Code),
+				zap.String("path", c.Path()),
+				zap.String("method", c.Method()),
+				zap.String("request_id", c.Get("X-Request-ID")), // Pairs perfectly with your tracing ids!
+				zap.Error(err),                                  // Captures the full upstream error wrapping stack trace
+			)
+		}
+
 		return c.Status(appErr.HTTPStatus).JSON(fiber.Map{
 			"data":  nil,
 			"error": appErr,
@@ -89,6 +111,12 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 
 	// Handle native Fiber errors (e.g. 404 from router, 405 method not allowed)
 	if fiberErr, ok := err.(*fiber.Error); ok {
+		log.Info("Native routing exception intercepted",
+			zap.Int("status", fiberErr.Code),
+			zap.String("path", c.Path()),
+			zap.String("method", c.Method()),
+		)
+
 		return c.Status(fiberErr.Code).JSON(fiber.Map{
 			"data": nil,
 			"error": fiber.Map{
@@ -99,7 +127,14 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 		})
 	}
 
-	// Unknown error — return 500, never expose internal details
+	// Unknown error — return 500, never expose internal details to client
+	// CRITICAL: We log this at .Error level because this means a server panic or lost database link!
+	log.Error("Critical system error or panic caught",
+		zap.String("path", c.Path()),
+		zap.String("method", c.Method()),
+		zap.Error(err),
+	)
+
 	return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
 		"data": nil,
 		"error": fiber.Map{
@@ -109,3 +144,35 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 		"meta": nil,
 	})
 }
+
+// func ErrorHandler(c *fiber.Ctx, err error) error {
+// 	// Handle typed AppError
+// 	if appErr, ok := err.(*AppError); ok {
+// 		return c.Status(appErr.HTTPStatus).JSON(fiber.Map{
+// 			"data":  nil,
+// 			"error": appErr,
+// 			"meta":  nil,
+// 		})
+// 	}
+
+// 	// Handle native Fiber errors (e.g. 404 from router, 405 method not allowed)
+// 	if fiberErr, ok := err.(*fiber.Error); ok {
+// 		return c.Status(fiberErr.Code).JSON(fiber.Map{
+// 			"data": nil,
+// 			"error": fiber.Map{
+// 				"code":    "NOT_FOUND",
+// 				"message": fiberErr.Message,
+// 			},
+// 			"meta": nil,
+// 		})
+// 	}
+
+// 	// Unknown error — return 500, never expose internal details
+// 	return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
+// 		"data": nil,
+// 		"error": fiber.Map{
+// 			"code":    "INTERNAL_ERROR",
+// 			"message": "Something went wrong on our end. Please try again.",
+// 		},
+// 		"meta": nil,
+// 	})

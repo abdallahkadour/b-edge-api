@@ -71,6 +71,18 @@ func main() {
 		ErrorHandler: apperror.ErrorHandler,
 	})
 
+	// app.Use(func(c *fiber.Ctx) error {
+	// 	c.Locals("logger", logger)
+	// 	return c.Next()
+	// })
+
+	// app.Use(cors.New(cors.Config{
+	// 	AllowOrigins:     "http://localhost:4200",
+	// 	AllowMethods:     "GET,POST,PATCH,DELETE,OPTIONS",
+	// 	AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+	// 	AllowCredentials: true,
+	// }))
+
 	// Register global middleware
 	middleware.Register(app, logger)
 

@@ -32,7 +32,11 @@ type Handler struct {
 
 // NewHandler creates a new booking Handler.
 func NewHandler(svc *Service, log *zap.Logger) *Handler {
-	return &Handler{svc: svc, log: log}
+	return &Handler{
+		svc: svc,
+		// This attaches "module: booking" to every log inside this file
+		log: log.With(zap.String("module", "booking")),
+	}
 }
 
 // RegisterRoutes attaches all booking routes to the Fiber app.

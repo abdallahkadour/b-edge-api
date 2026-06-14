@@ -20,7 +20,11 @@ type Handler struct {
 
 // NewHandler creates a new review Handler.
 func NewHandler(svc *Service, log *zap.Logger) *Handler {
-	return &Handler{svc: svc, log: log}
+	return &Handler{
+		svc: svc,
+		// This attaches "module: review" to every log inside this file
+		log: log.With(zap.String("module", "review")),
+	}
 }
 
 // RegisterRoutes attaches all review routes to the Fiber app.

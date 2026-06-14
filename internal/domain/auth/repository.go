@@ -16,10 +16,19 @@ import (
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
 const uniqueViolationCode = "23505"
 
+// roleArtist is the "artist" role value stored in users.role. When a user
+// registers with this role, CreateUser also provisions their artists profile
+// row in the same transaction — every artist account has exactly one artists
+// row from the moment it exists, with salon_id starting NULL until the artist
+// is assigned to a salon.
+const roleArtist = "artist"
+
 // Repository defines all database operations for the auth domain.
 // Implementations return sentinel errors (e.g. ErrUserNotFound), never apperror types.
 type Repository interface {
 	// CreateUser inserts a new user row and populates CreatedAt and UpdatedAt on success.
+	// If the user's role is "artist", an empty artists profile row is also created
+	// in the same transaction — either both rows are created or neither is.
 	// Returns ErrEmailConflict if the email is already registered.
 	CreateUser(ctx context.Context, user *User) error
 
@@ -80,14 +89,27 @@ func isUniqueViolation(err error) bool {
 }
 
 // CreateUser inserts a new user row and populates CreatedAt and UpdatedAt from the DB.
+//
+// If user.Role is "artist", an empty artists profile row (just user_id — rating,
+// review_count, is_verified, salon_id all take their column defaults) is created
+// in the same transaction. This guarantees every artist account has a matching
+// artists row from the moment it exists, in every environment, with no manual
+// seeding step.
+//
 // Returns ErrEmailConflict if the email is already taken.
 func (r *repo) CreateUser(ctx context.Context, user *User) error {
-	const q = `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create user: begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	const insertUser = `
 		INSERT INTO users (id, name, email, password_hash, role, phone, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at, updated_at`
 
-	err := r.db.QueryRow(ctx, q,
+	err = tx.QueryRow(ctx, insertUser,
 		user.ID, user.Name, user.Email, user.PasswordHash,
 		user.Role, user.Phone, user.Status,
 	).Scan(&user.CreatedAt, &user.UpdatedAt)
@@ -96,6 +118,19 @@ func (r *repo) CreateUser(ctx context.Context, user *User) error {
 			return ErrEmailConflict
 		}
 		return fmt.Errorf("create user: %w", err)
+	}
+
+	// Provision the matching artists profile row for artist accounts.
+	if user.Role == roleArtist {
+		const insertArtist = `INSERT INTO artists (user_id) VALUES ($1)`
+
+		if _, err := tx.Exec(ctx, insertArtist, user.ID); err != nil {
+			return fmt.Errorf("create artist profile: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create user: commit transaction: %w", err)
 	}
 	return nil
 }

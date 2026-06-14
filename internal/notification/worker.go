@@ -49,7 +49,7 @@ type Worker struct {
 func NewWorker(db *pgxpool.Pool, log *zap.Logger) *Worker {
 	return &Worker{
 		db:     db,
-		log:    log,
+		log:    log.With(zap.String("module", "notification_worker")),
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
 }

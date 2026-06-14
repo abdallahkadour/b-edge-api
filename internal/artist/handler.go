@@ -20,7 +20,7 @@ type Handler struct {
 
 // NewHandler creates a new artist Handler.
 func NewHandler(svc *Service, log *zap.Logger) *Handler {
-	return &Handler{svc: svc, log: log}
+	return &Handler{svc: svc, log: log.With(zap.String("module", "artist"))}
 }
 
 // RegisterRoutes attaches all artist routes to the Fiber app.
@@ -28,9 +28,6 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
 	handler := NewHandler(svc, log)
-
-	// Public routes — no auth required
-	app.Get("/api/v1/artists/:id", handler.GetArtistByID)
 
 	// Protected routes
 	a := app.Group("/api/v1/artists", middleware.RequireAuth())
@@ -55,6 +52,8 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	a.Get("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.GetExceptions)
 	a.Post("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.CreateException)
 	a.Delete("/stores/:store_id/exceptions/:date", middleware.RequireRole("artist", "admin"), handler.DeleteException)
+	// Public routes — no auth required
+	app.Get("/api/v1/artists/:id", handler.GetArtistByID)
 }
 
 // GetArtistByID godoc

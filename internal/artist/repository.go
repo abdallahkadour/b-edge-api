@@ -14,57 +14,20 @@ import (
 
 // Repository defines all database operations for the artist domain.
 type Repository interface {
-	// ── Artist profile ──────────────────────────────────────────────────
-
-	// GetArtistByID returns a full artist profile joined with user data.
 	GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error)
-
-	// GetArtistByUserID returns the artist profile for a given user.
 	GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error)
-
-	// UpdateArtistProfile updates bio, bio_ar, and instagram fields.
 	UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error
-
-	// ── Stores ──────────────────────────────────────────────────────────
-
-	// GetStoresByArtist returns all stores an artist is assigned to.
 	GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error)
-
-	// GetStoresBySalon returns all active stores for a salon.
 	GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error)
-
-	// ── SalonServiceRecords ────────────────────────────────────────────────────────
-
-	// GetServicesBySalon returns all active SalonServiceRecords for a salon.
 	GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error)
-
-	// GetServiceByID returns a single SalonServiceRecord by ID.
-	GetServiceByID(ctx context.Context, SalonServiceRecordID uuid.UUID) (*SalonServiceRecord, error)
-
-	// CreateService inserts a new SalonServiceRecord for a salon.
+	GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error)
 	CreateService(ctx context.Context, s *SalonServiceRecord) error
-
-	// UpdateService updates mutable fields on a SalonServiceRecord.
-	UpdateService(ctx context.Context, SalonServiceRecordID uuid.UUID, req UpdateServiceRequest) error
-
-	// DeleteService soft-deletes a SalonServiceRecord by setting is_active = false.
-	DeleteService(ctx context.Context, SalonServiceRecordID uuid.UUID) error
-
-	// ── Business hours ───────────────────────────────────────────────────
-
-	// GetBusinessHours returns all business hours for a store.
+	UpdateService(ctx context.Context, id uuid.UUID, req UpdateServiceRequest) error
+	DeleteService(ctx context.Context, id uuid.UUID) error
 	GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*BusinessHours, error)
-
-	// SetBusinessHours upserts business hours for a store on a day.
 	SetBusinessHours(ctx context.Context, storeID uuid.UUID, req SetBusinessHoursRequest) error
-
-	// GetExceptions returns all business hours exceptions for a store.
 	GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*BusinessHoursException, error)
-
-	// CreateException inserts a holiday or special-hours exception.
 	CreateException(ctx context.Context, storeID uuid.UUID, req CreateExceptionRequest) error
-
-	// DeleteException removes a business hours exception by date.
 	DeleteException(ctx context.Context, storeID uuid.UUID, date time.Time) error
 }
 
@@ -80,7 +43,6 @@ func NewRepository(db *pgxpool.Pool) Repository {
 
 // ── Artist profile ────────────────────────────────────────────────────────────
 
-// GetArtistByID returns a full artist profile joined with user name and phone.
 func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error) {
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
@@ -110,7 +72,6 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 	return p, nil
 }
 
-// GetArtistByUserID returns the artist profile for a given user ID.
 func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error) {
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
@@ -140,7 +101,6 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 	return p, nil
 }
 
-// UpdateArtistProfile updates the bio, bio_ar, and instagram fields.
 func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE artists
@@ -159,7 +119,6 @@ func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, re
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
-// GetStoresByArtist returns all stores the artist is assigned to.
 func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT s.id, s.salon_id, s.name, s.name_ar, s.address,
@@ -181,7 +140,6 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 	return scanStores(rows)
 }
 
-// GetStoresBySalon returns all active stores for a salon.
 func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, salon_id, name, name_ar, address,
@@ -202,41 +160,36 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 	return scanStores(rows)
 }
 
-// ── SalonServiceRecords ──────────────────────────────────────────────────────────────────
+// ── Services ──────────────────────────────────────────────────────────────────
 
-// GetServicesBySalon returns all active SalonServiceRecords for a salon.
 func (r *pgRepo) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, salon_id, category_id, name, name_ar, description,
 		       duration_min, active_duration_min, price,
 		       deposit_amount, deposit_deadline_hours,
 		       is_active, is_custom, created_at, updated_at
-		FROM SalonServiceRecords
+		FROM services
 		WHERE salon_id = $1
-		AND is_active = TRUE
-		AND deleted_at IS NULL
-		ORDER BY name ASC`,
+		ORDER BY is_active DESC, name ASC`,
 		salonID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get SalonServiceRecords by salon: %w", err)
+		return nil, fmt.Errorf("get services by salon: %w", err)
 	}
 	defer rows.Close()
-	return scanSalonServiceRecords(rows)
+	return scanServices(rows)
 }
 
-// GetServiceByID returns a single SalonServiceRecord by primary key.
-func (r *pgRepo) GetServiceByID(ctx context.Context, SalonServiceRecordID uuid.UUID) (*SalonServiceRecord, error) {
+func (r *pgRepo) GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error) {
 	s := &SalonServiceRecord{}
 	err := r.db.QueryRow(ctx, `
 		SELECT id, salon_id, category_id, name, name_ar, description,
 		       duration_min, active_duration_min, price,
 		       deposit_amount, deposit_deadline_hours,
 		       is_active, is_custom, created_at, updated_at
-		FROM SalonServiceRecords
-		WHERE id = $1
-		AND deleted_at IS NULL`,
-		SalonServiceRecordID,
+		FROM services
+		WHERE id = $1`,
+		id,
 	).Scan(
 		&s.ID, &s.SalonID, &s.CategoryID, &s.Name, &s.NameAr, &s.Description,
 		&s.DurationMin, &s.ActiveDurationMin, &s.Price,
@@ -247,15 +200,14 @@ func (r *pgRepo) GetServiceByID(ctx context.Context, SalonServiceRecordID uuid.U
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrServiceNotFound
 		}
-		return nil, fmt.Errorf("get SalonServiceRecord by id: %w", err)
+		return nil, fmt.Errorf("get service by id: %w", err)
 	}
 	return s, nil
 }
 
-// CreateService inserts a new SalonServiceRecord for a salon.
 func (r *pgRepo) CreateService(ctx context.Context, s *SalonServiceRecord) error {
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO SalonServiceRecords (
+		INSERT INTO services (
 			id, salon_id, category_id, name, name_ar, description,
 			duration_min, active_duration_min, price,
 			deposit_amount, deposit_deadline_hours,
@@ -273,51 +225,48 @@ func (r *pgRepo) CreateService(ctx context.Context, s *SalonServiceRecord) error
 		s.IsActive, s.IsCustom,
 	).Scan(&s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("create SalonServiceRecord: %w", err)
+		return fmt.Errorf("create service: %w", err)
 	}
 	return nil
 }
 
-// UpdateService updates mutable fields on a SalonServiceRecord.
-// Uses COALESCE so only provided fields are updated.
-func (r *pgRepo) UpdateService(ctx context.Context, SalonServiceRecordID uuid.UUID, req UpdateServiceRequest) error {
+func (r *pgRepo) UpdateService(ctx context.Context, id uuid.UUID, req UpdateServiceRequest) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE SalonServiceRecords
-		SET name                   = COALESCE($1, name),
-		    name_ar                = COALESCE($2, name_ar),
-		    description            = COALESCE($3, description),
-		    duration_min           = COALESCE($4, duration_min),
-		    is_active              = COALESCE($5, is_active),
-		    updated_at             = NOW()
-		WHERE id = $6
-		AND deleted_at IS NULL`,
+		UPDATE services
+		SET name           = COALESCE($1, name),
+		    name_ar        = COALESCE($2, name_ar),
+		    description    = COALESCE($3, description),
+		    duration_min   = COALESCE($4, duration_min),
+		    price          = COALESCE($5, price),
+		    deposit_amount = COALESCE($6, deposit_amount),
+		    is_active      = COALESCE($7, is_active),
+		    updated_at     = NOW()
+		WHERE id = $8`,
 		req.Name, req.NameAr, req.Description, req.DurationMin,
-		req.IsActive, SalonServiceRecordID,
+		req.Price, req.DepositAmount, req.IsActive, id,
 	)
 	if err != nil {
-		return fmt.Errorf("update SalonServiceRecord: %w", err)
+		return fmt.Errorf("update service: %w", err)
 	}
 	return nil
 }
 
-// DeleteService soft-deletes a SalonServiceRecord by setting is_active = false.
-func (r *pgRepo) DeleteService(ctx context.Context, SalonServiceRecordID uuid.UUID) error {
+func (r *pgRepo) DeleteService(ctx context.Context, id uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE SalonServiceRecords
+		UPDATE services
 		SET is_active  = FALSE,
 		    updated_at = NOW()
 		WHERE id = $1`,
-		SalonServiceRecordID,
+		id,
 	)
 	if err != nil {
-		return fmt.Errorf("delete SalonServiceRecord: %w", err)
+		return fmt.Errorf("delete service: %w", err)
 	}
 	return nil
 }
 
 // ── Business hours ────────────────────────────────────────────────────────────
 
-// GetBusinessHours returns all 7 days of business hours for a store.
 func (r *pgRepo) GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*BusinessHours, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, store_id, day_of_week, open_time, close_time, is_open, created_at
@@ -345,8 +294,6 @@ func (r *pgRepo) GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*Bu
 	return result, rows.Err()
 }
 
-// SetBusinessHours upserts business hours for a specific day.
-// If a row exists for this store + day, it is updated. Otherwise inserted.
 func (r *pgRepo) SetBusinessHours(ctx context.Context, storeID uuid.UUID, req SetBusinessHoursRequest) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO business_hours (id, store_id, day_of_week, open_time, close_time, is_open)
@@ -364,7 +311,6 @@ func (r *pgRepo) SetBusinessHours(ctx context.Context, storeID uuid.UUID, req Se
 	return nil
 }
 
-// GetExceptions returns all exceptions for a store ordered by date.
 func (r *pgRepo) GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*BusinessHoursException, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, store_id, exception_date, is_closed,
@@ -393,7 +339,6 @@ func (r *pgRepo) GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*Busin
 	return result, rows.Err()
 }
 
-// CreateException inserts a holiday or special-hours day.
 func (r *pgRepo) CreateException(ctx context.Context, storeID uuid.UUID, req CreateExceptionRequest) error {
 	date, err := time.Parse("2006-01-02", req.ExceptionDate)
 	if err != nil {
@@ -417,7 +362,6 @@ func (r *pgRepo) CreateException(ctx context.Context, storeID uuid.UUID, req Cre
 	return nil
 }
 
-// DeleteException removes a business hours exception for a specific date.
 func (r *pgRepo) DeleteException(ctx context.Context, storeID uuid.UUID, date time.Time) error {
 	_, err := r.db.Exec(ctx, `
 		DELETE FROM business_hours_exceptions
@@ -450,7 +394,7 @@ func scanStores(rows pgx.Rows) ([]*Store, error) {
 	return result, rows.Err()
 }
 
-func scanSalonServiceRecords(rows pgx.Rows) ([]*SalonServiceRecord, error) {
+func scanServices(rows pgx.Rows) ([]*SalonServiceRecord, error) {
 	var result []*SalonServiceRecord
 	for rows.Next() {
 		s := &SalonServiceRecord{}
@@ -460,7 +404,7 @@ func scanSalonServiceRecords(rows pgx.Rows) ([]*SalonServiceRecord, error) {
 			&s.DepositAmount, &s.DepositDeadlineHours,
 			&s.IsActive, &s.IsCustom, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan SalonServiceRecord: %w", err)
+			return nil, fmt.Errorf("scan service: %w", err)
 		}
 		result = append(result, s)
 	}

@@ -62,6 +62,12 @@ var (
 )
 
 // User represents a registered B-Edge user from the users table.
+//
+// SalonID is populated by GetUserByEmail and GetUserByID via a LEFT JOIN on the
+// artists table. It is nil for customers and admins (who have no artists row),
+// and nil for artists who have not yet been assigned to a salon. Once set, it is
+// embedded in every JWT access token so downstream handlers never need a DB round-trip
+// to check which salon an authenticated artist belongs to.
 type User struct {
 	ID           uuid.UUID  `db:"id"`
 	Name         string     `db:"name"`
@@ -73,6 +79,10 @@ type User struct {
 	CreatedAt    time.Time  `db:"created_at"`
 	UpdatedAt    time.Time  `db:"updated_at"`
 	DeletedAt    *time.Time `db:"deleted_at"`
+
+	// SalonID is fetched from artists.salon_id via LEFT JOIN.
+	// Nil for non-artists and artists without a salon.
+	SalonID *uuid.UUID `db:"salon_id"`
 }
 
 // RefreshToken represents a stored hashed refresh token entry in the refresh_tokens table.

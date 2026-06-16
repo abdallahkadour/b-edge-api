@@ -37,8 +37,8 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	a.Patch("/:id", handler.UpdateProfile)
 
 	// Stores
-	a.Get("/:id/stores", handler.GetStoresByArtist)
 	a.Get("/salon/stores", middleware.RequireRole("artist", "admin"), handler.GetStoresBySalon)
+	a.Get("/:id/stores", handler.GetStoresByArtist)
 
 	// Services
 	a.Get("/salon/services", middleware.RequireRole("artist", "admin"), handler.GetServicesBySalon)

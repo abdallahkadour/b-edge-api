@@ -376,7 +376,7 @@ type tokenPair struct {
 
 // generateAndStoreTokens creates a new JWT pair and stores the refresh token hash.
 func (s *Service) generateAndStoreTokens(ctx context.Context, user *User) (*tokenPair, error) {
-	accessToken, err := internaljwt.GenerateAccessToken(user.ID, nil, user.Role)
+	accessToken, err := internaljwt.GenerateAccessToken(user.ID, user.SalonID, user.Role)
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}

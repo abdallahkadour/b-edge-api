@@ -24,23 +24,44 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 }
 
 // RegisterRoutes attaches all artist routes to the Fiber app.
+//
+// Public routes (no auth):
+//
+//	GET /api/v1/artists/:id          — public artist profile
+//	GET /api/v1/artists/:id/services — active services for an artist (customer PWA)
+//
+// Protected routes (RequireAuth):
+//
+//	GET    /api/v1/artists/me                      — own profile
+//	PATCH  /api/v1/artists/:id                     — update own profile
+//	GET    /api/v1/artists/salon/stores             — stores for own salon
+//	GET    /api/v1/artists/:id/stores              — stores for a specific artist
+//	GET    /api/v1/artists/salon/services           — services for own salon (dashboard)
+//	POST   /api/v1/artists/salon/services           — add service
+//	PATCH  /api/v1/artists/salon/services/:id       — update service
+//	DELETE /api/v1/artists/salon/services/:id       — deactivate service
+//	... (business hours routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
 	handler := NewHandler(svc, log)
 
-	// Protected routes
+	// ── Public routes — no authentication required ────────────────────────────
+	app.Get("/api/v1/artists/:id/services", handler.GetPublicServicesByArtist)
+	app.Get("/api/v1/artists/:id", handler.GetArtistByID)
+
+	// ── Protected routes — JWT required ──────────────────────────────────────
 	a := app.Group("/api/v1/artists", middleware.RequireAuth())
 
 	// Profile
 	a.Get("/me", handler.GetMyProfile)
 	a.Patch("/:id", handler.UpdateProfile)
 
-	// Stores
+	// Stores — specific routes before parametric
 	a.Get("/salon/stores", middleware.RequireRole("artist", "admin"), handler.GetStoresBySalon)
 	a.Get("/:id/stores", handler.GetStoresByArtist)
 
-	// Services
+	// Services (artist dashboard — own salon)
 	a.Get("/salon/services", middleware.RequireRole("artist", "admin"), handler.GetServicesBySalon)
 	a.Post("/salon/services", middleware.RequireRole("artist", "admin"), handler.CreateService)
 	a.Patch("/salon/services/:service_id", middleware.RequireRole("artist", "admin"), handler.UpdateService)
@@ -52,8 +73,6 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	a.Get("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.GetExceptions)
 	a.Post("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.CreateException)
 	a.Delete("/stores/:store_id/exceptions/:date", middleware.RequireRole("artist", "admin"), handler.DeleteException)
-	// Public routes — no auth required
-	app.Get("/api/v1/artists/:id", handler.GetArtistByID)
 }
 
 // GetArtistByID godoc
@@ -76,6 +95,33 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 	}
 
 	return response.OK(c, artist)
+}
+
+// GetPublicServicesByArtist godoc
+// @Summary      Get active services for an artist (public)
+// @Description  Returns all active services for the artist's salon.
+//
+//	Used by the customer PWA to display available services.
+//	No authentication required.
+//
+// @Tags         artists
+// @Produce      json
+// @Param        id path string true "Artist UUID"
+// @Success      200 {object} response.Body{data=[]ServiceResponse}
+// @Failure      404 {object} response.ErrorBody
+// @Router       /artists/{id}/services [get]
+func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
+	}
+
+	services, err := h.svc.GetPublicServicesByArtist(c.Context(), artistID)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, services)
 }
 
 // GetMyProfile godoc
@@ -173,7 +219,7 @@ func (h *Handler) GetStoresBySalon(c *fiber.Ctx) error {
 }
 
 // GetServicesBySalon godoc
-// @Summary      Get all services for the salon
+// @Summary      Get all services for the authenticated artist's salon (dashboard)
 // @Tags         artists
 // @Security     BearerAuth
 // @Produce      json

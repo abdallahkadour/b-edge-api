@@ -122,6 +122,30 @@ func (s *Service) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]
 	return result, nil
 }
 
+// Add this method to internal/artist/service.go, after GetServicesBySalon.
+
+// GetPublicServicesByArtist returns active services for an artist's salon.
+// Public endpoint — no authentication required. Used by the customer PWA
+// to display services on an artist's profile page.
+func (s *Service) GetPublicServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*ServiceResponse, error) {
+	// Fetch the artist profile to get their salon_id.
+	profile, err := s.repo.GetArtistByID(ctx, artistID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+		}
+		return nil, fmt.Errorf("get public services by artist: %w", err)
+	}
+
+	// Artists with no salon yet return an empty list.
+	if profile.SalonID == nil {
+		return []*ServiceResponse{}, nil
+	}
+
+	// Reuse the existing salon services query.
+	return s.GetServicesBySalon(ctx, *profile.SalonID)
+}
+
 // CreateService adds a new service to a salon's catalogue.
 // Only artists belonging to the salon can add services.
 func (s *Service) CreateService(ctx context.Context, salonID uuid.UUID, req CreateServiceRequest) (*ServiceResponse, error) {

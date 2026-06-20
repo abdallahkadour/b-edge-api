@@ -1,6 +1,6 @@
 # B-Edge — Documentation Index
 
-> 27 active documents. Every decision made. Every gap closed. Ready to build.
+> 31 active documents. Every decision made. Every gap closed. Ready to build.
 
 ---
 
@@ -25,6 +25,7 @@
 | `B-Edge-Auth-API-Docs.docx` | Auth endpoints — register, login, refresh, logout, forgot-password, reset-password, freeze, delete. |
 | `B-Edge-Diagrams.html` | Architecture diagrams, booking flow, notification flow, database ERD — open in browser. |
 | `B-Edge-INFRA.docx` | Infrastructure design — EC2, Docker, Kubernetes, PostgreSQL, deployment topology. v1.1 Go stack. |
+| `B-Edge-Backend-Reality-Check-v1.md` | Schema audit — what the real database already has vs. what the 40 screens need. Only 1 table + 2 columns genuinely missing. 3 migrations all that's required. |
 
 ---
 
@@ -42,6 +43,8 @@
 | File | Description |
 |---|---|
 | `B-Edge-Angular-PWA-Architecture-v1.docx` | Angular 21 workspace structure, two PWAs from one codebase, Arabic RTL implementation, service workers, state management with Signals. |
+| `B-Edge-UI-Spec-v2.md` | Complete screen inventory (40 screens: 19 customer PWA, 21 artist dashboard). Screen-by-screen API dependency map with exact request/response shapes. Navigation flows. Pre-Angular build checklist. |
+| `b-edge-8-missing-screens.md` | Stitch design prompts ready to paste — 8 missing screens: C-16/17/18/19 (customer password reset + booking detail + cancel modal), A-18/19/20/21 (artist password + change password + block dates). |
 
 ---
 
@@ -50,7 +53,7 @@
 | File | Description |
 |---|---|
 | `B-Edge-Test-Strategy-v1.docx` | Unit vs integration tests, test database setup, Go test patterns, coverage targets per domain, GitHub Actions CI config. |
-| `CLAUDE.md` | Coding rules enforced on every PR — Go doc comments, no hardcoded values, parameterized SQL, pointer receivers, error handling. |
+| `CLAUDE-v3.md` | Engineering rules enforced on every PR — Go doc comments, migrations, API endpoints (50+), all error codes, booking state machine, Go types, Angular rules, design tokens. Single source of truth. |
 
 ---
 
@@ -95,4 +98,4 @@
 
 ---
 
-*B-Edge  ·  Beauty at the Edge  ·  الجمال عند الحافة  ·  May 2026*
+*B-Edge  ·  Beauty at the Edge  ·  الجمال عند الحافة  ·  June 2026*

@@ -54,6 +54,7 @@ type mockRepo struct {
 	getBookingsBySalonBookings    []*Booking
 	getBookingsBySalonErr         error
 	updateBookingStatusErr        error
+	attachGuestAndSubmitErr       error
 	approveBookingErr             error
 	confirmDepositErr             error
 	cancelBookingErr              error
@@ -86,6 +87,9 @@ func (m *mockRepo) GetArtistCrossStoreBookings(_ context.Context, _ uuid.UUID, _
 func (m *mockRepo) GetArtistStoreBuffer(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) (*ArtistStoreBuffer, error) {
 	return m.getArtistStoreBufferBuf, m.getArtistStoreBufferErr
 }
+func (m *mockRepo) CreateGuestUser(_ context.Context, _ string, _ string) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
 func (m *mockRepo) CreateBooking(_ context.Context, b *Booking) error {
 	b.CreatedAt = time.Now()
 	b.UpdatedAt = time.Now()
@@ -105,6 +109,9 @@ func (m *mockRepo) GetBookingsBySalon(_ context.Context, _ uuid.UUID, _ time.Tim
 }
 func (m *mockRepo) UpdateBookingStatus(_ context.Context, _ uuid.UUID, _ string) error {
 	return m.updateBookingStatusErr
+}
+func (m *mockRepo) AttachGuestAndSubmit(_ context.Context, _, _ uuid.UUID, _ *string) error {
+	return m.attachGuestAndSubmitErr
 }
 func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, _ time.Time) error {
 	return m.approveBookingErr
@@ -606,4 +613,138 @@ func TestCancelBooking_ArtistCancelAlwaysRefund(t *testing.T) {
 	require.NoError(t, err)
 	// Artist cancels → always refund_due
 	assert.Equal(t, StatusRefundDue, result.Status)
+}
+
+// ── Guest two-step booking tests ──────────────────────────────────────────────
+
+// TestHoldGuestSlot_Success — guest taps a valid future slot.
+// Expect: held booking returned with a held_until in the future.
+func TestHoldGuestSlot_Success(t *testing.T) {
+	repo := &mockRepo{
+		getServiceSvc:    defaultService(),
+		createBookingErr: nil,
+	}
+	svc := newTestService(repo)
+
+	req := HoldGuestSlotRequest{
+		ArtistID:  uuid.New().String(),
+		StoreID:   uuid.New().String(),
+		ServiceID: uuid.New().String(),
+		StartTime: time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339),
+	}
+
+	res, err := svc.HoldGuestSlot(context.Background(), req)
+
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.NotEqual(t, uuid.Nil, res.BookingID)
+	assert.True(t, res.HeldUntil.After(time.Now().UTC()), "held_until must be in the future")
+}
+
+// TestHoldGuestSlot_PastTime — guest tries to hold a slot in the past.
+// Expect: BOOKING_IN_PAST error, no booking created.
+func TestHoldGuestSlot_PastTime(t *testing.T) {
+	repo := &mockRepo{getServiceSvc: defaultService()}
+	svc := newTestService(repo)
+
+	req := HoldGuestSlotRequest{
+		ArtistID:  uuid.New().String(),
+		StoreID:   uuid.New().String(),
+		ServiceID: uuid.New().String(),
+		StartTime: time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+	}
+
+	res, err := svc.HoldGuestSlot(context.Background(), req)
+
+	require.Error(t, err)
+	assert.Nil(t, res)
+}
+
+// TestHoldGuestSlot_SlotTaken — GIST constraint fires (slot already held).
+// Expect: SLOT_UNAVAILABLE surfaced.
+func TestHoldGuestSlot_SlotTaken(t *testing.T) {
+	repo := &mockRepo{
+		getServiceSvc:    defaultService(),
+		createBookingErr: ErrSlotUnavailable,
+	}
+	svc := newTestService(repo)
+
+	req := HoldGuestSlotRequest{
+		ArtistID:  uuid.New().String(),
+		StoreID:   uuid.New().String(),
+		ServiceID: uuid.New().String(),
+		StartTime: time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339),
+	}
+
+	res, err := svc.HoldGuestSlot(context.Background(), req)
+
+	require.Error(t, err)
+	assert.Nil(t, res)
+}
+
+// TestSubmitGuestBooking_Success — submit a live held placeholder booking.
+// Expect: transitions to pending.
+func TestSubmitGuestBooking_Success(t *testing.T) {
+	heldUntil := time.Now().UTC().Add(5 * time.Minute)
+	booking := &Booking{
+		ID:         uuid.New(),
+		CustomerID: SystemGuestPlaceholderID,
+		Status:     StatusHeld,
+		HeldUntil:  &heldUntil,
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:   booking,
+		attachGuestAndSubmitErr: nil,
+	}
+	svc := newTestService(repo)
+
+	req := SubmitGuestBookingRequest{Name: "Maya Test", Phone: "+96170123456"}
+	res, err := svc.SubmitGuestBooking(context.Background(), booking.ID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, StatusPending, res.Status)
+}
+
+// TestSubmitGuestBooking_HoldExpired — held_until already passed.
+// Expect: HOLD_EXPIRED error.
+func TestSubmitGuestBooking_HoldExpired(t *testing.T) {
+	heldUntil := time.Now().UTC().Add(-1 * time.Minute) // expired
+	booking := &Booking{
+		ID:         uuid.New(),
+		CustomerID: SystemGuestPlaceholderID,
+		Status:     StatusHeld,
+		HeldUntil:  &heldUntil,
+	}
+
+	repo := &mockRepo{getBookingByIDBooking: booking}
+	svc := newTestService(repo)
+
+	req := SubmitGuestBookingRequest{Name: "Maya Test", Phone: "+96170123456"}
+	res, err := svc.SubmitGuestBooking(context.Background(), booking.ID, req)
+
+	require.Error(t, err)
+	assert.Nil(t, res)
+}
+
+// TestSubmitGuestBooking_NotHeld — booking is not in held status anymore.
+// Expect: HOLD_EXPIRED error.
+func TestSubmitGuestBooking_NotHeld(t *testing.T) {
+	heldUntil := time.Now().UTC().Add(5 * time.Minute)
+	booking := &Booking{
+		ID:         uuid.New(),
+		CustomerID: SystemGuestPlaceholderID,
+		Status:     StatusPending, // already submitted
+		HeldUntil:  &heldUntil,
+	}
+
+	repo := &mockRepo{getBookingByIDBooking: booking}
+	svc := newTestService(repo)
+
+	req := SubmitGuestBookingRequest{Name: "Maya Test", Phone: "+96170123456"}
+	res, err := svc.SubmitGuestBooking(context.Background(), booking.ID, req)
+
+	require.Error(t, err)
+	assert.Nil(t, res)
 }

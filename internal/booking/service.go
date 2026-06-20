@@ -310,6 +310,145 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 	return toResponse(b), nil
 }
 
+// ── Guest two-step booking ────────────────────────────────────────────────────
+//
+// Matches the real screen flow: C-04 picks the slot (HoldGuestSlot), C-05 collects
+// name + phone and submits (SubmitGuestBooking). The slot is genuinely protected
+// for the full 10 minutes the customer spends on the details form.
+//
+// The guest user is created only on successful submit, so abandoned holds leave
+// NO orphan user rows — the held booking points at SystemGuestPlaceholderID and is
+// swept by the existing ReleaseExpiredHolds job.
+
+// HoldGuestSlot creates a held booking when a guest taps a slot on C-04.
+//
+// No identity is known yet, so the booking is pointed at SystemGuestPlaceholderID
+// to satisfy the customer_id FK. The GIST exclusion constraint guarantees
+// first-write-wins: if two guests race for the same slot, only one succeeds and
+// the other receives SLOT_UNAVAILABLE. The hold lasts SlotHoldDuration (10 min).
+func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (*HoldGuestSlotResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	artistID, err := uuid.Parse(req.ArtistID)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_ARTIST_ID", "Invalid artist ID")
+	}
+	storeID, err := uuid.Parse(req.StoreID)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
+	}
+	serviceID, err := uuid.Parse(req.ServiceID)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_SERVICE_ID", "Invalid service ID")
+	}
+
+	startTime, err := time.Parse(time.RFC3339, req.StartTime)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-15T10:00:00Z")
+	}
+
+	// Reject holds for times in the past before touching the database.
+	if startTime.UTC().Before(time.Now().UTC()) {
+		return nil, apperror.BadRequest("BOOKING_IN_PAST", "Cannot book a time in the past")
+	}
+
+	// GetService filters on is_active = TRUE, so inactive services return not found.
+	service, err := s.repo.GetService(ctx, serviceID)
+	if err != nil {
+		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
+	}
+
+	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
+	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
+
+	b := &Booking{
+		ID:             uuid.New(),
+		SalonID:        service.SalonID, // resolved from service, not a JWT
+		StoreID:        storeID,
+		ArtistID:       artistID,
+		CustomerID:     SystemGuestPlaceholderID, // real guest user created on submit
+		ServiceID:      serviceID,
+		StartTime:      startTime.UTC(),
+		EndTime:        endTime.UTC(),
+		HeldUntil:      &heldUntil,
+		Status:         StatusHeld,
+		OriginalPrice:  service.Price,
+		DiscountAmount: zeroDecimal(),
+		FinalPrice:     service.Price,
+		DepositAmount:  service.DepositAmount,
+		Channel:        ChannelCustomerPWA,
+	}
+
+	if err := s.repo.CreateBooking(ctx, b); err != nil {
+		if errors.Is(err, ErrSlotUnavailable) {
+			return nil, apperror.Conflict("SLOT_UNAVAILABLE", "This slot was just taken. Please choose another time.")
+		}
+		return nil, fmt.Errorf("hold guest slot: %w", err)
+	}
+
+	return &HoldGuestSlotResponse{
+		BookingID: b.ID,
+		HeldUntil: heldUntil,
+		StartTime: b.StartTime,
+		EndTime:   b.EndTime,
+	}, nil
+}
+
+// SubmitGuestBooking attaches the guest's identity and moves held → pending (C-05).
+//
+// No authentication is required — the booking ID plus an unexpired held_until
+// window is the guard. Validates the booking is still held and not expired,
+// creates the real guest user from the submitted name + phone, repoints the
+// booking from the placeholder to that user, attaches special requests, and
+// transitions to pending.
+//
+// AttachGuestAndSubmit performs the repoint + status change in a single guarded
+// UPDATE so a concurrent ReleaseExpiredHolds run cannot cause a lost update.
+func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, req SubmitGuestBookingRequest) (*BookingResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+		}
+		return nil, fmt.Errorf("submit guest booking: get booking: %w", err)
+	}
+
+	// Guard: must still be a held guest booking that has not expired.
+	if b.Status != StatusHeld || b.CustomerID != SystemGuestPlaceholderID {
+		return nil, apperror.Conflict("HOLD_EXPIRED", "This slot hold is no longer active. Please choose your time again.")
+	}
+	if b.HeldUntil == nil || b.HeldUntil.Before(time.Now().UTC()) {
+		return nil, apperror.Conflict("HOLD_EXPIRED", "Your 10-minute hold expired. Please choose your time again.")
+	}
+
+	// Create the real guest user now that the customer has completed the form.
+	guestUserID, err := s.repo.CreateGuestUser(ctx, req.Name, req.Phone)
+	if err != nil {
+		return nil, fmt.Errorf("submit guest booking: create guest user: %w", err)
+	}
+
+	// Atomically repoint customer_id and transition held → pending. Guarded on
+	// status = held AND held_until > NOW() so an expiry race cannot resurrect it.
+	if err := s.repo.AttachGuestAndSubmit(ctx, bookingID, guestUserID, req.SpecialRequests); err != nil {
+		if errors.Is(err, ErrBookingNotHeld) {
+			return nil, apperror.Conflict("HOLD_EXPIRED", "Your 10-minute hold expired. Please choose your time again.")
+		}
+		return nil, fmt.Errorf("submit guest booking: %w", err)
+	}
+
+	b.CustomerID = guestUserID
+	b.Status = StatusPending
+	b.HeldUntil = nil
+	b.SpecialRequests = req.SpecialRequests
+	return toResponse(b), nil
+}
+
 // SubmitBooking transitions a held booking to pending.
 // Called when the customer completes and submits the booking form.
 func (s *Service) SubmitBooking(ctx context.Context, bookingID uuid.UUID, customerID uuid.UUID) (*BookingResponse, error) {

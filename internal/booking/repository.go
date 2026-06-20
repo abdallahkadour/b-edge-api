@@ -37,6 +37,9 @@ type Repository interface {
 	// GetService fetches a service by ID for duration and deposit info.
 	GetService(ctx context.Context, serviceID uuid.UUID) (*SalonService, error)
 
+	// CreateGuestUser creates a minimal customer record for a guest booking.
+	// Returns the new user's UUID to use as customer_id on the booking.
+	CreateGuestUser(ctx context.Context, name string, phone string) (uuid.UUID, error)
 	// GetArtistBookingsForDate returns all bookings for an artist on a date
 	// that are in a blocking status. Used to build the blocked time ranges.
 	GetArtistBookingsForDate(ctx context.Context, artistID uuid.UUID, date time.Time) ([]*Booking, error)
@@ -71,6 +74,12 @@ type Repository interface {
 
 	// UpdateBookingStatus transitions a booking to a new status.
 	UpdateBookingStatus(ctx context.Context, id uuid.UUID, status string) error
+
+	// AttachGuestAndSubmit repoints a held guest booking from the placeholder
+	// customer to the real guest user and transitions held → pending, in one
+	// guarded UPDATE. Returns ErrBookingNotHeld if the booking is no longer a
+	// live held booking (already submitted or expired).
+	AttachGuestAndSubmit(ctx context.Context, bookingID, guestUserID uuid.UUID, specialRequests *string) error
 
 	// ApproveBooking transitions pending → approved and sets the deposit deadline.
 	ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) error
@@ -446,6 +455,40 @@ func (r *pgRepo) UpdateBookingStatus(ctx context.Context, id uuid.UUID, status s
 	return nil
 }
 
+// AttachGuestAndSubmit repoints a held guest booking to the real guest user and
+// transitions it held → pending atomically.
+//
+// The UPDATE is guarded by `status = 'held' AND held_until > NOW()`, so if the
+// background ReleaseExpiredHolds job expired the booking between the service-layer
+// read and this write, zero rows are affected and ErrBookingNotHeld is returned.
+// The database is the final arbiter — no lost update is possible.
+func (r *pgRepo) AttachGuestAndSubmit(
+	ctx context.Context,
+	bookingID, guestUserID uuid.UUID,
+	specialRequests *string,
+) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		SET customer_id      = $2,
+		    special_requests = $3,
+		    status           = $4,
+		    held_until       = NULL,
+		    updated_at       = NOW()
+		WHERE id         = $1
+		AND status       = $5
+		AND held_until   > NOW()
+		AND deleted_at IS NULL`,
+		bookingID, guestUserID, specialRequests, StatusPending, StatusHeld,
+	)
+	if err != nil {
+		return fmt.Errorf("attach guest and submit: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrBookingNotHeld
+	}
+	return nil
+}
+
 // ApproveBooking transitions a pending booking to approved and sets deposit deadline.
 func (r *pgRepo) ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) error {
 	result, err := r.db.Exec(ctx, `
@@ -618,6 +661,24 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 		return nil, fmt.Errorf("scan bookings rows: %w", err)
 	}
 	return bookings, nil
+}
+
+// CreateGuestUser inserts a minimal users row for a guest booking.
+func (r *pgRepo) CreateGuestUser(ctx context.Context, name string, phone string) (uuid.UUID, error) {
+	id := uuid.New()
+	// Email is never used — guests cannot log in or receive password resets.
+	// The format guest_<uuid>@bedge.guest is unique and out of normal email range.
+	email := fmt.Sprintf("guest_%s@bedge.guest", id.String())
+
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO users (id, name, email, password_hash, role, phone, status)
+		VALUES ($1, $2, $3, 'GUEST_ACCOUNT_NO_PASSWORD', 'customer', $4, 'active')`,
+		id, name, email, phone,
+	)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create guest user: %w", err)
+	}
+	return id, nil
 }
 
 // toDecimal is a helper to convert a float64 from PostgreSQL NUMERIC to decimal.Decimal.

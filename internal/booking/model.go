@@ -12,102 +12,75 @@ import (
 )
 
 // ── Booking status constants ──────────────────────────────────────────────────
-// These map exactly to the CHECK constraint in 001_initial_schema.up.sql.
 
 const (
-	// StatusPending means the customer submitted — awaiting artist approval.
-	StatusPending = "pending"
-
-	// StatusApproved means the artist approved — awaiting deposit payment.
-	StatusApproved = "approved"
-
-	// StatusHeld means the slot is reserved during checkout for 10 minutes.
-	StatusHeld = "held"
-
-	// StatusDepositPending means the deposit deadline is set but not yet paid.
+	StatusPending        = "pending"
+	StatusApproved       = "approved"
+	StatusHeld           = "held"
 	StatusDepositPending = "deposit_pending"
-
-	// StatusDepositPaid means the deposit was paid — awaiting artist confirmation.
-	StatusDepositPaid = "deposit_paid"
-
-	// StatusConfirmed means deposit verified — booking is confirmed.
-	StatusConfirmed = "confirmed"
-
-	// StatusCompleted means the service was delivered.
-	StatusCompleted = "completed"
-
-	// StatusCancelled means cancelled by artist or customer.
-	StatusCancelled = "cancelled"
-
-	// StatusExpired means the deposit deadline passed — slot released.
-	StatusExpired = "expired"
-
-	// StatusNoShow means the customer did not arrive.
-	StatusNoShow = "no_show"
-
-	// StatusRefundDue means refund approved but not yet sent.
-	StatusRefundDue = "refund_due"
-
-	// StatusRefunded means the refund was sent to the customer.
-	StatusRefunded = "refunded"
+	StatusDepositPaid    = "deposit_paid"
+	StatusConfirmed      = "confirmed"
+	StatusCompleted      = "completed"
+	StatusCancelled      = "cancelled"
+	StatusExpired        = "expired"
+	StatusNoShow         = "no_show"
+	StatusRefundDue      = "refund_due"
+	StatusRefunded       = "refunded"
 )
 
 // ── Channel constants ─────────────────────────────────────────────────────────
 
 const (
-	// ChannelCustomerPWA means booked through the customer Progressive Web App.
-	ChannelCustomerPWA = "customer_pwa"
-
-	// ChannelArtistDashboard means booked by the artist on behalf of a customer.
+	ChannelCustomerPWA     = "customer_pwa"
 	ChannelArtistDashboard = "artist_dashboard"
-
-	// ChannelWhatsAppBot means booked through the WhatsApp bot (Phase 3).
-	ChannelWhatsAppBot = "whatsapp_bot"
-
-	// ChannelWalkIn means the customer walked in without a prior booking.
-	ChannelWalkIn = "walk_in"
-
-	// ChannelPhone means booked via phone call by the artist.
-	ChannelPhone = "phone"
-
-	// ChannelInstagram means booked via Instagram DM converted to a booking.
-	ChannelInstagram = "instagram"
+	ChannelWhatsAppBot     = "whatsapp_bot"
+	ChannelWalkIn          = "walk_in"
+	ChannelPhone           = "phone"
+	ChannelInstagram       = "instagram"
 )
 
-// ── Slot hold duration ────────────────────────────────────────────────────────
-
 // SlotHoldDuration is how long a slot is held during customer checkout.
-// GIST constraint treats held slots as booked — no one else can take the slot.
 const SlotHoldDuration = 10 * time.Minute
+
+// SystemGuestPlaceholderID is the customer_id used for a held guest booking
+// BEFORE the customer enters their name and phone on the details screen (C-05).
+//
+// The customer taps a slot on C-04 to hold it, but their identity is not known
+// until C-05. The bookings table requires customer_id NOT NULL, so a held guest
+// booking points at this single well-known system user until SubmitGuestBooking
+// creates the real guest user and repoints the booking.
+//
+// A held booking is never shown in the artist dashboard (held is not a dashboard
+// status), so this placeholder never appears in any UI. If a guest abandons the
+// form, ReleaseExpiredHolds expires the booking and there is nothing to clean up
+// because no real guest user was ever created.
+//
+// REQUIRED SEED — insert this user once (see seed_system_guest.sql):
+//
+//	INSERT INTO users (id, name, email, password_hash, role, phone, status)
+//	VALUES ('00000000-0000-0000-0000-0000000000ff', 'Held Slot Placeholder',
+//	        'system_held@bedge.system', 'SYSTEM_ACCOUNT_NO_LOGIN',
+//	        'customer', '+00000000000', 'active')
+//	ON CONFLICT (id) DO NOTHING;
+var SystemGuestPlaceholderID = uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
 
 // ── Sentinel errors ───────────────────────────────────────────────────────────
 
 var (
-	// ErrBookingNotFound is returned when no booking matches the given criteria.
-	ErrBookingNotFound = errors.New("booking not found")
-
-	// ErrSlotUnavailable is returned when the requested slot is already taken.
-	// Maps to PostgreSQL GIST exclusion violation — error code 23P01.
-	ErrSlotUnavailable = errors.New("slot unavailable")
-
-	// ErrBookingNotPending is returned when trying to approve a non-pending booking.
-	ErrBookingNotPending = errors.New("booking is not in pending status")
-
-	// ErrBookingNotApproved is returned when trying to confirm deposit on a non-approved booking.
-	ErrBookingNotApproved = errors.New("booking is not in approved status")
-
-	// ErrBookingNotCancellable is returned when a booking cannot be cancelled in its current status.
+	ErrBookingNotFound       = errors.New("booking not found")
+	ErrSlotUnavailable       = errors.New("slot unavailable")
+	ErrBookingNotPending     = errors.New("booking is not in pending status")
+	ErrBookingNotApproved    = errors.New("booking is not in approved status")
 	ErrBookingNotCancellable = errors.New("booking cannot be cancelled in its current status")
-
-	// ErrNotBookingOwner is returned when a user tries to act on a booking they do not own.
-	ErrNotBookingOwner = errors.New("not authorised to act on this booking")
+	ErrNotBookingOwner       = errors.New("not authorised to act on this booking")
+	// ErrBookingNotHeld is returned when a held guest booking can no longer be
+	// submitted — it was already submitted or its 10-minute hold expired.
+	ErrBookingNotHeld = errors.New("booking is not in held status")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
 
 // Booking represents a single appointment in the bookings table.
-// Every field maps exactly to a column in the migration.
-// Money fields use decimal.Decimal — never float64.
 type Booking struct {
 	ID         uuid.UUID `db:"id"`
 	SalonID    uuid.UUID `db:"salon_id"`
@@ -115,9 +88,7 @@ type Booking struct {
 	ArtistID   uuid.UUID `db:"artist_id"`
 	CustomerID uuid.UUID `db:"customer_id"`
 	ServiceID  uuid.UUID `db:"service_id"`
-	// SessionID links multiple bookings that belong to the same client session.
-	// NULL for single-artist bookings. Set when a service requires multiple artists.
-	// Added via migration 005 when multi-artist session support is implemented.
+	// SessionID is reserved for migration 005 (multi-artist sessions). Always nil.
 	SessionID          *uuid.UUID      `db:"session_id"`
 	StartTime          time.Time       `db:"start_time"`
 	EndTime            time.Time       `db:"end_time"`
@@ -140,8 +111,15 @@ type Booking struct {
 	DeletedAt          *time.Time      `db:"deleted_at"`
 }
 
-// Store holds the booking-relevant fields from the stores table.
-// Used by the slot availability algorithm.
+// HoldGuestSlotResponse is returned when a guest holds a slot.
+type HoldGuestSlotResponse struct {
+	BookingID uuid.UUID `json:"booking_id"`
+	HeldUntil time.Time `json:"held_until"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+}
+
+// Store holds booking-relevant fields from the stores table.
 type Store struct {
 	ID                 uuid.UUID       `db:"id"`
 	SalonID            uuid.UUID       `db:"salon_id"`
@@ -155,7 +133,7 @@ type Store struct {
 	IsActive           bool            `db:"is_active"`
 }
 
-// BusinessHours holds the working hours for a store on a given day of week.
+// BusinessHours holds working hours for a store on a given day.
 type BusinessHours struct {
 	ID        uuid.UUID `db:"id"`
 	StoreID   uuid.UUID `db:"store_id"`
@@ -166,7 +144,6 @@ type BusinessHours struct {
 }
 
 // BusinessHoursException overrides regular hours for a specific date.
-// Used for holidays and special operating hours.
 type BusinessHoursException struct {
 	ID            uuid.UUID `db:"id"`
 	StoreID       uuid.UUID `db:"store_id"`
@@ -177,6 +154,7 @@ type BusinessHoursException struct {
 	Reason        *string   `db:"reason"`
 }
 
+// BlockingStatuses are the booking statuses that occupy a slot.
 var BlockingStatuses = []string{
 	StatusPending,
 	StatusApproved,
@@ -186,7 +164,7 @@ var BlockingStatuses = []string{
 	StatusConfirmed,
 }
 
-// Service holds the booking-relevant fields from the services table.
+// SalonService holds booking-relevant fields from the services table.
 type SalonService struct {
 	ID                   uuid.UUID       `db:"id"`
 	SalonID              uuid.UUID       `db:"salon_id"`
@@ -199,8 +177,7 @@ type SalonService struct {
 	IsActive             bool            `db:"is_active"`
 }
 
-// ArtistStoreBuffer holds the travel buffer configuration for an artist
-// travelling between two specific stores.
+// ArtistStoreBuffer holds travel buffer config between two stores.
 type ArtistStoreBuffer struct {
 	ID               uuid.UUID `db:"id"`
 	ArtistID         uuid.UUID `db:"artist_id"`
@@ -220,15 +197,13 @@ type TimeSlot struct {
 	EarlyBirdFee decimal.Decimal `json:"early_bird_fee,omitempty"`
 }
 
-// TimeRange is an internal helper used by the slot algorithm
-// to represent a blocked time window.
+// TimeRange is an internal helper representing a blocked time window.
 type TimeRange struct {
 	Start time.Time
 	End   time.Time
 }
 
 // Overlaps returns true if this TimeRange overlaps with another.
-// Used in the slot availability algorithm to detect conflicts.
 func (r TimeRange) Overlaps(other TimeRange) bool {
 	return r.Start.Before(other.End) && other.Start.Before(r.End)
 }
@@ -244,21 +219,45 @@ type GetAvailableSlotsRequest struct {
 }
 
 // CreateBookingRequest is the request body for POST /api/v1/bookings.
+// Used by authenticated customers and the artist dashboard.
 type CreateBookingRequest struct {
-	ArtistID        string  `json:"artist_id"         validate:"required,uuid"`
-	StoreID         string  `json:"store_id"          validate:"required,uuid"`
-	ServiceID       string  `json:"service_id"        validate:"required,uuid"`
-	StartTime       string  `json:"start_time"        validate:"required"`
+	ArtistID        string  `json:"artist_id"        validate:"required,uuid"`
+	StoreID         string  `json:"store_id"         validate:"required,uuid"`
+	ServiceID       string  `json:"service_id"       validate:"required,uuid"`
+	StartTime       string  `json:"start_time"       validate:"required"`
 	SpecialRequests *string `json:"special_requests"`
-	Channel         string  `json:"channel"           validate:"required,oneof=customer_pwa artist_dashboard walk_in phone instagram"`
+	Channel         string  `json:"channel"          validate:"required,oneof=customer_pwa artist_dashboard walk_in phone instagram"`
 }
 
-// ApproveBookingRequest is the request body for PATCH /api/v1/bookings/:id/approve.
+// HoldGuestSlotRequest is the body for POST /api/v1/bookings/guest/hold.
+//
+// Sent when the customer taps a time slot on C-04. No identity is collected yet —
+// only the chosen slot. The server creates a held booking (10-minute hold) pointed
+// at the system placeholder customer and returns its ID for the submit step.
+type HoldGuestSlotRequest struct {
+	ArtistID  string `json:"artist_id"  validate:"required,uuid"`
+	StoreID   string `json:"store_id"   validate:"required,uuid"`
+	ServiceID string `json:"service_id" validate:"required,uuid"`
+	StartTime string `json:"start_time" validate:"required"`
+}
+
+// SubmitGuestBookingRequest is the body for PATCH /api/v1/bookings/guest/:id/submit.
+//
+// Sent when the customer fills the details form on C-05. Carries the guest's
+// identity, which is used to create the real guest user that replaces the
+// placeholder on the held booking.
+type SubmitGuestBookingRequest struct {
+	Name            string  `json:"name"             validate:"required,min=2,max=100"`
+	Phone           string  `json:"phone"            validate:"required,min=7,max=20"`
+	SpecialRequests *string `json:"special_requests"`
+}
+
+// ApproveBookingRequest is the request body for PATCH /bookings/:id/approve.
 type ApproveBookingRequest struct {
 	DepositDeadlineHours *int `json:"deposit_deadline_hours"`
 }
 
-// CancelBookingRequest is the request body for PATCH /api/v1/bookings/:id/cancel.
+// CancelBookingRequest is the request body for PATCH /bookings/:id/cancel.
 type CancelBookingRequest struct {
 	Reason *string `json:"reason"`
 }

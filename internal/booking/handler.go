@@ -1,14 +1,4 @@
 // Package booking implements the booking domain for B-Edge.
-// HTTP request
-//
-//	→ Handler    parses + validates
-//	→ Service    applies business rules
-//	→ Repository runs SQL
-//	→ PostgreSQL stores/returns data
-//	→ Repository returns data or sentinel error
-//	→ Service    converts to response or AppError
-//	→ Handler    writes JSON
-//	→ Client     receives result
 package booking
 
 import (
@@ -34,22 +24,39 @@ type Handler struct {
 func NewHandler(svc *Service, log *zap.Logger) *Handler {
 	return &Handler{
 		svc: svc,
-		// This attaches "module: booking" to every log inside this file
 		log: log.With(zap.String("module", "booking")),
 	}
 }
 
 // RegisterRoutes attaches all booking routes to the Fiber app.
-// Called once from cmd/main.go during server startup.
+//
+// Public routes (no auth):
+//
+//	GET   /api/v1/bookings/slots             — slot availability for a date
+//	POST  /api/v1/bookings/guest/hold        — guest holds a slot (C-04)
+//	PATCH /api/v1/bookings/guest/:id/submit  — guest submits details (C-05)
+//
+// Protected routes (RequireAuth):
+//
+//	POST   /api/v1/bookings/           — create booking (authenticated customer)
+//	GET    /api/v1/bookings/:id        — get booking by ID
+//	PATCH  /api/v1/bookings/:id/submit — submit a held booking
+//	... (artist-only lifecycle routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
 	handler := NewHandler(svc, log)
 
-	b := app.Group("/api/v1/bookings", middleware.RequireAuth())
+	// ── Public routes — no authentication required ────────────────────────────
+	// Registered BEFORE the protected group so Fiber matches /slots and /guest/*
+	// before the parametric /:id route in the protected group.
+	pub := app.Group("/api/v1/bookings")
+	pub.Get("/slots", handler.GetAvailableSlots)
+	pub.Post("/guest/hold", handler.HoldGuestSlot)
+	pub.Patch("/guest/:id/submit", handler.SubmitGuestBooking)
 
-	// Slot availability — customer checks open slots
-	b.Get("/slots", handler.GetAvailableSlots)
+	// ── Protected routes — JWT required ──────────────────────────────────────
+	b := app.Group("/api/v1/bookings", middleware.RequireAuth())
 
 	// Booking lifecycle
 	b.Post("/", handler.CreateBooking)
@@ -68,16 +75,14 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 }
 
 // GetAvailableSlots godoc
-// @Summary      Get available time slots
+// @Summary      Get available time slots (public)
 // @Tags         bookings
-// @Security     BearerAuth
 // @Produce      json
 // @Param        artist_id  query string true "Artist UUID"
 // @Param        store_id   query string true "Store UUID"
 // @Param        service_id query string true "Service UUID"
 // @Param        date       query string true "Date in YYYY-MM-DD format"
 // @Success      200 {object} response.Body{data=[]TimeSlot}
-// @Failure      400 {object} response.ErrorBody
 // @Router       /bookings/slots [get]
 func (h *Handler) GetAvailableSlots(c *fiber.Ctx) error {
 	req := GetAvailableSlotsRequest{
@@ -95,8 +100,67 @@ func (h *Handler) GetAvailableSlots(c *fiber.Ctx) error {
 	return response.OK(c, slots)
 }
 
+// HoldGuestSlot godoc
+// @Summary      Hold a slot for a guest (no auth)
+// @Description  Called when a guest taps a time slot on C-04. Creates a held
+// @Description  booking reserved for 10 minutes and returns the hold deadline.
+// @Tags         bookings
+// @Accept       json
+// @Produce      json
+// @Param        body body HoldGuestSlotRequest true "Chosen slot"
+// @Success      201 {object} response.Body{data=HoldGuestSlotResponse}
+// @Failure      400 {object} response.ErrorBody
+// @Failure      409 {object} response.ErrorBody "SLOT_UNAVAILABLE"
+// @Router       /bookings/guest/hold [post]
+func (h *Handler) HoldGuestSlot(c *fiber.Ctx) error {
+	var req HoldGuestSlotRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	res, err := h.svc.HoldGuestSlot(c.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	return response.Created(c, res)
+}
+
+// SubmitGuestBooking godoc
+// @Summary      Submit a held guest booking (no auth)
+// @Description  Attaches the guest's name and phone and transitions the held
+// @Description  booking to pending. Must be called before the 10-minute hold
+// @Description  expires. No authentication required.
+// @Tags         bookings
+// @Accept       json
+// @Produce      json
+// @Param        id   path string true "Booking UUID (from the hold step)"
+// @Param        body body SubmitGuestBookingRequest true "Guest details"
+// @Success      200 {object} response.Body{data=BookingResponse}
+// @Failure      404 {object} response.ErrorBody "BOOKING_NOT_FOUND"
+// @Failure      409 {object} response.ErrorBody "HOLD_EXPIRED"
+// @Router       /bookings/guest/{id}/submit [patch]
+func (h *Handler) SubmitGuestBooking(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+
+	var req SubmitGuestBookingRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	booking, err := h.svc.SubmitGuestBooking(c.Context(), bookingID, req)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, booking)
+}
+
 // CreateBooking godoc
-// @Summary      Create a booking and hold the slot
+// @Summary      Create a booking and hold the slot (authenticated)
 // @Tags         bookings
 // @Security     BearerAuth
 // @Accept       json
@@ -115,10 +179,6 @@ func (h *Handler) CreateBooking(c *fiber.Ctx) error {
 	salonID := middleware.SalonIDFromContext(c)
 
 	if salonID == nil {
-		// Customers do not have a salon_id in their token.
-		// The salon_id comes from the artist/store being booked.
-		// We resolve it from the store in the service layer.
-		// For now pass a zero UUID — service will resolve it.
 		zero := uuid.Nil
 		salonID = &zero
 	}
@@ -164,7 +224,6 @@ func (h *Handler) GetBookingByID(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/submit [patch]
 func (h *Handler) SubmitBooking(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -189,7 +248,6 @@ func (h *Handler) SubmitBooking(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/approve [patch]
 func (h *Handler) ApproveBooking(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -214,7 +272,6 @@ func (h *Handler) ApproveBooking(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/deposit-received [patch]
 func (h *Handler) MarkDepositReceived(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -239,7 +296,6 @@ func (h *Handler) MarkDepositReceived(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/confirm-deposit [patch]
 func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -266,7 +322,6 @@ func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 // @Param        id   path string true "Booking UUID"
 // @Param        body body CancelBookingRequest false "Cancellation reason"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/cancel [patch]
 func (h *Handler) CancelBooking(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -275,7 +330,6 @@ func (h *Handler) CancelBooking(c *fiber.Ctx) error {
 	}
 
 	var req CancelBookingRequest
-	// Body is optional — cancellation reason may not be provided
 	_ = c.BodyParser(&req)
 
 	requesterID := middleware.UserIDFromContext(c)
@@ -296,7 +350,6 @@ func (h *Handler) CancelBooking(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/complete [patch]
 func (h *Handler) CompleteBooking(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -321,7 +374,6 @@ func (h *Handler) CompleteBooking(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        id path string true "Booking UUID"
 // @Success      200 {object} response.Body{data=BookingResponse}
-// @Failure      409 {object} response.ErrorBody
 // @Router       /bookings/{id}/no-show [patch]
 func (h *Handler) MarkNoShow(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
@@ -345,7 +397,7 @@ func (h *Handler) MarkNoShow(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Produce      json
 // @Param        artist_id path   string true  "Artist UUID"
-// @Param        cursor    query  string false "Pagination cursor (created_at of last item)"
+// @Param        cursor    query  string false "Pagination cursor"
 // @Param        limit     query  int    false "Page size (default 20, max 100)"
 // @Success      200 {object} response.Body{data=[]BookingResponse}
 // @Router       /bookings/artist/{artist_id} [get]
@@ -404,9 +456,6 @@ func (h *Handler) GetBookingsByCustomer(c *fiber.Ctx) error {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// parsePaginationParams extracts cursor and limit from query params.
-// cursor defaults to now (returns most recent bookings).
-// limit defaults to 20.
 func parsePaginationParams(c *fiber.Ctx) (time.Time, int) {
 	cursor := time.Now().UTC()
 	if raw := c.Query("cursor"); raw != "" {

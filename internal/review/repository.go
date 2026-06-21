@@ -11,10 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// uniqueViolationCode is the PostgreSQL error code for a unique-constraint
+// violation — raised when a second review is inserted for the same booking.
+const uniqueViolationCode = "23505"
+
 // Repository defines all database operations for the review domain.
 type Repository interface {
-	// CreateReview inserts a new review.
-	// Returns ErrAlreadyReviewed if the booking already has a review.
+	// CreateReview inserts a new review AND recomputes the artist's cached
+	// rating/review_count in a single transaction. Returns ErrAlreadyReviewed if
+	// the booking already has a review.
 	CreateReview(ctx context.Context, r *Review) error
 
 	// GetReviewByBookingID returns the review for a specific booking.
@@ -28,17 +33,22 @@ type Repository interface {
 	// GetReviewsByArtist returns all visible reviews for an artist.
 	GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*Review, error)
 
-	// DeleteReview permanently removes a review.
-	// Used by admins and review owners only.
-	DeleteReview(ctx context.Context, reviewID uuid.UUID) error
+	// DeleteReview permanently removes a review AND recomputes the artist's
+	// cached rating in the same transaction. artistID is needed for the recompute.
+	DeleteReview(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID) error
 
-	// SetVisibility shows or hides a review.
-	// Used by artists to hide reviews from their public profile.
-	SetVisibility(ctx context.Context, reviewID uuid.UUID, visible bool) error
+	// SetVisibility shows or hides a review AND recomputes the artist's cached
+	// rating in the same transaction (the cache counts visible reviews only).
+	SetVisibility(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID, visible bool) error
 
-	// GetBookingStatus returns the status of a booking.
+	// GetBookingStatus returns the status, customer_id, and artist_id of a booking.
 	// Used to verify the booking is completed before allowing a review.
 	GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error)
+
+	// GetArtistIDByUserID resolves a user's UUID to their artists.id. Returns
+	// ErrArtistNotFound if the user is not an artist. Used to authorise artist-only
+	// actions (hide/show) where the JWT only carries the user_id.
+	GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
 }
 
 // pgRepo is the PostgreSQL implementation of Repository.
@@ -51,22 +61,63 @@ func NewRepository(db *pgxpool.Pool) Repository {
 	return &pgRepo{db: db}
 }
 
-// CreateReview inserts a new review row.
-// The UNIQUE constraint on booking_id ensures one review per booking.
+// recomputeArtistRatingTx recalculates an artist's cached rating and review_count
+// from their VISIBLE reviews, inside the given transaction. Counting visible-only
+// means hiding a review correctly drops both the average and the count, keeping
+// the cache aligned with what the public profile and discovery cards display.
+//
+// COALESCE handles the zero-reviews case: AVG over no rows is NULL, which would
+// violate the NOT NULL rating column, so it falls back to 0.00.
+func recomputeArtistRatingTx(ctx context.Context, tx pgx.Tx, artistID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE artists
+		SET rating = COALESCE(
+		        (SELECT AVG(rating) FROM reviews
+		         WHERE artist_id = $1 AND is_visible = TRUE),
+		        0),
+		    review_count = (
+		        SELECT COUNT(*) FROM reviews
+		        WHERE artist_id = $1 AND is_visible = TRUE),
+		    updated_at = NOW()
+		WHERE id = $1`,
+		artistID,
+	)
+	if err != nil {
+		return fmt.Errorf("recompute artist rating: %w", err)
+	}
+	return nil
+}
+
+// CreateReview inserts a new review row and recomputes the artist's cached rating
+// in one transaction. The UNIQUE constraint on booking_id enforces one review per
+// booking; a violation maps to ErrAlreadyReviewed.
 func (r *pgRepo) CreateReview(ctx context.Context, rev *Review) error {
-	err := r.db.QueryRow(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create review: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	err = tx.QueryRow(ctx, `
 		INSERT INTO reviews (id, booking_id, customer_id, artist_id, rating, comment, is_visible)
 		VALUES ($1, $2, $3, $4, $5, $6, TRUE)
 		RETURNING created_at`,
 		rev.ID, rev.BookingID, rev.CustomerID, rev.ArtistID, rev.Rating, rev.Comment,
 	).Scan(&rev.CreatedAt)
 	if err != nil {
-		// Unique constraint on booking_id — already reviewed
 		var pgErr interface{ SQLState() string }
-		if errors.As(err, &pgErr) && pgErr.SQLState() == "23505" {
+		if errors.As(err, &pgErr) && pgErr.SQLState() == uniqueViolationCode {
 			return ErrAlreadyReviewed
 		}
 		return fmt.Errorf("create review: %w", err)
+	}
+
+	if err := recomputeArtistRatingTx(ctx, tx, rev.ArtistID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create review: commit: %w", err)
 	}
 	return nil
 }
@@ -113,7 +164,7 @@ func (r *pgRepo) GetReviewByID(ctx context.Context, reviewID uuid.UUID) (*Review
 	return rev, nil
 }
 
-// GetReviewsByArtist returns all visible reviews for an artist ordered by newest first.
+// GetReviewsByArtist returns all visible reviews for an artist, newest first.
 func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*Review, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at
@@ -142,29 +193,53 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 	return result, rows.Err()
 }
 
-// DeleteReview permanently removes a review.
-func (r *pgRepo) DeleteReview(ctx context.Context, reviewID uuid.UUID) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM reviews WHERE id = $1`, reviewID)
+// DeleteReview permanently removes a review and recomputes the artist's cached
+// rating in one transaction.
+func (r *pgRepo) DeleteReview(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("delete review: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `DELETE FROM reviews WHERE id = $1`, reviewID); err != nil {
 		return fmt.Errorf("delete review: %w", err)
+	}
+
+	if err := recomputeArtistRatingTx(ctx, tx, artistID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("delete review: commit: %w", err)
 	}
 	return nil
 }
 
-// SetVisibility shows or hides a review.
-func (r *pgRepo) SetVisibility(ctx context.Context, reviewID uuid.UUID, visible bool) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE reviews SET is_visible = $1 WHERE id = $2`,
-		visible, reviewID,
-	)
+// SetVisibility shows or hides a review and recomputes the artist's cached rating
+// in one transaction (visible-only count).
+func (r *pgRepo) SetVisibility(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID, visible bool) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("set review visibility: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `UPDATE reviews SET is_visible = $1 WHERE id = $2`, visible, reviewID); err != nil {
 		return fmt.Errorf("set review visibility: %w", err)
+	}
+
+	if err := recomputeArtistRatingTx(ctx, tx, artistID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("set review visibility: commit: %w", err)
 	}
 	return nil
 }
 
 // GetBookingStatus returns the status, customer_id, and artist_id of a booking.
-// Used to verify conditions before allowing a review.
 func (r *pgRepo) GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error) {
 	var status string
 	var customerID, artistID uuid.UUID
@@ -182,4 +257,18 @@ func (r *pgRepo) GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (str
 		return "", uuid.Nil, uuid.Nil, fmt.Errorf("get booking status: %w", err)
 	}
 	return status, customerID, artistID, nil
+}
+
+// GetArtistIDByUserID resolves a user's UUID to their artists.id.
+// Returns ErrArtistNotFound if the user has no artist profile.
+func (r *pgRepo) GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	var artistID uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT id FROM artists WHERE user_id = $1`, userID).Scan(&artistID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrArtistNotFound
+		}
+		return uuid.Nil, fmt.Errorf("get artist id by user id: %w", err)
+	}
+	return artistID, nil
 }

@@ -26,6 +26,10 @@ var (
 	// ErrNotReviewOwner is returned when a user tries to delete
 	// a review they did not write.
 	ErrNotReviewOwner = errors.New("not authorised to delete this review")
+
+	// ErrArtistNotFound is returned when a user_id does not resolve to an artist
+	// profile — used when authorising artist-only moderation actions.
+	ErrArtistNotFound = errors.New("artist profile not found for user")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────

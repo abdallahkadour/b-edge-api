@@ -39,6 +39,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	r.Get("/artist/:artist_id", handler.GetReviewsByArtist)
 	r.Delete("/:id", handler.DeleteReview)
 	r.Patch("/:id/hide", middleware.RequireRole("artist", "admin"), handler.HideReview)
+	r.Patch("/:id/show", middleware.RequireRole("artist", "admin"), handler.ShowReview)
 }
 
 // CreateReview godoc
@@ -116,6 +117,8 @@ func (h *Handler) DeleteReview(c *fiber.Ctx) error {
 
 // HideReview godoc
 // @Summary      Hide a review from public view (artist only)
+// @Description  The artist (resolved from the JWT) may hide reviews on their own
+// @Description  profile. Hiding drops the review from the cached rating average.
 // @Tags         reviews
 // @Security     BearerAuth
 // @Produce      json
@@ -129,9 +132,35 @@ func (h *Handler) HideReview(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid review ID")
 	}
 
-	artistID := middleware.UserIDFromContext(c)
+	requesterUserID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.HideReview(c.Context(), reviewID, artistID); err != nil {
+	if err := h.svc.HideReview(c.Context(), reviewID, requesterUserID); err != nil {
+		return err
+	}
+
+	return response.NoContent(c)
+}
+
+// ShowReview godoc
+// @Summary      Un-hide a previously hidden review (artist only)
+// @Description  Restores a hidden review to the artist's public profile and back
+// @Description  into the cached rating average.
+// @Tags         reviews
+// @Security     BearerAuth
+// @Produce      json
+// @Param        id path string true "Review UUID"
+// @Success      204
+// @Failure      403 {object} response.ErrorBody
+// @Router       /reviews/{id}/show [patch]
+func (h *Handler) ShowReview(c *fiber.Ctx) error {
+	reviewID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid review ID")
+	}
+
+	requesterUserID := middleware.UserIDFromContext(c)
+
+	if err := h.svc.ShowReview(c.Context(), reviewID, requesterUserID); err != nil {
 		return err
 	}
 

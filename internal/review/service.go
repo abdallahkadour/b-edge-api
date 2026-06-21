@@ -34,6 +34,8 @@ func NewService(repo Repository) *Service {
 //  1. Booking must exist and be completed
 //  2. Only the customer on the booking can review it
 //  3. One review per booking — cannot review twice
+//
+// On success the repository also recomputes the artist's cached rating.
 func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, customerID uuid.UUID) (*ReviewResponse, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
@@ -61,14 +63,13 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 	// Step 2: Check not already reviewed
 	_, err = s.repo.GetReviewByBookingID(ctx, bookingID)
 	if err == nil {
-		// Review exists — already reviewed
 		return nil, apperror.Conflict("ALREADY_REVIEWED", "You have already reviewed this appointment")
 	}
 	if !errors.Is(err, ErrReviewNotFound) {
 		return nil, fmt.Errorf("create review: check existing: %w", err)
 	}
 
-	// Step 3: Create the review
+	// Step 3: Create the review (repository also recomputes the artist rating)
 	rev := &Review{
 		ID:         uuid.New(),
 		BookingID:  bookingID,
@@ -105,6 +106,7 @@ func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([
 
 // DeleteReview permanently removes a review.
 // Only the review owner (customer) or an admin can delete.
+// The repository recomputes the artist's cached rating in the same transaction.
 func (s *Service) DeleteReview(ctx context.Context, reviewID uuid.UUID, requesterID uuid.UUID, requesterRole string) error {
 	rev, err := s.repo.GetReviewByID(ctx, reviewID)
 	if err != nil {
@@ -119,25 +121,50 @@ func (s *Service) DeleteReview(ctx context.Context, reviewID uuid.UUID, requeste
 		return apperror.Forbidden("NOT_REVIEW_OWNER", "You do not have permission to delete this review")
 	}
 
-	return s.repo.DeleteReview(ctx, reviewID)
+	return s.repo.DeleteReview(ctx, reviewID, rev.ArtistID)
 }
 
-// HideReview hides a review from public view.
-// Artists can hide reviews on their own profile.
-func (s *Service) HideReview(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID) error {
+// HideReview hides a review from public view. Artists can hide reviews on their
+// own profile. The requester is a user_id from the JWT, which must be resolved to
+// the caller's artists.id before it can be compared with the review's artist_id —
+// the two are different identifier spaces.
+func (s *Service) HideReview(ctx context.Context, reviewID uuid.UUID, requesterUserID uuid.UUID) error {
+	return s.setReviewVisibility(ctx, reviewID, requesterUserID, false)
+}
+
+// ShowReview un-hides a previously hidden review, restoring it to the artist's
+// public profile (and back into the cached rating average).
+func (s *Service) ShowReview(ctx context.Context, reviewID uuid.UUID, requesterUserID uuid.UUID) error {
+	return s.setReviewVisibility(ctx, reviewID, requesterUserID, true)
+}
+
+// setReviewVisibility is the shared implementation for HideReview/ShowReview.
+// It resolves the requester's user_id to their artists.id, verifies they own the
+// review's artist profile, then flips visibility (which recomputes the rating).
+func (s *Service) setReviewVisibility(ctx context.Context, reviewID uuid.UUID, requesterUserID uuid.UUID, visible bool) error {
 	rev, err := s.repo.GetReviewByID(ctx, reviewID)
 	if err != nil {
 		if errors.Is(err, ErrReviewNotFound) {
 			return apperror.NotFound("REVIEW_NOT_FOUND", "Review not found")
 		}
-		return fmt.Errorf("hide review: get review: %w", err)
+		return fmt.Errorf("set review visibility: get review: %w", err)
 	}
 
-	if rev.ArtistID != artistID {
-		return apperror.Forbidden("FORBIDDEN", "You do not have permission to hide this review")
+	// Resolve the JWT user_id to the caller's artists.id. reviews.artist_id
+	// references artists.id, so we must compare like with like.
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.Forbidden("FORBIDDEN", "You do not have permission to moderate this review")
+		}
+		return fmt.Errorf("set review visibility: resolve artist: %w", err)
 	}
 
-	return s.repo.SetVisibility(ctx, reviewID, false)
+	if rev.ArtistID != requesterArtistID {
+		return apperror.Forbidden("FORBIDDEN", "You do not have permission to moderate this review")
+	}
+
+	return s.repo.SetVisibility(ctx, reviewID, rev.ArtistID, visible)
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

@@ -30,40 +30,48 @@ func TestMain(m *testing.M) {
 // mockRepo implements the Repository interface with controllable behaviour.
 // Each field holds the value the method will return when called.
 type mockRepo struct {
-	getStoreStore                 *Store
-	getStoreErr                   error
-	getBusinessHoursBH            *BusinessHours
-	getBusinessHoursErr           error
-	getBusinessHoursExceptionEx   *BusinessHoursException
-	getBusinessHoursExceptionErr  error
-	getServiceSvc                 *SalonService
-	getServiceErr                 error
-	getArtistBookingsBookings     []*Booking
-	getArtistBookingsErr          error
-	getCrossStoreBookings         []*Booking
-	getCrossStoreErr              error
-	getArtistStoreBufferBuf       *ArtistStoreBuffer
-	getArtistStoreBufferErr       error
-	createBookingErr              error
-	getBookingByIDBooking         *Booking
-	getBookingByIDErr             error
-	getBookingsByArtistBookings   []*Booking
-	getBookingsByArtistErr        error
-	getBookingsByCustomerBookings []*Booking
-	getBookingsByCustomerErr      error
-	getBookingsBySalonBookings    []*Booking
-	getBookingsBySalonErr         error
-	updateBookingStatusErr        error
-	attachGuestAndSubmitErr       error
-	approveBookingErr             error
-	confirmDepositErr             error
-	cancelBookingErr              error
-	completeBookingErr            error
-	markNoShowErr                 error
-	releaseExpiredHoldsCount      int64
-	releaseExpiredHoldsErr        error
-	expireDeadlineBookingsCount   int64
-	expireDeadlineBookingsErr     error
+	getStoreStore                  *Store
+	getStoreErr                    error
+	getBusinessHoursBH             *BusinessHours
+	getBusinessHoursErr            error
+	getBusinessHoursExceptionEx    *BusinessHoursException
+	getBusinessHoursExceptionErr   error
+	getServiceSvc                  *SalonService
+	getServiceErr                  error
+	getArtistBookingsBookings      []*Booking
+	getArtistBookingsErr           error
+	getCrossStoreBookings          []*Booking
+	getCrossStoreErr               error
+	getArtistStoreBufferBuf        *ArtistStoreBuffer
+	getArtistStoreBufferErr        error
+	createBookingErr               error
+	getBookingByIDBooking          *Booking
+	getBookingByIDErr              error
+	getBookingsByArtistBookings    []*Booking
+	getBookingsByArtistErr         error
+	getBookingsByCustomerBookings  []*Booking
+	getBookingsByCustomerErr       error
+	getBookingsBySalonBookings     []*Booking
+	getBookingsBySalonErr          error
+	updateBookingStatusErr         error
+	attachGuestAndSubmitErr        error
+	getEnrichedBookingByIDBooking  *EnrichedBooking
+	getEnrichedBookingByIDErr      error
+	listEnrichedByArtistBookings   []*EnrichedBooking
+	listEnrichedByArtistErr        error
+	listEnrichedForWeekBookings    []*EnrichedBooking
+	listEnrichedForWeekErr         error
+	listEnrichedByCustomerBookings []*EnrichedBooking
+	listEnrichedByCustomerErr      error
+	approveBookingErr              error
+	confirmDepositErr              error
+	cancelBookingErr               error
+	completeBookingErr             error
+	markNoShowErr                  error
+	releaseExpiredHoldsCount       int64
+	releaseExpiredHoldsErr         error
+	expireDeadlineBookingsCount    int64
+	expireDeadlineBookingsErr      error
 }
 
 func (m *mockRepo) GetStore(_ context.Context, _ uuid.UUID) (*Store, error) {
@@ -112,6 +120,18 @@ func (m *mockRepo) UpdateBookingStatus(_ context.Context, _ uuid.UUID, _ string)
 }
 func (m *mockRepo) AttachGuestAndSubmit(_ context.Context, _, _ uuid.UUID, _ *string) error {
 	return m.attachGuestAndSubmitErr
+}
+func (m *mockRepo) GetEnrichedBookingByID(_ context.Context, _ uuid.UUID) (*EnrichedBooking, error) {
+	return m.getEnrichedBookingByIDBooking, m.getEnrichedBookingByIDErr
+}
+func (m *mockRepo) ListEnrichedBookingsByArtist(_ context.Context, _ uuid.UUID, _ string, _ time.Time, _ int) ([]*EnrichedBooking, error) {
+	return m.listEnrichedByArtistBookings, m.listEnrichedByArtistErr
+}
+func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _ time.Time) ([]*EnrichedBooking, error) {
+	return m.listEnrichedForWeekBookings, m.listEnrichedForWeekErr
+}
+func (m *mockRepo) ListEnrichedBookingsByCustomer(_ context.Context, _ uuid.UUID, _ time.Time, _ int) ([]*EnrichedBooking, error) {
+	return m.listEnrichedByCustomerBookings, m.listEnrichedByCustomerErr
 }
 func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, _ time.Time) error {
 	return m.approveBookingErr
@@ -747,4 +767,87 @@ func TestSubmitGuestBooking_NotHeld(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, res)
+}
+
+// ── Artist list status filter + calendar tests ────────────────────────────────
+
+// TestListEnrichedBookingsByArtist_InvalidStatus — an unknown ?status= value is
+// rejected with an error rather than silently returning an empty list.
+func TestListEnrichedBookingsByArtist_InvalidStatus(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), "not_a_real_status", time.Now().UTC(), 20,
+	)
+
+	require.Error(t, err)
+}
+
+// TestListEnrichedBookingsByArtist_ValidStatus — a known status passes validation
+// and the repo result is returned.
+func TestListEnrichedBookingsByArtist_ValidStatus(t *testing.T) {
+	repo := &mockRepo{
+		listEnrichedByArtistBookings: []*EnrichedBooking{
+			{Booking: Booking{ID: uuid.New(), Status: StatusPending}, CustomerName: "Maya"},
+		},
+	}
+	svc := newTestService(repo)
+
+	res, hasMore, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), StatusPending, time.Now().UTC(), 20,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, hasMore)
+	require.Len(t, res, 1)
+	assert.Equal(t, "Maya", res[0].CustomerName)
+}
+
+// TestListEnrichedBookingsByArtist_EmptyStatusAllowed — empty status ("all") is
+// valid and does not trigger the INVALID_STATUS path.
+func TestListEnrichedBookingsByArtist_EmptyStatusAllowed(t *testing.T) {
+	repo := &mockRepo{listEnrichedByArtistBookings: nil}
+	svc := newTestService(repo)
+
+	res, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), "", time.Now().UTC(), 20,
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, res)
+}
+
+// TestListEnrichedBookingsForWeek_ReturnsRows — the calendar method returns the
+// repo's rows converted to responses.
+func TestListEnrichedBookingsForWeek_ReturnsRows(t *testing.T) {
+	repo := &mockRepo{
+		listEnrichedForWeekBookings: []*EnrichedBooking{
+			{Booking: Booking{ID: uuid.New(), Status: StatusConfirmed}, CustomerName: "Rania", ServiceName: "Bridal"},
+		},
+	}
+	svc := newTestService(repo)
+
+	res, err := svc.ListEnrichedBookingsForWeek(
+		context.Background(), uuid.New(), time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	assert.Equal(t, "Bridal", res[0].ServiceName)
+	assert.Equal(t, StatusConfirmed, res[0].Status)
+}
+
+// TestListEnrichedBookingsForWeek_Empty — no bookings in the window yields an
+// empty (non-nil) slice.
+func TestListEnrichedBookingsForWeek_Empty(t *testing.T) {
+	repo := &mockRepo{listEnrichedForWeekBookings: nil}
+	svc := newTestService(repo)
+
+	res, err := svc.ListEnrichedBookingsForWeek(
+		context.Background(), uuid.New(), time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, res)
 }

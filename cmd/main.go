@@ -11,6 +11,7 @@ import (
 
 	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
 	"github.com/abdallahkadour/b-edge-api/internal/booking"
+	"github.com/abdallahkadour/b-edge-api/internal/client"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/discovery"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
@@ -102,6 +103,7 @@ func main() {
 	booking.RegisterRoutes(app, pool, logger)
 	artist.RegisterRoutes(app, pool, logger)
 	review.RegisterRoutes(app, pool, logger)
+	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")

@@ -71,6 +71,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	// List endpoints
 	b.Get("/artist/:artist_id", middleware.RequireRole("artist", "admin"), handler.GetBookingsByArtist)
+	b.Get("/artist/:artist_id/calendar", middleware.RequireRole("artist", "admin"), handler.GetArtistCalendar)
 	b.Get("/customer/me", handler.GetBookingsByCustomer)
 }
 
@@ -176,14 +177,8 @@ func (h *Handler) CreateBooking(c *fiber.Ctx) error {
 	}
 
 	customerID := middleware.UserIDFromContext(c)
-	salonID := middleware.SalonIDFromContext(c)
 
-	if salonID == nil {
-		zero := uuid.Nil
-		salonID = &zero
-	}
-
-	booking, err := h.svc.CreateBooking(c.Context(), req, customerID, *salonID)
+	booking, err := h.svc.CreateBooking(c.Context(), req, customerID)
 	if err != nil {
 		return err
 	}
@@ -197,7 +192,7 @@ func (h *Handler) CreateBooking(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Produce      json
 // @Param        id path string true "Booking UUID"
-// @Success      200 {object} response.Body{data=BookingResponse}
+// @Success      200 {object} response.Body{data=EnrichedBookingResponse}
 // @Failure      404 {object} response.ErrorBody
 // @Router       /bookings/{id} [get]
 func (h *Handler) GetBookingByID(c *fiber.Ctx) error {
@@ -209,7 +204,7 @@ func (h *Handler) GetBookingByID(c *fiber.Ctx) error {
 	requesterID := middleware.UserIDFromContext(c)
 	requesterRole := middleware.RoleFromContext(c)
 
-	booking, err := h.svc.GetBookingByID(c.Context(), bookingID, requesterID, requesterRole)
+	booking, err := h.svc.GetEnrichedBookingByID(c.Context(), bookingID, requesterID, requesterRole)
 	if err != nil {
 		return err
 	}
@@ -393,13 +388,16 @@ func (h *Handler) MarkNoShow(c *fiber.Ctx) error {
 
 // GetBookingsByArtist godoc
 // @Summary      Get paginated bookings for an artist
+// @Description  Optional ?status= filters to one booking status (e.g. pending,
+// @Description  approved, refund_due) for the dashboard tabs and queues.
 // @Tags         bookings
 // @Security     BearerAuth
 // @Produce      json
 // @Param        artist_id path   string true  "Artist UUID"
+// @Param        status    query  string false "Filter by booking status"
 // @Param        cursor    query  string false "Pagination cursor"
 // @Param        limit     query  int    false "Page size (default 20, max 100)"
-// @Success      200 {object} response.Body{data=[]BookingResponse}
+// @Success      200 {object} response.Body{data=[]EnrichedBookingResponse}
 // @Router       /bookings/artist/{artist_id} [get]
 func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 	artistID, err := uuid.Parse(c.Params("artist_id"))
@@ -408,8 +406,9 @@ func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 	}
 
 	cursor, limit := parsePaginationParams(c)
+	status := c.Query("status") // optional; "" = all
 
-	bookings, hasMore, err := h.svc.GetBookingsByArtist(c.Context(), artistID, cursor, limit)
+	bookings, hasMore, err := h.svc.ListEnrichedBookingsByArtist(c.Context(), artistID, status, cursor, limit)
 	if err != nil {
 		return err
 	}
@@ -425,6 +424,42 @@ func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 	})
 }
 
+// GetArtistCalendar godoc
+// @Summary      Get an artist's committed appointments for a week (calendar grid)
+// @Description  Returns CalendarStatuses appointments in the 7-day window starting
+// @Description  at week_start (YYYY-MM-DD), ordered by start time. No pagination.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        artist_id  path  string true  "Artist UUID"
+// @Param        week_start query string true  "Week start date YYYY-MM-DD"
+// @Success      200 {object} response.Body{data=[]EnrichedBookingResponse}
+// @Failure      400 {object} response.ErrorBody
+// @Router       /bookings/artist/{artist_id}/calendar [get]
+func (h *Handler) GetArtistCalendar(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("artist_id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
+	}
+
+	weekStartRaw := c.Query("week_start")
+	if weekStartRaw == "" {
+		return apperror.BadRequest("MISSING_WEEK_START", "week_start query parameter is required (YYYY-MM-DD)")
+	}
+	weekStart, err := time.Parse("2006-01-02", weekStartRaw)
+	if err != nil {
+		return apperror.BadRequest("INVALID_WEEK_START", "week_start must be in YYYY-MM-DD format")
+	}
+
+	bookings, err := h.svc.ListEnrichedBookingsForWeek(c.Context(), artistID, weekStart)
+	if err != nil {
+		return err
+	}
+
+	// A calendar week is bounded, so it returns as a plain list with no cursor.
+	return response.List(c, bookings, &response.Meta{HasMore: false})
+}
+
 // GetBookingsByCustomer godoc
 // @Summary      Get paginated bookings for the authenticated customer
 // @Tags         bookings
@@ -432,13 +467,13 @@ func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 // @Produce      json
 // @Param        cursor query string false "Pagination cursor"
 // @Param        limit  query int    false "Page size (default 20)"
-// @Success      200 {object} response.Body{data=[]BookingResponse}
+// @Success      200 {object} response.Body{data=[]EnrichedBookingResponse}
 // @Router       /bookings/customer/me [get]
 func (h *Handler) GetBookingsByCustomer(c *fiber.Ctx) error {
 	customerID := middleware.UserIDFromContext(c)
 	cursor, limit := parsePaginationParams(c)
 
-	bookings, hasMore, err := h.svc.GetBookingsByCustomer(c.Context(), customerID, cursor, limit)
+	bookings, hasMore, err := h.svc.ListEnrichedBookingsByCustomer(c.Context(), customerID, cursor, limit)
 	if err != nil {
 		return err
 	}

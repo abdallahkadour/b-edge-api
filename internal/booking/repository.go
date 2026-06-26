@@ -62,6 +62,25 @@ type Repository interface {
 	// Returns ErrBookingNotFound if not found or soft deleted.
 	GetBookingByID(ctx context.Context, id uuid.UUID) (*Booking, error)
 
+	// GetEnrichedBookingByID fetches one booking joined with customer, service,
+	// and store display names. Returns ErrBookingNotFound if not found.
+	GetEnrichedBookingByID(ctx context.Context, id uuid.UUID) (*EnrichedBooking, error)
+
+	// ListEnrichedBookingsByArtist returns an artist's bookings (keyset paginated)
+	// joined with customer, service, and store display names. If status is
+	// non-empty, only bookings in that status are returned; empty means all.
+	ListEnrichedBookingsByArtist(ctx context.Context, artistID uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBooking, error)
+
+	// ListEnrichedBookingsForWeek returns an artist's committed appointments
+	// (CalendarStatuses) within the 7-day window [weekStart, weekStart+7d),
+	// ordered by start_time. No pagination — a week is bounded. Used by the
+	// calendar grid.
+	ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error)
+
+	// ListEnrichedBookingsByCustomer returns a customer's bookings (keyset
+	// paginated) joined with service and store display names.
+	ListEnrichedBookingsByCustomer(ctx context.Context, customerID uuid.UUID, cursor time.Time, limit int) ([]*EnrichedBooking, error)
+
 	// GetBookingsByArtist returns paginated bookings for an artist.
 	// cursor is the created_at of the last item on the previous page.
 	GetBookingsByArtist(ctx context.Context, artistID uuid.UUID, cursor time.Time, limit int) ([]*Booking, error)
@@ -174,6 +193,142 @@ const bookingSelectCols = `
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
 
+// ── Enriched booking queries ──────────────────────────────────────────────────
+
+// enrichedSelectCols is the canonical column list for enriched booking SELECTs.
+// Joins users (customer), services, and stores. Must match scanEnrichedBooking.
+const enrichedSelectCols = `
+	b.id, b.salon_id, b.store_id, b.artist_id, b.customer_id, b.service_id,
+	b.start_time, b.end_time, b.held_until, b.status,
+	b.original_price, b.discount_amount, b.final_price,
+	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at,
+	b.channel, b.special_requests, b.cancellation_reason,
+	b.cancelled_at, b.completed_at, b.no_show_at,
+	b.created_at, b.updated_at, b.deleted_at,
+	u.name  AS customer_name,
+	u.phone AS customer_phone,
+	s.name  AS service_name,
+	st.name AS store_name,
+	st.city AS store_city`
+
+// enrichedFrom is the shared FROM + JOIN clause for enriched booking queries.
+const enrichedFrom = `
+	FROM bookings b
+	JOIN users    u  ON u.id  = b.customer_id
+	JOIN services s  ON s.id  = b.service_id
+	JOIN stores   st ON st.id = b.store_id`
+
+// scanEnrichedBooking scans a row (booking columns + joined names) into an
+// EnrichedBooking. Column order must match enrichedSelectCols exactly.
+func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
+	return row.Scan(
+		&e.ID, &e.SalonID, &e.StoreID, &e.ArtistID, &e.CustomerID, &e.ServiceID,
+		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
+		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
+		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt,
+		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
+		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
+		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
+		&e.CustomerName, &e.CustomerPhone, &e.ServiceName, &e.StoreName, &e.StoreCity,
+	)
+}
+
+// scanEnrichedBookings scans multiple enriched rows.
+func scanEnrichedBookings(rows pgx.Rows) ([]*EnrichedBooking, error) {
+	var result []*EnrichedBooking
+	for rows.Next() {
+		e := &EnrichedBooking{}
+		if err := scanEnrichedBooking(rows, e); err != nil {
+			return nil, fmt.Errorf("scan enriched bookings: %w", err)
+		}
+		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan enriched bookings rows: %w", err)
+	}
+	return result, nil
+}
+
+// GetEnrichedBookingByID fetches one booking joined with display names.
+func (r *pgRepo) GetEnrichedBookingByID(ctx context.Context, id uuid.UUID) (*EnrichedBooking, error) {
+	e := &EnrichedBooking{}
+	q := fmt.Sprintf(`SELECT %s %s WHERE b.id = $1 AND b.deleted_at IS NULL`,
+		enrichedSelectCols, enrichedFrom)
+	if err := scanEnrichedBooking(r.db.QueryRow(ctx, q, id), e); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrBookingNotFound
+		}
+		return nil, fmt.Errorf("get enriched booking by id: %w", err)
+	}
+	return e, nil
+}
+
+// ListEnrichedBookingsByArtist returns an artist's bookings with display names,
+// newest first, using keyset pagination on created_at. When status is non-empty,
+// results are restricted to that status (dashboard tabs, deposit/refund queues).
+func (r *pgRepo) ListEnrichedBookingsByArtist(ctx context.Context, artistID uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBooking, error) {
+	// Build the WHERE clause. The status filter is appended as an extra
+	// parameterised condition only when provided, so the "all statuses" path
+	// keeps its original plan. $4 is used only in the filtered branch.
+	where := `WHERE b.artist_id = $1 AND b.created_at < $2 AND b.deleted_at IS NULL`
+	args := []any{artistID, cursor, limit + 1}
+	if status != "" {
+		where += ` AND b.status = $4`
+		args = append(args, status)
+	}
+
+	q := fmt.Sprintf(`SELECT %s %s
+		%s
+		ORDER BY b.created_at DESC
+		LIMIT $3`,
+		enrichedSelectCols, enrichedFrom, where)
+
+	rows, err := r.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings by artist: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
+// ListEnrichedBookingsForWeek returns the artist's committed appointments within
+// the 7-day window starting at weekStart, ordered by start_time. The window is
+// half-open [weekStart, weekStart+7d). Only CalendarStatuses are included, so
+// pending requests and cancelled/expired noise never appear on the grid.
+func (r *pgRepo) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error) {
+	weekEnd := weekStart.AddDate(0, 0, 7)
+	q := fmt.Sprintf(`SELECT %s %s
+		WHERE b.artist_id = $1
+		AND b.start_time >= $2
+		AND b.start_time <  $3
+		AND b.status = ANY($4)
+		AND b.deleted_at IS NULL
+		ORDER BY b.start_time ASC`,
+		enrichedSelectCols, enrichedFrom)
+	rows, err := r.db.Query(ctx, q, artistID, weekStart, weekEnd, CalendarStatuses)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings for week: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
+// ListEnrichedBookingsByCustomer returns a customer's bookings with display names,
+// newest first, using keyset pagination on created_at.
+func (r *pgRepo) ListEnrichedBookingsByCustomer(ctx context.Context, customerID uuid.UUID, cursor time.Time, limit int) ([]*EnrichedBooking, error) {
+	q := fmt.Sprintf(`SELECT %s %s
+		WHERE b.customer_id = $1 AND b.created_at < $2 AND b.deleted_at IS NULL
+		ORDER BY b.created_at DESC
+		LIMIT $3`,
+		enrichedSelectCols, enrichedFrom)
+	rows, err := r.db.Query(ctx, q, customerID, cursor, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings by customer: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
 // ── Slot algorithm queries ────────────────────────────────────────────────────
 
 // GetStore fetches store configuration for the slot algorithm.
@@ -244,7 +399,7 @@ func (r *pgRepo) GetService(ctx context.Context, serviceID uuid.UUID) (*SalonSer
 		SELECT id, salon_id, name, duration_min, active_duration_min,
 		       price, deposit_amount, deposit_deadline_hours, is_active
 		FROM services
-		WHERE id = $1 AND is_active = TRUE AND deleted_at IS NULL`,
+		WHERE id = $1 AND is_active = TRUE`,
 		serviceID,
 	).Scan(
 		&s.ID, &s.SalonID, &s.Name, &s.DurationMin, &s.ActiveDurationMin,

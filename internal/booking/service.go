@@ -247,7 +247,10 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 // CreateBooking holds a slot and creates a pending booking.
 // The GIST constraint is the final atomic guard against double booking.
-func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, customerID uuid.UUID, salonID uuid.UUID) (*BookingResponse, error) {
+//
+// FIXED: salon_id is now derived from the service (which owns it), not the JWT.
+// This ensures authenticated customers can create bookings without a salon_id in their token.
+func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, customerID uuid.UUID) (*BookingResponse, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
 	}
@@ -270,7 +273,7 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-01T10:00:00Z")
 	}
 
-	// Fetch service for duration and pricing
+	// Fetch service for duration and pricing — and derive salon_id from it
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {
 		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
@@ -283,7 +286,7 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 
 	b := &Booking{
 		ID:              uuid.New(),
-		SalonID:         salonID,
+		SalonID:         service.SalonID, // DERIVED from service, not JWT
 		StoreID:         storeID,
 		ArtistID:        artistID,
 		CustomerID:      customerID,
@@ -542,6 +545,100 @@ func (s *Service) GetBookingsByCustomer(ctx context.Context, customerID uuid.UUI
 		result = append(result, toResponse(b))
 	}
 
+	return result, hasMore, nil
+}
+
+// ── Enriched reads (joined display names) ─────────────────────────────────────
+
+// GetEnrichedBookingByID returns one booking with joined display names.
+// Access: admin, or the customer/artist on the booking.
+func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUID, requesterID uuid.UUID, requesterRole string) (*EnrichedBookingResponse, error) {
+	e, err := s.repo.GetEnrichedBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+		}
+		return nil, fmt.Errorf("get enriched booking by id: %w", err)
+	}
+
+	if requesterRole != RoleAdmin && e.CustomerID != requesterID && e.ArtistID != requesterID {
+		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view this booking")
+	}
+
+	return toEnrichedResponse(e), nil
+}
+
+// ListEnrichedBookingsByArtist returns an artist's bookings with display names.
+// If status is non-empty it must be a known booking status; results are then
+// restricted to that status (dashboard tabs, deposit queue, refund queue).
+func (s *Service) ListEnrichedBookingsByArtist(ctx context.Context, artistID uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBookingResponse, bool, error) {
+	if limit <= 0 || limit > 100 {
+		limit = defaultPageSize
+	}
+
+	// Reject unknown status values with a clear error rather than silently
+	// returning an empty list (which would look like "no bookings" to the UI).
+	if status != "" && !ValidBookingStatuses[status] {
+		return nil, false, apperror.BadRequest("INVALID_STATUS", "Unknown booking status filter")
+	}
+
+	rows, err := s.repo.ListEnrichedBookingsByArtist(ctx, artistID, status, cursor, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("list enriched bookings by artist: %w", err)
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	result := make([]*EnrichedBookingResponse, 0, len(rows))
+	for _, e := range rows {
+		result = append(result, toEnrichedResponse(e))
+	}
+	return result, hasMore, nil
+}
+
+// ListEnrichedBookingsForWeek returns the artist's committed appointments for the
+// 7-day window beginning at weekStart (calendar grid). No pagination — the whole
+// week is returned, ordered by start time.
+func (s *Service) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBookingResponse, error) {
+	// Normalise to the start of the day in UTC so the half-open window aligns to
+	// midnight boundaries regardless of any time component the client sent.
+	weekStart = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, time.UTC)
+
+	rows, err := s.repo.ListEnrichedBookingsForWeek(ctx, artistID, weekStart)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings for week: %w", err)
+	}
+
+	result := make([]*EnrichedBookingResponse, 0, len(rows))
+	for _, e := range rows {
+		result = append(result, toEnrichedResponse(e))
+	}
+	return result, nil
+}
+
+// ListEnrichedBookingsByCustomer returns a customer's bookings with display names.
+func (s *Service) ListEnrichedBookingsByCustomer(ctx context.Context, customerID uuid.UUID, cursor time.Time, limit int) ([]*EnrichedBookingResponse, bool, error) {
+	if limit <= 0 || limit > 100 {
+		limit = defaultPageSize
+	}
+
+	rows, err := s.repo.ListEnrichedBookingsByCustomer(ctx, customerID, cursor, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("list enriched bookings by customer: %w", err)
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	result := make([]*EnrichedBookingResponse, 0, len(rows))
+	for _, e := range rows {
+		result = append(result, toEnrichedResponse(e))
+	}
 	return result, hasMore, nil
 }
 

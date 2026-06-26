@@ -189,7 +189,6 @@ func (r *pgRepo) GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*Se
 		FROM services
 		WHERE salon_id = $1
 		AND is_active = TRUE
-		AND deleted_at IS NULL
 		ORDER BY price ASC, name ASC`,
 		salonID,
 	)

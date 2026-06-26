@@ -164,6 +164,44 @@ var BlockingStatuses = []string{
 	StatusConfirmed,
 }
 
+// CalendarStatuses are the booking statuses shown on the artist calendar grid.
+// These are the committed/booked appointments — pending requests live in a
+// separate "requests" tab, and held/expired/cancelled/refunded are noise that
+// never belongs on the schedule. Mirrors how salon dashboards separate the
+// confirmed calendar from the incoming-request queue.
+var CalendarStatuses = []string{
+	StatusApproved,
+	StatusDepositPaid,
+	StatusConfirmed,
+	StatusCompleted,
+	StatusNoShow,
+}
+
+// ListBookingsByArtistFilter is the optional filter for the artist bookings list
+// endpoint. An empty Status means "all statuses" (the default list behaviour).
+// When set, it must be one of the known booking statuses; the service validates.
+type ListBookingsByArtistFilter struct {
+	Status string // optional exact status match; "" = all
+}
+
+// ValidBookingStatuses is the set of statuses a client may filter on. Used to
+// reject unknown ?status= values with a clear error instead of silently
+// returning an empty list.
+var ValidBookingStatuses = map[string]bool{
+	StatusPending:        true,
+	StatusApproved:       true,
+	StatusHeld:           true,
+	StatusDepositPending: true,
+	StatusDepositPaid:    true,
+	StatusConfirmed:      true,
+	StatusCompleted:      true,
+	StatusCancelled:      true,
+	StatusExpired:        true,
+	StatusNoShow:         true,
+	StatusRefundDue:      true,
+	StatusRefunded:       true,
+}
+
 // SalonService holds booking-relevant fields from the services table.
 type SalonService struct {
 	ID                   uuid.UUID       `db:"id"`
@@ -309,6 +347,87 @@ func toResponse(b *Booking) *BookingResponse {
 		SpecialRequests:    b.SpecialRequests,
 		CancellationReason: b.CancellationReason,
 		CreatedAt:          b.CreatedAt,
+	}
+}
+
+// ── Enriched booking types ────────────────────────────────────────────────────
+
+// EnrichedBooking is a Booking joined with the human-readable names every
+// booking-display screen needs: customer name/phone, service name, store name/city.
+// It is the internal row type returned by the enriched repository queries.
+type EnrichedBooking struct {
+	Booking
+	CustomerName  string  `db:"customer_name"`
+	CustomerPhone *string `db:"customer_phone"`
+	ServiceName   string  `db:"service_name"`
+	StoreName     string  `db:"store_name"`
+	StoreCity     string  `db:"store_city"`
+}
+
+// EnrichedBookingResponse is the client representation of a booking with all the
+// joined names resolved. Returned by booking detail and list endpoints so the
+// dashboard and customer screens never have to resolve UUIDs themselves.
+//
+// Money fields serialize as strings via decimal.Decimal to preserve precision.
+type EnrichedBookingResponse struct {
+	ID         uuid.UUID `json:"id"`
+	SalonID    uuid.UUID `json:"salon_id"`
+	StoreID    uuid.UUID `json:"store_id"`
+	ArtistID   uuid.UUID `json:"artist_id"`
+	CustomerID uuid.UUID `json:"customer_id"`
+	ServiceID  uuid.UUID `json:"service_id"`
+	// Joined display fields
+	CustomerName  string  `json:"customer_name"`
+	CustomerPhone *string `json:"customer_phone,omitempty"`
+	ServiceName   string  `json:"service_name"`
+	StoreName     string  `json:"store_name"`
+	StoreCity     string  `json:"store_city"`
+	// Times
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	Status    string    `json:"status"`
+	// Money
+	OriginalPrice  decimal.Decimal `json:"original_price"`
+	DiscountAmount decimal.Decimal `json:"discount_amount"`
+	FinalPrice     decimal.Decimal `json:"final_price"`
+	DepositAmount  decimal.Decimal `json:"deposit_amount"`
+	// Deposit lifecycle
+	DepositDeadline *time.Time `json:"deposit_deadline,omitempty"`
+	DepositPaidAt   *time.Time `json:"deposit_paid_at,omitempty"`
+	// Meta
+	Channel            string    `json:"channel"`
+	SpecialRequests    *string   `json:"special_requests,omitempty"`
+	CancellationReason *string   `json:"cancellation_reason,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// toEnrichedResponse converts an EnrichedBooking row to its client representation.
+func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
+	return &EnrichedBookingResponse{
+		ID:                 e.ID,
+		SalonID:            e.SalonID,
+		StoreID:            e.StoreID,
+		ArtistID:           e.ArtistID,
+		CustomerID:         e.CustomerID,
+		ServiceID:          e.ServiceID,
+		CustomerName:       e.CustomerName,
+		CustomerPhone:      e.CustomerPhone,
+		ServiceName:        e.ServiceName,
+		StoreName:          e.StoreName,
+		StoreCity:          e.StoreCity,
+		StartTime:          e.StartTime,
+		EndTime:            e.EndTime,
+		Status:             e.Status,
+		OriginalPrice:      e.OriginalPrice,
+		DiscountAmount:     e.DiscountAmount,
+		FinalPrice:         e.FinalPrice,
+		DepositAmount:      e.DepositAmount,
+		DepositDeadline:    e.DepositDeadline,
+		DepositPaidAt:      e.DepositPaidAt,
+		Channel:            e.Channel,
+		SpecialRequests:    e.SpecialRequests,
+		CancellationReason: e.CancellationReason,
+		CreatedAt:          e.CreatedAt,
 	}
 }
 

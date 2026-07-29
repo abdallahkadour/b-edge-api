@@ -19,6 +19,8 @@ type Repository interface {
 	UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error
 	GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error)
 	GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error)
+	GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, error)
+	UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error
 	GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error)
 	GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error)
 	CreateService(ctx context.Context, s *SalonServiceRecord) error
@@ -41,6 +43,41 @@ func NewRepository(db *pgxpool.Pool) Repository {
 	return &pgRepo{db: db}
 }
 
+// UpdateStore applies a partial update to a store's settings.
+//
+// COALESCE($n, col) preserves the existing value when a field is omitted.
+// early_bird_cutoff is the exception: it is nullable, and COALESCE alone
+// cannot clear a column — passing NULL preserves rather than clears. The
+// CASE branch lets an explicit empty string mean "remove the cutoff".
+func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE stores SET
+			name                  = COALESCE($2, name),
+			name_ar               = COALESCE($3, name_ar),
+			address               = COALESCE($4, address),
+			phone                 = COALESCE($5, phone),
+			same_day_notice_hours = COALESCE($6, same_day_notice_hours),
+			early_bird_cutoff     = CASE WHEN $7 = '' THEN NULL ELSE COALESCE($7::TIME, early_bird_cutoff) END,
+			early_bird_fee        = COALESCE($8::NUMERIC, early_bird_fee),
+			weekday_buffer_min    = COALESCE($9, weekday_buffer_min),
+			weekend_buffer_min    = COALESCE($10, weekend_buffer_min),
+			is_active             = COALESCE($11, is_active),
+			updated_at            = NOW()
+		WHERE id = $1`,
+		storeID,
+		req.Name, req.NameAr, req.Address, req.Phone,
+		req.SameDayNoticeHours, req.EarlyBirdCutoff, req.EarlyBirdFee,
+		req.WeekdayBufferMin, req.WeekendBufferMin, req.IsActive,
+	)
+	if err != nil {
+		return fmt.Errorf("update store: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrStoreNotFound
+	}
+	return nil
+}
+
 // ── Artist profile ────────────────────────────────────────────────────────────
 
 func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error) {
@@ -48,7 +85,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 	err := r.db.QueryRow(ctx, `
 		SELECT a.id, a.user_id, a.salon_id,
 		       u.name, u.email, u.phone,
-		       a.bio, a.bio_ar, a.instagram,
+		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
 		       a.created_at, a.updated_at
 		FROM artists a
@@ -59,7 +96,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 	).Scan(
 		&p.ID, &p.UserID, &p.SalonID,
 		&p.Name, &p.Email, &p.Phone,
-		&p.Bio, &p.BioAr, &p.Instagram,
+		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
@@ -77,7 +114,7 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 	err := r.db.QueryRow(ctx, `
 		SELECT a.id, a.user_id, a.salon_id,
 		       u.name, u.email, u.phone,
-		       a.bio, a.bio_ar, a.instagram,
+		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
 		       a.created_at, a.updated_at
 		FROM artists a
@@ -88,7 +125,7 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 	).Scan(
 		&p.ID, &p.UserID, &p.SalonID,
 		&p.Name, &p.Email, &p.Phone,
-		&p.Bio, &p.BioAr, &p.Instagram,
+		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
@@ -107,9 +144,10 @@ func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, re
 		SET bio        = COALESCE($1, bio),
 		    bio_ar     = COALESCE($2, bio_ar),
 		    instagram  = COALESCE($3, instagram),
+		    avatar_url = CASE WHEN $4 = '' THEN NULL ELSE COALESCE($4, avatar_url) END,
 		    updated_at = NOW()
-		WHERE id = $4`,
-		req.Bio, req.BioAr, req.Instagram, artistID,
+		WHERE id = $5`,
+		req.Bio, req.BioAr, req.Instagram, req.AvatarURL, artistID,
 	)
 	if err != nil {
 		return fmt.Errorf("update artist profile: %w", err)
@@ -118,6 +156,34 @@ func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, re
 }
 
 // ── Stores ────────────────────────────────────────────────────────────────────
+
+// GetStoreByID returns a single store by ID, regardless of active state.
+// Used for ownership checks before an update, where an inactive store must
+// still resolve.
+func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, error) {
+	s := &Store{}
+	err := r.db.QueryRow(ctx, `
+		SELECT id, salon_id, name, name_ar, address, city, country, phone,
+		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
+		       weekday_buffer_min, weekend_buffer_min,
+		       is_active, created_at, updated_at
+		FROM stores
+		WHERE id = $1`,
+		storeID,
+	).Scan(
+		&s.ID, &s.SalonID, &s.Name, &s.NameAr, &s.Address, &s.City, &s.Country, &s.Phone,
+		&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
+		&s.WeekdayBufferMin, &s.WeekendBufferMin,
+		&s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrStoreNotFound
+		}
+		return nil, fmt.Errorf("get store by id: %w", err)
+	}
+	return s, nil
+}
 
 func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error) {
 	rows, err := r.db.Query(ctx, `

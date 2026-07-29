@@ -51,6 +51,9 @@ type mockRepo struct {
 	getExceptionsErr         error
 	createExceptionErr       error
 	deleteExceptionErr       error
+	getStoreByIDStore        *Store
+	getStoreByIDErr          error
+	updateStoreErr           error
 }
 
 func (m *mockRepo) GetArtistByID(_ context.Context, _ uuid.UUID) (*ArtistProfile, error) {
@@ -68,6 +71,13 @@ func (m *mockRepo) GetStoresByArtist(_ context.Context, _ uuid.UUID) ([]*Store, 
 func (m *mockRepo) GetStoresBySalon(_ context.Context, _ uuid.UUID) ([]*Store, error) {
 	return m.getStoresBySalonStores, m.getStoresBySalonErr
 }
+func (m *mockRepo) GetStoreByID(_ context.Context, _ uuid.UUID) (*Store, error) {
+	return m.getStoreByIDStore, m.getStoreByIDErr
+}
+func (m *mockRepo) UpdateStore(_ context.Context, _ uuid.UUID, _ UpdateStoreRequest) error {
+	return m.updateStoreErr
+}
+
 func (m *mockRepo) GetServicesBySalon(_ context.Context, _ uuid.UUID) ([]*SalonServiceRecord, error) {
 	return m.getServicesBySalonSvcs, m.getServicesBySalonErr
 }

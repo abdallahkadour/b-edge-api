@@ -142,8 +142,25 @@ func (s *Service) GetPublicServicesByArtist(ctx context.Context, artistID uuid.U
 		return []*ServiceResponse{}, nil
 	}
 
-	// Reuse the existing salon services query.
-	return s.GetServicesBySalon(ctx, *profile.SalonID)
+	// Reuse the salon services query, then drop anything inactive.
+	//
+	// GetServicesBySalon deliberately returns inactive services - the artist
+	// dashboard lists them so they can be reactivated. Customers must never
+	// see them: booking.GetService filters on is_active, so an inactive
+	// service is listed and selectable but fails at the slot step with a
+	// confusing 404 two screens later.
+	all, err := s.GetServicesBySalon(ctx, *profile.SalonID)
+	if err != nil {
+		return nil, err
+	}
+
+	active := make([]*ServiceResponse, 0, len(all))
+	for _, svc := range all {
+		if svc.IsActive {
+			active = append(active, svc)
+		}
+	}
+	return active, nil
 }
 
 // CreateService adds a new service to a salon's catalogue.
@@ -292,6 +309,49 @@ func (s *Service) CreateException(ctx context.Context, storeID uuid.UUID, req Cr
 	return s.repo.CreateException(ctx, storeID, req)
 }
 
+// UpdateStore updates a store's settings. The caller must own the salon the
+// store belongs to.
+//
+// early_bird_fee is deliberately NOT validated against service prices. It is
+// a surcharge, set at the artist's discretion — a fee larger than a given
+// service's price is the artist's call, not the system's. The only guard is
+// a sanity ceiling to catch a mistyped amount.
+func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uuid.UUID, req UpdateStoreRequest) (*Store, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	if req.EarlyBirdFee != nil {
+		fee, err := decimal.NewFromString(*req.EarlyBirdFee)
+		if err != nil {
+			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee must be a decimal amount, e.g. \"50.00\"")
+		}
+		if fee.IsNegative() {
+			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee cannot be negative")
+		}
+		if fee.GreaterThan(decimal.NewFromInt(10000)) {
+			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee looks too large — check the amount")
+		}
+	}
+
+	store, err := s.repo.GetStoreByID(ctx, storeID)
+	if err != nil {
+		return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+	}
+	if store.SalonID != salonID {
+		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to update this store")
+	}
+
+	if err := s.repo.UpdateStore(ctx, storeID, req); err != nil {
+		if errors.Is(err, ErrStoreNotFound) {
+			return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		}
+		return nil, fmt.Errorf("update store: %w", err)
+	}
+
+	return s.repo.GetStoreByID(ctx, storeID)
+}
+
 // DeleteException removes a business hours exception.
 func (s *Service) DeleteException(ctx context.Context, storeID uuid.UUID, dateStr string) error {
 	date, err := time.Parse("2006-01-02", dateStr)
@@ -310,6 +370,7 @@ func toArtistResponse(p *ArtistProfile) *ArtistResponse {
 		Bio:         p.Bio,
 		BioAr:       p.BioAr,
 		Instagram:   p.Instagram,
+		AvatarURL:   p.AvatarURL,
 		Rating:      p.Rating,
 		ReviewCount: p.ReviewCount,
 		IsVerified:  p.IsVerified,

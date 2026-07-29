@@ -132,7 +132,10 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {
-		return nil, fmt.Errorf("get available slots: get service: %w", err)
+		// A service ID that does not resolve is a client error, not a server
+		// fault — mirror CreateBooking and HoldGuestSlot rather than falling
+		// through to the generic 500 handler.
+		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
 	}
 
 	serviceDuration := time.Duration(service.DurationMin) * time.Minute

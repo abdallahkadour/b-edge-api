@@ -25,54 +25,113 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 
 // RegisterRoutes attaches all artist routes to the Fiber app.
 //
-// Public routes (no auth):
+// Two ordering rules govern this function, and they interact:
+//
+//  1. Fiber matches routes in registration order, so every literal path
+//     ("/me", "/salon/...", "/stores/...") must be registered before any
+//     "/:id" route, or Fiber parses the literal as an artist UUID.
+//
+//  2. Middleware attached to a prefix group — app.Group(prefix, mw) — applies
+//     to the WHOLE prefix from the moment the group is created, regardless of
+//     where later routes are registered. A public route under that same prefix
+//     therefore still runs the group's auth middleware and 401s. This is why
+//     auth is attached per-route below rather than via a group: the guest
+//     booking funnel reads /:id and /:id/services with no JWT.
+//
+// Public routes (no auth) — the customer PWA guest funnel:
 //
 //	GET /api/v1/artists/:id          — public artist profile
-//	GET /api/v1/artists/:id/services — active services for an artist (customer PWA)
+//	GET /api/v1/artists/:id/services — active services for an artist
 //
 // Protected routes (RequireAuth):
 //
-//	GET    /api/v1/artists/me                      — own profile
-//	PATCH  /api/v1/artists/:id                     — update own profile
-//	GET    /api/v1/artists/salon/stores             — stores for own salon
-//	GET    /api/v1/artists/:id/stores              — stores for a specific artist
-//	GET    /api/v1/artists/salon/services           — services for own salon (dashboard)
-//	POST   /api/v1/artists/salon/services           — add service
-//	PATCH  /api/v1/artists/salon/services/:id       — update service
-//	DELETE /api/v1/artists/salon/services/:id       — deactivate service
+//	GET    /api/v1/artists/me                          — own profile
+//	PATCH  /api/v1/artists/:id                         — update own profile
+//	GET    /api/v1/artists/:id/stores                  — stores for an artist
+//	GET    /api/v1/artists/salon/stores                — stores for own salon
+//	GET    /api/v1/artists/salon/services              — services for own salon
+//	POST   /api/v1/artists/salon/services              — add service
+//	PATCH  /api/v1/artists/salon/services/:service_id  — update service
+//	DELETE /api/v1/artists/salon/services/:service_id  — deactivate service
 //	... (business hours routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
 	handler := NewHandler(svc, log)
 
-	// ── Public routes — no authentication required ────────────────────────────
-	app.Get("/api/v1/artists/:id/services", handler.GetPublicServicesByArtist)
-	app.Get("/api/v1/artists/:id", handler.GetArtistByID)
+	auth := middleware.RequireAuth()
+	artistOnly := middleware.RequireRole("artist", "admin")
 
-	// ── Protected routes — JWT required ──────────────────────────────────────
-	a := app.Group("/api/v1/artists", middleware.RequireAuth())
+	const base = "/api/v1/artists"
+
+	// ── Literal paths — must precede every /:id route ────────────────────────
 
 	// Profile
-	a.Get("/me", handler.GetMyProfile)
-	a.Patch("/:id", handler.UpdateProfile)
+	app.Get(base+"/me", auth, handler.GetMyProfile)
 
-	// Stores — specific routes before parametric
-	a.Get("/salon/stores", middleware.RequireRole("artist", "admin"), handler.GetStoresBySalon)
-	a.Get("/:id/stores", handler.GetStoresByArtist)
+	// Stores (own salon)
+	app.Get(base+"/salon/stores", auth, artistOnly, handler.GetStoresBySalon)
 
 	// Services (artist dashboard — own salon)
-	a.Get("/salon/services", middleware.RequireRole("artist", "admin"), handler.GetServicesBySalon)
-	a.Post("/salon/services", middleware.RequireRole("artist", "admin"), handler.CreateService)
-	a.Patch("/salon/services/:service_id", middleware.RequireRole("artist", "admin"), handler.UpdateService)
-	a.Delete("/salon/services/:service_id", middleware.RequireRole("artist", "admin"), handler.DeleteService)
+	app.Get(base+"/salon/services", auth, artistOnly, handler.GetServicesBySalon)
+	app.Post(base+"/salon/services", auth, artistOnly, handler.CreateService)
+	app.Patch(base+"/salon/services/:service_id", auth, artistOnly, handler.UpdateService)
+	app.Delete(base+"/salon/services/:service_id", auth, artistOnly, handler.DeleteService)
 
 	// Business hours
-	a.Get("/stores/:store_id/hours", middleware.RequireRole("artist", "admin"), handler.GetBusinessHours)
-	a.Post("/stores/:store_id/hours", middleware.RequireRole("artist", "admin"), handler.SetBusinessHours)
-	a.Get("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.GetExceptions)
-	a.Post("/stores/:store_id/exceptions", middleware.RequireRole("artist", "admin"), handler.CreateException)
-	a.Delete("/stores/:store_id/exceptions/:date", middleware.RequireRole("artist", "admin"), handler.DeleteException)
+	app.Get(base+"/stores/:store_id/hours", auth, artistOnly, handler.GetBusinessHours)
+	app.Post(base+"/stores/:store_id/hours", auth, artistOnly, handler.SetBusinessHours)
+	app.Get(base+"/stores/:store_id/exceptions", auth, artistOnly, handler.GetExceptions)
+	app.Post(base+"/stores/:store_id/exceptions", auth, artistOnly, handler.CreateException)
+	app.Delete(base+"/stores/:store_id/exceptions/:date", auth, artistOnly, handler.DeleteException)
+
+	// ── Public parametric — no JWT, read by the guest booking funnel ─────────
+	app.Patch(base+"/stores/:store_id", auth, artistOnly, handler.UpdateStore)
+	app.Get(base+"/:id/services", handler.GetPublicServicesByArtist)
+	app.Get(base+"/:id/stores", handler.GetStoresByArtist)
+	app.Get(base+"/:id", handler.GetArtistByID)
+
+	// ── Protected parametric ─────────────────────────────────────────────────
+
+	app.Patch(base+"/:id", auth, handler.UpdateProfile)
+}
+
+// UpdateStore godoc
+// @Summary      Update a store's settings (artist only)
+// @Description  Partial update. Omitted fields are left unchanged. Send an
+// @Description  empty string for early_bird_cutoff to clear it.
+// @Tags         artists
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        store_id path string true "Store UUID"
+// @Param        body body UpdateStoreRequest true "Fields to update"
+// @Success      200 {object} response.Body{data=Store}
+// @Failure      403 {object} response.ErrorBody
+// @Failure      404 {object} response.ErrorBody
+// @Router       /artists/stores/{store_id} [patch]
+func (h *Handler) UpdateStore(c *fiber.Ctx) error {
+	storeID, err := uuid.Parse(c.Params("store_id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid store ID")
+	}
+
+	var req UpdateStoreRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	store, err := h.svc.UpdateStore(c.Context(), storeID, *salonID, req)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, store)
 }
 
 // GetArtistByID godoc

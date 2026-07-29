@@ -40,6 +40,7 @@ type Artist struct {
 	Bio         *string         `db:"bio"          json:"bio,omitempty"`
 	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
 	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
+	AvatarURL   *string         `db:"avatar_url"   json:"avatar_url,omitempty"`
 	Rating      decimal.Decimal `db:"rating"       json:"rating"`
 	ReviewCount int             `db:"review_count" json:"review_count"`
 	IsVerified  bool            `db:"is_verified"  json:"is_verified"`
@@ -59,6 +60,7 @@ type ArtistProfile struct {
 	Bio         *string         `db:"bio"          json:"bio,omitempty"`
 	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
 	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
+	AvatarURL   *string         `db:"avatar_url"   json:"avatar_url,omitempty"`
 	Rating      decimal.Decimal `db:"rating"       json:"rating"`
 	ReviewCount int             `db:"review_count" json:"review_count"`
 	IsVerified  bool            `db:"is_verified"  json:"is_verified"`
@@ -132,9 +134,10 @@ type BusinessHoursException struct {
 
 // UpdateProfileRequest is the request body for PATCH /api/v1/artists/:id.
 type UpdateProfileRequest struct {
-	Bio       *string `json:"bio"       validate:"omitempty,max=500"`
-	BioAr     *string `json:"bio_ar"    validate:"omitempty,max=500"`
-	Instagram *string `json:"instagram" validate:"omitempty,max=255"`
+	Bio       *string `json:"bio"        validate:"omitempty,max=500"`
+	BioAr     *string `json:"bio_ar"     validate:"omitempty,max=500"`
+	Instagram *string `json:"instagram"  validate:"omitempty,max=255"`
+	AvatarURL *string `json:"avatar_url" validate:"omitempty,max=500"`
 }
 
 // CreateServiceRequest is the request body for POST /api/v1/artists/services.
@@ -162,9 +165,32 @@ type UpdateServiceRequest struct {
 	IsActive             *bool   `json:"is_active"`
 }
 
+// UpdateStoreRequest is the request body for PATCH /api/v1/artists/stores/:store_id.
+//
+// All fields are optional pointers: a nil field means "leave unchanged".
+// EarlyBirdFee is a string for the same reason Price is — decimal.Decimal
+// round-trips as a quoted JSON string, and parsing money out of a float
+// loses precision.
+//
+// Note the absence of `required` on the numeric fields. `validate:"required"`
+// rejects a zero value, and zero is legitimate for every one of these: no
+// notice period, no surcharge, no travel buffer.
+type UpdateStoreRequest struct {
+	Name               *string `json:"name"                   validate:"omitempty,min=2,max=200"`
+	NameAr             *string `json:"name_ar"                validate:"omitempty,max=200"`
+	Address            *string `json:"address"                validate:"omitempty,max=500"`
+	Phone              *string `json:"phone"                  validate:"omitempty,max=50"`
+	SameDayNoticeHours *int    `json:"same_day_notice_hours"  validate:"omitempty,min=0,max=168"`
+	EarlyBirdCutoff    *string `json:"early_bird_cutoff"      validate:"omitempty"`
+	EarlyBirdFee       *string `json:"early_bird_fee"         validate:"omitempty"`
+	WeekdayBufferMin   *int    `json:"weekday_buffer_min"     validate:"omitempty,min=0,max=480"`
+	WeekendBufferMin   *int    `json:"weekend_buffer_min"     validate:"omitempty,min=0,max=480"`
+	IsActive           *bool   `json:"is_active"`
+}
+
 // SetBusinessHoursRequest sets working hours for a store on a specific day.
 type SetBusinessHoursRequest struct {
-	DayOfWeek int    `json:"day_of_week" validate:"required,min=0,max=6"`
+	DayOfWeek int    `json:"day_of_week" validate:"min=0,max=6"`
 	OpenTime  string `json:"open_time"   validate:"required"`
 	CloseTime string `json:"close_time"  validate:"required"`
 	IsOpen    bool   `json:"is_open"`
@@ -189,6 +215,7 @@ type ArtistResponse struct {
 	Bio         *string         `json:"bio,omitempty"`
 	BioAr       *string         `json:"bio_ar,omitempty"`
 	Instagram   *string         `json:"instagram,omitempty"`
+	AvatarURL   *string         `json:"avatar_url,omitempty"`
 	Rating      decimal.Decimal `json:"rating"`
 	ReviewCount int             `json:"review_count"`
 	IsVerified  bool            `json:"is_verified"`

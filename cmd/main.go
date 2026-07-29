@@ -21,6 +21,10 @@ import (
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/media"
+
+	"github.com/abdallahkadour/b-edge-api/internal/earnings"
+
 	_ "github.com/abdallahkadour/b-edge-api/docs"
 	"github.com/abdallahkadour/b-edge-api/internal/domain/auth"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
@@ -105,6 +109,8 @@ func main() {
 	review.RegisterRoutes(app, pool, logger)
 	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)
+	earnings.RegisterRoutes(app, pool, logger)
+	media.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

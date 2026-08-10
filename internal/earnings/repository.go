@@ -79,11 +79,32 @@ func (r *pgRepo) GetPeriodSummary(ctx context.Context, artistID uuid.UUID, from,
 }
 
 // GetDailyBreakdown returns per-day revenue for the given period, ordered by day asc.
+//
+// Buckets by the business's reporting calendar (Asia/Beirut), not UTC - a
+// booking at 22:30 UTC is already the next day in Beirut, and grouping by
+// the raw UTC day would file it under the wrong bar in the chart. Matches
+// beirutNow/businessLocation used for the "today"/"this month" boundaries
+// elsewhere in this file; hardcoded for the same reason (every store is
+// currently in Lebanon) and with the same future trigger (a per-salon
+// reporting timezone once that stops being true).
+//
+// The AT TIME ZONE appears twice, which is easy to misread as redundant
+// it isn't. `start_time AT TIME ZONE 'Asia/Beirut'` converts the timestamptz
+// to a naive Beirut wall-clock timestamp so DATE_TRUNC('day', ...) cuts at
+// Beirut midnight rather than UTC midnight. But DATE_TRUNC's result is then
+// itself a naive timestamp with no zone attached, and pgx's default scan
+// behaviour for a naive timestamp is to relabel it as UTC without shifting
+// the clock - silently turning "Beirut midnight" into "the same digits,
+// tagged UTC", off by the zone's offset. The second `AT TIME ZONE
+// 'Asia/Beirut'` converts that naive value back to a real timestamptz by
+// telling Postgres the naive digits ARE Beirut time, producing the correct
+// UTC instant. Dropping either cast reintroduces a several-hour error.
 func (r *pgRepo) GetDailyBreakdown(ctx context.Context, artistID uuid.UUID, from, to time.Time) ([]dailyEarningsRow, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
-			DATE_TRUNC('day', start_time AT TIME ZONE 'UTC') AS day,
-			COALESCE(SUM(final_price), 0)                    AS revenue
+			(DATE_TRUNC('day', start_time AT TIME ZONE 'Asia/Beirut')
+				AT TIME ZONE 'Asia/Beirut')          AS day,
+			COALESCE(SUM(final_price), 0)            AS revenue
 		FROM bookings
 		WHERE artist_id = $1
 		  AND status IN ('completed', 'no_show')

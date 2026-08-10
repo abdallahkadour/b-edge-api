@@ -18,7 +18,7 @@ const uniqueViolationCode = "23505"
 
 // roleArtist is the "artist" role value stored in users.role. When a user
 // registers with this role, CreateUser also provisions their artists profile
-// row in the same transaction — every artist account has exactly one artists
+// row in the same transaction - every artist account has exactly one artists
 // row from the moment it exists, with salon_id starting NULL until the artist
 // is assigned to a salon.
 const roleArtist = "artist"
@@ -28,7 +28,7 @@ const roleArtist = "artist"
 type Repository interface {
 	// CreateUser inserts a new user row and populates CreatedAt and UpdatedAt on success.
 	// If the user's role is "artist", an empty artists profile row is also created
-	// in the same transaction — either both rows are created or neither is.
+	// in the same transaction - either both rows are created or neither is.
 	// Returns ErrEmailConflict if the email is already registered.
 	CreateUser(ctx context.Context, user *User) error
 
@@ -92,7 +92,7 @@ func isUniqueViolation(err error) bool {
 
 // CreateUser inserts a new user row and populates CreatedAt and UpdatedAt from the DB.
 //
-// If user.Role is "artist", an empty artists profile row (just user_id — rating,
+// If user.Role is "artist", an empty artists profile row (just user_id - rating,
 // review_count, is_verified, salon_id all take their column defaults) is created
 // in the same transaction. This guarantees every artist account has a matching
 // artists row from the moment it exists, in every environment, with no manual
@@ -249,7 +249,7 @@ func (r *repo) CreateRefreshToken(ctx context.Context, token *RefreshToken) erro
 }
 
 // GetRefreshTokenByHash fetches the refresh token row matching the given hash.
-// Returns ErrTokenNotFound if no row exists. Does not filter by revocation status —
+// Returns ErrTokenNotFound if no row exists. Does not filter by revocation status
 // callers must inspect RevokedAt to detect replayed tokens.
 func (r *repo) GetRefreshTokenByHash(ctx context.Context, hash string) (*RefreshToken, error) {
 	const q = `

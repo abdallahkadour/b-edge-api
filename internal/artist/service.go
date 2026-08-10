@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -29,6 +30,23 @@ func NewService(repo Repository) *Service {
 }
 
 // ── Artist profile ────────────────────────────────────────────────────────────
+
+// ResolveArtistID resolves a route param that may be either a real artist
+// UUID or a public handle (e.g. "rania") to the artist's actual UUID.
+//
+// This is the single place handle resolution happens - every downstream
+// call (services, stores, portfolio) keeps using real UUIDs exactly as
+// before. The alternative - teaching every endpoint keyed by artist ID to
+// independently accept a handle - would mean duplicating this exact
+// try-UUID-then-handle logic across multiple domains (artist, media) for
+// no benefit, since a customer's browser only needs the handle to resolve
+// once, at the first request.
+func (s *Service) ResolveArtistID(ctx context.Context, idOrHandle string) (uuid.UUID, error) {
+	if id, err := uuid.Parse(idOrHandle); err == nil {
+		return id, nil
+	}
+	return s.repo.GetArtistIDByHandle(ctx, idOrHandle)
+}
 
 // GetArtistByID returns the public profile for an artist.
 func (s *Service) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistResponse, error) {
@@ -56,9 +74,20 @@ func (s *Service) GetMyProfile(ctx context.Context, userID uuid.UUID) (*ArtistPr
 
 // UpdateProfile updates an artist's bio and instagram.
 // Only the artist who owns the profile can update it.
+// handleFormatRegex mirrors the artists_handle_format CHECK constraint in
+// migration 012 exactly: lowercase letters/digits, single hyphens only, must
+// start and end with an alphanumeric character. Kept identical to the DB
+// constraint on purpose - a mismatch here would let invalid input reach the
+// database and surface as a confusing generic error instead of a clear one.
+var handleFormatRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
 func (s *Service) UpdateProfile(ctx context.Context, artistID uuid.UUID, userID uuid.UUID, req UpdateProfileRequest) (*ArtistResponse, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
+	}
+
+	if req.Handle != nil && !handleFormatRegex.MatchString(*req.Handle) {
+		return nil, apperror.BadRequest("INVALID_HANDLE_FORMAT", ErrInvalidHandleFormat.Error())
 	}
 
 	// Fetch profile to verify ownership
@@ -75,6 +104,9 @@ func (s *Service) UpdateProfile(ctx context.Context, artistID uuid.UUID, userID 
 	}
 
 	if err := s.repo.UpdateArtistProfile(ctx, artistID, req); err != nil {
+		if errors.Is(err, ErrHandleTaken) {
+			return nil, apperror.Conflict("HANDLE_TAKEN", "That handle is already taken - try another one")
+		}
 		return nil, fmt.Errorf("update profile: %w", err)
 	}
 
@@ -125,7 +157,7 @@ func (s *Service) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]
 // Add this method to internal/artist/service.go, after GetServicesBySalon.
 
 // GetPublicServicesByArtist returns active services for an artist's salon.
-// Public endpoint — no authentication required. Used by the customer PWA
+// Public endpoint - no authentication required. Used by the customer PWA
 // to display services on an artist's profile page.
 func (s *Service) GetPublicServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*ServiceResponse, error) {
 	// Fetch the artist profile to get their salon_id.
@@ -262,7 +294,34 @@ func (s *Service) DeleteService(ctx context.Context, serviceID uuid.UUID, salonI
 // ── Business hours ────────────────────────────────────────────────────────────
 
 // GetBusinessHours returns all business hours for a store.
-func (s *Service) GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*BusinessHours, error) {
+// assertStoreOwnership verifies the store belongs to the caller's salon.
+// This must guard EVERY endpoint taking a store_id from the URL
+// RequireRole("artist","admin") only proves the caller is an artist, never
+// that the store is theirs. Its absence on the business-hours and
+// exceptions endpoints was a real cross-tenant WRITE vulnerability: any
+// registered artist could rewrite a competitor's opening hours (closing
+// their salon outright) or delete their holiday closures.
+//
+// The same check already existed and worked correctly in UpdateStore
+// these five endpoints simply never got it. Extracted here so there is one
+// implementation rather than six copies.
+func (s *Service) assertStoreOwnership(ctx context.Context, storeID, salonID uuid.UUID) error {
+	store, err := s.repo.GetStoreByID(ctx, storeID)
+	if err != nil {
+		// Deliberately NotFound rather than Forbidden - the response must
+		// not confirm that a store UUID exists to someone who doesn't own it.
+		return apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+	}
+	if store.SalonID != salonID {
+		return apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+	}
+	return nil
+}
+
+func (s *Service) GetBusinessHours(ctx context.Context, storeID, salonID uuid.UUID) ([]*BusinessHours, error) {
+	if err := s.assertStoreOwnership(ctx, storeID, salonID); err != nil {
+		return nil, err
+	}
 	hours, err := s.repo.GetBusinessHours(ctx, storeID)
 	if err != nil {
 		return nil, fmt.Errorf("get business hours: %w", err)
@@ -271,7 +330,10 @@ func (s *Service) GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*B
 }
 
 // SetBusinessHours upserts hours for a store on a specific day.
-func (s *Service) SetBusinessHours(ctx context.Context, storeID uuid.UUID, req SetBusinessHoursRequest) error {
+func (s *Service) SetBusinessHours(ctx context.Context, storeID, salonID uuid.UUID, req SetBusinessHoursRequest) error {
+	if err := s.assertStoreOwnership(ctx, storeID, salonID); err != nil {
+		return err
+	}
 	if err := s.validate.Struct(req); err != nil {
 		return mapValidationError(err)
 	}
@@ -288,7 +350,10 @@ func (s *Service) SetBusinessHours(ctx context.Context, storeID uuid.UUID, req S
 }
 
 // GetExceptions returns all business hours exceptions for a store.
-func (s *Service) GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*BusinessHoursException, error) {
+func (s *Service) GetExceptions(ctx context.Context, storeID, salonID uuid.UUID) ([]*BusinessHoursException, error) {
+	if err := s.assertStoreOwnership(ctx, storeID, salonID); err != nil {
+		return nil, err
+	}
 	exceptions, err := s.repo.GetExceptions(ctx, storeID)
 	if err != nil {
 		return nil, fmt.Errorf("get exceptions: %w", err)
@@ -297,7 +362,10 @@ func (s *Service) GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*Busi
 }
 
 // CreateException adds a holiday or special-hours day.
-func (s *Service) CreateException(ctx context.Context, storeID uuid.UUID, req CreateExceptionRequest) error {
+func (s *Service) CreateException(ctx context.Context, storeID, salonID uuid.UUID, req CreateExceptionRequest) error {
+	if err := s.assertStoreOwnership(ctx, storeID, salonID); err != nil {
+		return err
+	}
 	if err := s.validate.Struct(req); err != nil {
 		return mapValidationError(err)
 	}
@@ -313,7 +381,7 @@ func (s *Service) CreateException(ctx context.Context, storeID uuid.UUID, req Cr
 // store belongs to.
 //
 // early_bird_fee is deliberately NOT validated against service prices. It is
-// a surcharge, set at the artist's discretion — a fee larger than a given
+// a surcharge, set at the artist's discretion - a fee larger than a given
 // service's price is the artist's call, not the system's. The only guard is
 // a sanity ceiling to catch a mistyped amount.
 func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uuid.UUID, req UpdateStoreRequest) (*Store, error) {
@@ -330,7 +398,22 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee cannot be negative")
 		}
 		if fee.GreaterThan(decimal.NewFromInt(10000)) {
-			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee looks too large — check the amount")
+			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee looks too large - check the amount")
+		}
+	}
+
+	// Reject an unloadable zone before it reaches the database. An invalid or
+	// offset-style value ("+03:00", "UTC+3", "EET") would be stored happily by
+	// Postgres, then silently fall back to UTC at slot-generation time - the
+	// store's hours would shift by its whole offset with nothing in the logs.
+	// time.LoadLocation only accepts IANA names, which is exactly the
+	// constraint wanted: named zones carry their own DST rules, offsets don't.
+	if req.Timezone != nil {
+		if _, err := time.LoadLocation(*req.Timezone); err != nil {
+			return nil, apperror.BadRequest(
+				"INVALID_TIMEZONE",
+				"timezone must be a valid IANA identifier, e.g. \"Asia/Beirut\" or \"Asia/Dubai\" (not a UTC offset)",
+			)
 		}
 	}
 
@@ -353,7 +436,10 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 }
 
 // DeleteException removes a business hours exception.
-func (s *Service) DeleteException(ctx context.Context, storeID uuid.UUID, dateStr string) error {
+func (s *Service) DeleteException(ctx context.Context, storeID, salonID uuid.UUID, dateStr string) error {
+	if err := s.assertStoreOwnership(ctx, storeID, salonID); err != nil {
+		return err
+	}
 	date, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
 		return apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
@@ -366,6 +452,7 @@ func (s *Service) DeleteException(ctx context.Context, storeID uuid.UUID, dateSt
 func toArtistResponse(p *ArtistProfile) *ArtistResponse {
 	return &ArtistResponse{
 		ID:          p.ID,
+		Handle:      p.Handle,
 		Name:        p.Name,
 		Bio:         p.Bio,
 		BioAr:       p.BioAr,

@@ -1,5 +1,5 @@
 // Package artist contains unit tests for the artist service layer.
-// These tests use mock repositories — no database required.
+// These tests use mock repositories - no database required.
 package artist
 
 import (
@@ -54,10 +54,15 @@ type mockRepo struct {
 	getStoreByIDStore        *Store
 	getStoreByIDErr          error
 	updateStoreErr           error
+	getArtistIDByHandleID    uuid.UUID
+	getArtistIDByHandleErr   error
 }
 
 func (m *mockRepo) GetArtistByID(_ context.Context, _ uuid.UUID) (*ArtistProfile, error) {
 	return m.getArtistByIDProfile, m.getArtistByIDErr
+}
+func (m *mockRepo) GetArtistIDByHandle(_ context.Context, _ string) (uuid.UUID, error) {
+	return m.getArtistIDByHandleID, m.getArtistIDByHandleErr
 }
 func (m *mockRepo) GetArtistByUserID(_ context.Context, _ uuid.UUID) (*ArtistProfile, error) {
 	return m.getArtistByUserIDProfile, m.getArtistByUserIDErr
@@ -192,6 +197,103 @@ func TestGetArtistByID_Success(t *testing.T) {
 	assert.True(t, result.IsVerified)
 }
 
+// ── ResolveArtistID tests ───────────────────────────────────────────────────
+//
+// Guards the whole point of the handle feature: a real UUID resolves without
+// touching the repo at all, a handle resolves via GetArtistIDByHandle, and a
+// handle that doesn't exist surfaces the same ErrArtistNotFound a bad UUID
+// lookup would - not a different error a client could use to distinguish
+// "this handle isn't taken" from "this UUID doesn't exist".
+
+func TestResolveArtistID_ValidUUID_ReturnsDirectly(t *testing.T) {
+	realID := uuid.New()
+	repo := &mockRepo{
+		// Deliberately different from realID - if ResolveArtistID
+		// mistakenly fell through to the handle lookup for a valid UUID,
+		// this would catch it by returning the wrong ID.
+		getArtistIDByHandleID: uuid.New(),
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.ResolveArtistID(context.Background(), realID.String())
+
+	require.NoError(t, err)
+	assert.Equal(t, realID, result)
+}
+
+func TestResolveArtistID_Handle_ResolvesViaRepo(t *testing.T) {
+	resolvedID := uuid.New()
+	repo := &mockRepo{
+		getArtistIDByHandleID: resolvedID,
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.ResolveArtistID(context.Background(), "rania")
+
+	require.NoError(t, err)
+	assert.Equal(t, resolvedID, result)
+}
+
+func TestResolveArtistID_UnknownHandle_ReturnsArtistNotFound(t *testing.T) {
+	repo := &mockRepo{
+		getArtistIDByHandleErr: ErrArtistNotFound,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.ResolveArtistID(context.Background(), "nonexistent-handle")
+
+	assert.ErrorIs(t, err, ErrArtistNotFound)
+}
+
+// ── UpdateProfile handle tests ───────────────────────────────────────────────
+
+func TestUpdateProfile_ValidHandle_Success(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{
+		getArtistByIDProfile: profile,
+	}
+	svc := newTestService(repo)
+
+	handle := "rania-beauty"
+	_, err := svc.UpdateProfile(context.Background(), profile.ID, profile.UserID, UpdateProfileRequest{
+		Handle: &handle,
+	})
+
+	require.NoError(t, err)
+}
+
+func TestUpdateProfile_InvalidHandleFormat_BadRequest(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{
+		getArtistByIDProfile: profile,
+	}
+	svc := newTestService(repo)
+
+	for _, bad := range []string{"-rania", "rania-", "Rania", "ra nia", "ra_nia", "ra"} {
+		handle := bad
+		_, err := svc.UpdateProfile(context.Background(), profile.ID, profile.UserID, UpdateProfileRequest{
+			Handle: &handle,
+		})
+		assert.Error(t, err, "expected %q to be rejected as an invalid handle", bad)
+	}
+}
+
+func TestUpdateProfile_HandleTaken_Conflict(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{
+		getArtistByIDProfile:   profile,
+		updateArtistProfileErr: ErrHandleTaken,
+	}
+	svc := newTestService(repo)
+
+	handle := "already-taken"
+	_, err := svc.UpdateProfile(context.Background(), profile.ID, profile.UserID, UpdateProfileRequest{
+		Handle: &handle,
+	})
+
+	assert.Error(t, err)
+}
+
 func TestGetArtistByID_NotFound(t *testing.T) {
 	repo := &mockRepo{
 		getArtistByIDErr: ErrArtistNotFound,
@@ -266,7 +368,7 @@ func TestUpdateProfile_NotOwner(t *testing.T) {
 	newBio := "Updated bio"
 	req := UpdateProfileRequest{Bio: &newBio}
 
-	// Different user ID — not the owner
+	// Different user ID - not the owner
 	result, err := svc.UpdateProfile(context.Background(), profile.ID, uuid.New(), req)
 
 	require.Error(t, err)
@@ -407,7 +509,7 @@ func TestUpdateService_WrongSalon(t *testing.T) {
 	name := "Hacked Service"
 	req := UpdateServiceRequest{Name: &name}
 
-	// Different salonID — should be forbidden
+	// Different salonID - should be forbidden
 	result, err := svc.UpdateService(context.Background(), existing.ID, uuid.New(), req)
 
 	require.Error(t, err)
@@ -454,7 +556,8 @@ func TestDeleteService_NotFound(t *testing.T) {
 // ── SetBusinessHours tests ────────────────────────────────────────────────────
 
 func TestSetBusinessHours_Success(t *testing.T) {
-	repo := &mockRepo{setBusinessHoursErr: nil}
+	storeID, salonID := uuid.New(), uuid.New()
+	repo := &mockRepo{setBusinessHoursErr: nil, getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
 	svc := newTestService(repo)
 
 	req := SetBusinessHoursRequest{
@@ -464,12 +567,13 @@ func TestSetBusinessHours_Success(t *testing.T) {
 		IsOpen:    true,
 	}
 
-	err := svc.SetBusinessHours(context.Background(), uuid.New(), req)
+	err := svc.SetBusinessHours(context.Background(), storeID, salonID, req)
 	require.NoError(t, err)
 }
 
 func TestSetBusinessHours_InvalidTimeFormat(t *testing.T) {
-	repo := &mockRepo{}
+	storeID, salonID := uuid.New(), uuid.New()
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
 	svc := newTestService(repo)
 
 	req := SetBusinessHoursRequest{
@@ -479,14 +583,15 @@ func TestSetBusinessHours_InvalidTimeFormat(t *testing.T) {
 		IsOpen:    true,
 	}
 
-	err := svc.SetBusinessHours(context.Background(), uuid.New(), req)
+	err := svc.SetBusinessHours(context.Background(), storeID, salonID, req)
 	require.Error(t, err)
 }
 
 // ── CreateException tests ─────────────────────────────────────────────────────
 
 func TestCreateException_Success(t *testing.T) {
-	repo := &mockRepo{createExceptionErr: nil}
+	storeID, salonID := uuid.New(), uuid.New()
+	repo := &mockRepo{createExceptionErr: nil, getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
 	svc := newTestService(repo)
 
 	req := CreateExceptionRequest{
@@ -495,12 +600,13 @@ func TestCreateException_Success(t *testing.T) {
 		Reason:        strPtr("Christmas"),
 	}
 
-	err := svc.CreateException(context.Background(), uuid.New(), req)
+	err := svc.CreateException(context.Background(), storeID, salonID, req)
 	require.NoError(t, err)
 }
 
 func TestCreateException_InvalidDate(t *testing.T) {
-	repo := &mockRepo{}
+	storeID, salonID := uuid.New(), uuid.New()
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
 	svc := newTestService(repo)
 
 	req := CreateExceptionRequest{
@@ -508,7 +614,7 @@ func TestCreateException_InvalidDate(t *testing.T) {
 		IsClosed:      true,
 	}
 
-	err := svc.CreateException(context.Background(), uuid.New(), req)
+	err := svc.CreateException(context.Background(), storeID, salonID, req)
 	require.Error(t, err)
 }
 
@@ -522,4 +628,128 @@ func isAppError(err error, target **apperror.AppError) bool {
 		return true
 	}
 	return false
+}
+
+// ── Cross-tenant authorization tests ─────────────────────────────────────────
+//
+// These lock in assertStoreOwnership, added after the August 2026 security
+// audit found five endpoints (business hours ×2, exceptions ×3) accepting
+// store_id straight from the URL with no ownership check. artistOnly proved
+// the caller was AN artist; nothing proved the store was theirs. That was a
+// cross-tenant WRITE hole - a competitor's opening hours could be rewritten
+// to close their salon, or their holiday closures deleted.
+//
+// UpdateService/DeleteService/UpdateStore already had correct checks; they're
+// covered here too so a future refactor can't quietly drop them.
+
+// storeOwnedByOther builds a mock whose store belongs to a DIFFERENT salon
+// than the caller - the exact shape of the attack.
+func storeOwnedByOther() (*mockRepo, uuid.UUID, uuid.UUID) {
+	storeID := uuid.New()
+	victimSalonID := uuid.New()
+	attackerSalonID := uuid.New()
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: storeID, SalonID: victimSalonID}}
+	return repo, storeID, attackerSalonID
+}
+
+func TestSetBusinessHours_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	err := svc.SetBusinessHours(context.Background(), storeID, attackerSalonID, SetBusinessHoursRequest{
+		DayOfWeek: 1, OpenTime: "00:00:00", CloseTime: "00:00:01", IsOpen: true,
+	})
+
+	require.Error(t, err, "an artist must not be able to rewrite another salon's opening hours")
+}
+
+func TestGetBusinessHours_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	_, err := svc.GetBusinessHours(context.Background(), storeID, attackerSalonID)
+
+	require.Error(t, err)
+}
+
+func TestCreateException_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	err := svc.CreateException(context.Background(), storeID, attackerSalonID, CreateExceptionRequest{
+		ExceptionDate: "2027-12-25", IsClosed: true,
+	})
+
+	require.Error(t, err)
+}
+
+func TestGetExceptions_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	_, err := svc.GetExceptions(context.Background(), storeID, attackerSalonID)
+
+	require.Error(t, err)
+}
+
+func TestDeleteException_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	err := svc.DeleteException(context.Background(), storeID, attackerSalonID, "2027-12-25")
+
+	require.Error(t, err, "an artist must not be able to delete another salon's holiday closure")
+}
+
+// The ownership failure must NOT confirm the store exists - a Forbidden
+// would tell an attacker their guessed UUID is real. Both the wrong-owner
+// and the doesn't-exist case must look identical from outside.
+func TestStoreOwnership_WrongOwnerAndMissing_SameErrorCode(t *testing.T) {
+	storeID := uuid.New()
+
+	wrongOwner := newTestService(&mockRepo{
+		getStoreByIDStore: &Store{ID: storeID, SalonID: uuid.New()},
+	})
+	missing := newTestService(&mockRepo{getStoreByIDErr: ErrStoreNotFound})
+
+	_, errWrong := wrongOwner.GetBusinessHours(context.Background(), storeID, uuid.New())
+	_, errMissing := missing.GetBusinessHours(context.Background(), storeID, uuid.New())
+
+	require.Error(t, errWrong)
+	require.Error(t, errMissing)
+	assert.Equal(t, errWrong.Error(), errMissing.Error(),
+		"wrong-owner and not-found must be indistinguishable, or the API becomes a store-UUID oracle")
+}
+
+func TestUpdateService_OtherSalonsService_Denied(t *testing.T) {
+	serviceID := uuid.New()
+	repo := &mockRepo{
+		getServiceByIDSvc: &SalonServiceRecord{ID: serviceID, SalonID: uuid.New()},
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateService(context.Background(), serviceID, uuid.New(), UpdateServiceRequest{})
+
+	require.Error(t, err, "an artist must not be able to edit another salon's service")
+}
+
+func TestDeleteService_OtherSalonsService_Denied(t *testing.T) {
+	serviceID := uuid.New()
+	repo := &mockRepo{
+		getServiceByIDSvc: &SalonServiceRecord{ID: serviceID, SalonID: uuid.New()},
+	}
+	svc := newTestService(repo)
+
+	err := svc.DeleteService(context.Background(), serviceID, uuid.New())
+
+	require.Error(t, err)
+}
+
+func TestUpdateStore_OtherSalonsStore_Denied(t *testing.T) {
+	repo, storeID, attackerSalonID := storeOwnedByOther()
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), storeID, attackerSalonID, UpdateStoreRequest{})
+
+	require.Error(t, err)
 }

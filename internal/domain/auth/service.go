@@ -20,7 +20,7 @@ import (
 )
 
 // resetTokenLength is the number of random bytes used to generate a password reset token.
-// 32 bytes = 64 hex characters — cryptographically strong.
+// 32 bytes = 64 hex characters - cryptographically strong.
 const resetTokenLength = 32
 
 // resetTokenExpiry is how long a password reset token remains valid.
@@ -31,7 +31,7 @@ const refreshTokenExpiry = 7 * 24 * time.Hour
 
 // Service handles all auth business logic.
 // It sits between the handler (HTTP) and the repository (SQL).
-// It knows nothing about HTTP — no fiber.Ctx, no status codes.
+// It knows nothing about HTTP - no fiber.Ctx, no status codes.
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
@@ -70,7 +70,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 	// Step 2: Check email is not already registered
 	_, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err == nil {
-		// GetUserByEmail succeeded — user exists
+		// GetUserByEmail succeeded - user exists
 		return nil, apperror.Conflict("EMAIL_TAKEN", "An account with this email already exists")
 	}
 	if !errors.Is(err, ErrUserNotFound) {
@@ -78,7 +78,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 		return nil, fmt.Errorf("register: check email: %w", err)
 	}
 
-	// Step 3: Hash the password — bcrypt, cost 10 in production
+	// Step 3: Hash the password - bcrypt, cost 10 in production
 	passwordHash, err := hash.Password(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("register: hash password: %w", err)
@@ -127,7 +127,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, er
 	user, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
-			// Return same error as wrong password — never reveal if email exists
+			// Return same error as wrong password - never reveal if email exists
 			return nil, apperror.Unauthorized("INVALID_CREDENTIALS", "Email or password is incorrect")
 		}
 		return nil, fmt.Errorf("login: get user: %w", err)
@@ -146,7 +146,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, er
 
 	// Step 4: Verify password
 	if err := hash.VerifyPassword(req.Password, user.PasswordHash); err != nil {
-		// Same message as user not found — never leak which one failed
+		// Same message as user not found - never leak which one failed
 		return nil, apperror.Unauthorized("INVALID_CREDENTIALS", "Email or password is incorrect")
 	}
 
@@ -187,7 +187,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*LoginRe
 		return nil, apperror.Unauthorized("TOKEN_INVALID", "Authentication failed")
 	}
 
-	// Step 4: Revoke the used refresh token (rotation — one use only)
+	// Step 4: Revoke the used refresh token (rotation - one use only)
 	if err := s.repo.RevokeRefreshToken(ctx, tokenHash); err != nil {
 		return nil, fmt.Errorf("refresh: revoke token: %w", err)
 	}
@@ -224,15 +224,15 @@ func (s *Service) Logout(ctx context.Context, rawRefreshToken string) error {
 }
 
 // ForgotPassword generates a password reset token and stores it.
-// Always returns nil — never reveal if the email exists or not.
+// Always returns nil - never reveal if the email exists or not.
 func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest) error {
 	if err := s.validate.Struct(req); err != nil {
-		return nil // silent — do not reveal email existence
+		return nil // silent - do not reveal email existence
 	}
 
 	user, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
-		return nil // silent — do not reveal if email is registered
+		return nil // silent - do not reveal if email is registered
 	}
 
 	// Remove any existing unused tokens before creating a new one
@@ -299,7 +299,7 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) e
 		return fmt.Errorf("reset password: update password: %w", err)
 	}
 
-	// Step 6: Mark token as used — cannot be reused
+	// Step 6: Mark token as used - cannot be reused
 	if err := s.repo.MarkPasswordResetUsed(ctx, req.Token); err != nil {
 		return fmt.Errorf("reset password: mark used: %w", err)
 	}
@@ -358,7 +358,7 @@ func (s *Service) UnfreezeAccount(ctx context.Context, userID uuid.UUID) error {
 }
 
 // DeleteAccount soft-deletes a user account.
-// The record is never physically removed — deleted_at is stamped instead.
+// The record is never physically removed - deleted_at is stamped instead.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	if err := s.repo.UpdateUserStatus(ctx, userID, StatusDeleted); err != nil {
 		return fmt.Errorf("delete account: %w", err)
@@ -404,7 +404,7 @@ func (s *Service) generateAndStoreTokens(ctx context.Context, user *User) (*toke
 }
 
 // hashToken returns the SHA-256 hex hash of a token string.
-// Only the hash is stored in the database — never the raw token.
+// Only the hash is stored in the database - never the raw token.
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])

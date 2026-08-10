@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
@@ -35,18 +37,30 @@ var weekdays = map[time.Weekday]bool{
 }
 
 // Service handles all booking business logic.
-// It knows nothing about HTTP — no fiber.Ctx, no status codes.
-// It knows nothing about SQL — all DB access goes through Repository.
+// It knows nothing about HTTP - no fiber.Ctx, no status codes.
+// It knows nothing about SQL - all DB access goes through Repository.
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
+	log      *zap.Logger
 }
 
 // NewService creates a new booking Service.
-func NewService(repo Repository) *Service {
+//
+// The logger is variadic rather than a required parameter purely to avoid
+// churning every existing call site (including every test's
+// newTestService) for what is an observability addition. Omitting it
+// yields a no-op logger, so behaviour is unchanged for callers that don't
+// pass one - but the production wiring in RegisterRoutes does.
+func NewService(repo Repository, log ...*zap.Logger) *Service {
+	l := zap.NewNop()
+	if len(log) > 0 && log[0] != nil {
+		l = log[0]
+	}
 	return &Service{
 		repo:     repo,
 		validate: validator.New(),
+		log:      l,
 	}
 }
 
@@ -90,7 +104,7 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 		return nil, fmt.Errorf("get available slots: get exception: %w", err)
 	}
 	if exception != nil && exception.IsClosed {
-		return []*TimeSlot{}, nil // store is closed — return empty
+		return []*TimeSlot{}, nil // store is closed - return empty
 	}
 
 	// Get regular hours for this day of week
@@ -102,20 +116,27 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 		return []*TimeSlot{}, nil // store is closed this day
 	}
 
-	// Parse open and close times for this date in UTC
-	openTime, err := parseStoreTime(date, bh.OpenTime)
+	// Parse open and close times as wall-clock LOCAL times in the store's
+	// own timezone. A store that opens at 09:00 opens at 09:00 where it
+	// physically is, in summer and in winter alike - resolving through the
+	// store's IANA zone applies the correct DST offset for this specific
+	// date automatically.
+	storeLoc := storeLocation(store)
+	localDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, storeLoc)
+
+	openTime, err := parseStoreTimeIn(localDate, bh.OpenTime, storeLoc)
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: parse open time: %w", err)
 	}
-	closeTime, err := parseStoreTime(date, bh.CloseTime)
+	closeTime, err := parseStoreTimeIn(localDate, bh.CloseTime, storeLoc)
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: parse close time: %w", err)
 	}
 
 	// If exception has custom hours, override
 	if exception != nil && exception.OpenTime != nil && exception.CloseTime != nil {
-		openTime, _ = parseStoreTime(date, *exception.OpenTime)
-		closeTime, _ = parseStoreTime(date, *exception.CloseTime)
+		openTime, _ = parseStoreTimeIn(localDate, *exception.OpenTime, storeLoc)
+		closeTime, _ = parseStoreTimeIn(localDate, *exception.CloseTime, storeLoc)
 	}
 
 	// ── Step 2: Same-day minimum notice ──────────────────────────────────
@@ -133,7 +154,7 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {
 		// A service ID that does not resolve is a client error, not a server
-		// fault — mirror CreateBooking and HoldGuestSlot rather than falling
+		// fault - mirror CreateBooking and HoldGuestSlot rather than falling
 		// through to the generic 500 handler.
 		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
 	}
@@ -200,7 +221,7 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	var earlyBirdCutoff *time.Time
 	if store.EarlyBirdCutoff != nil {
-		t, err := parseStoreTime(date, *store.EarlyBirdCutoff)
+		t, err := parseStoreTimeIn(localDate, *store.EarlyBirdCutoff, storeLoc)
 		if err == nil {
 			earlyBirdCutoff = &t
 		}
@@ -239,7 +260,7 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 			slots = append(slots, slot)
 		}
 
-		// Advance by 15-minute increments — standard booking granularity
+		// Advance by 15-minute increments - standard booking granularity
 		current = current.Add(15 * time.Minute)
 	}
 
@@ -276,15 +297,26 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-01T10:00:00Z")
 	}
 
-	// Fetch service for duration and pricing — and derive salon_id from it
+	// Fetch service for duration and pricing - and derive salon_id from it
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {
 		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
 	}
 
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return nil, fmt.Errorf("create booking: get store: %w", err)
+	}
+
+	// Same early-bird surcharge logic as HoldGuestSlot - see isEarlyBirdSlot.
+	finalPrice := service.Price
+	if isEarlyBirdSlot(store, startTime.UTC()) {
+		finalPrice = finalPrice.Add(store.EarlyBirdFee)
+	}
+
 	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
 
-	// Set held_until — slot is reserved for 10 minutes during checkout
+	// Set held_until - slot is reserved for 10 minutes during checkout
 	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
 
 	b := &Booking{
@@ -300,7 +332,7 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		Status:          StatusHeld,
 		OriginalPrice:   service.Price,
 		DiscountAmount:  zeroDecimal(),
-		FinalPrice:      service.Price,
+		FinalPrice:      finalPrice,
 		DepositAmount:   service.DepositAmount,
 		Channel:         req.Channel,
 		SpecialRequests: req.SpecialRequests,
@@ -323,7 +355,7 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 // for the full 10 minutes the customer spends on the details form.
 //
 // The guest user is created only on successful submit, so abandoned holds leave
-// NO orphan user rows — the held booking points at SystemGuestPlaceholderID and is
+// NO orphan user rows - the held booking points at SystemGuestPlaceholderID and is
 // swept by the existing ReleaseExpiredHolds job.
 
 // HoldGuestSlot creates a held booking when a guest taps a slot on C-04.
@@ -366,6 +398,20 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
 	}
 
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return nil, fmt.Errorf("hold guest slot: get store: %w", err)
+	}
+
+	// If this slot falls before the store's early-bird cutoff, the surcharge
+	// the picker badged this slot with must actually be charged - otherwise
+	// the badge is decorative and the customer is quoted a price that never
+	// gets applied.
+	finalPrice := service.Price
+	if isEarlyBirdSlot(store, startTime.UTC()) {
+		finalPrice = finalPrice.Add(store.EarlyBirdFee)
+	}
+
 	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
 	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
 
@@ -382,7 +428,7 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		Status:         StatusHeld,
 		OriginalPrice:  service.Price,
 		DiscountAmount: zeroDecimal(),
-		FinalPrice:     service.Price,
+		FinalPrice:     finalPrice,
 		DepositAmount:  service.DepositAmount,
 		Channel:        ChannelCustomerPWA,
 	}
@@ -404,7 +450,7 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 
 // SubmitGuestBooking attaches the guest's identity and moves held → pending (C-05).
 //
-// No authentication is required — the booking ID plus an unexpired held_until
+// No authentication is required - the booking ID plus an unexpired held_until
 // window is the guard. Validates the booking is still held and not expired,
 // creates the real guest user from the submitted name + phone, repoints the
 // booking from the placeholder to that user, attaches special requests, and
@@ -564,7 +610,23 @@ func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUI
 		return nil, fmt.Errorf("get enriched booking by id: %w", err)
 	}
 
-	if requesterRole != RoleAdmin && e.CustomerID != requesterID && e.ArtistID != requesterID {
+	// e.ArtistID is artists.id; requesterID is users.id - DIFFERENT ID
+	// spaces. Comparing them directly (as this did) can never be true, so
+	// an artist was silently 403'd on their own booking. Fails closed, so
+	// it was a functional bug rather than a hole, but it's the same
+	// artists.id-vs-users.id confusion already fixed in six other booking
+	// methods; this occurrence was missed. Resolve first, compare like
+	// with like.
+	isArtist := false
+	if requesterRole == RoleArtist {
+		requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterID)
+		if err != nil && !errors.Is(err, ErrArtistNotFound) {
+			return nil, fmt.Errorf("get enriched booking by id: resolve artist: %w", err)
+		}
+		isArtist = err == nil && e.ArtistID == requesterArtistID
+	}
+
+	if requesterRole != RoleAdmin && e.CustomerID != requesterID && !isArtist {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view this booking")
 	}
 
@@ -574,7 +636,14 @@ func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUI
 // ListEnrichedBookingsByArtist returns an artist's bookings with display names.
 // If status is non-empty it must be a known booking status; results are then
 // restricted to that status (dashboard tabs, deposit queue, refund queue).
-func (s *Service) ListEnrichedBookingsByArtist(ctx context.Context, artistID uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBookingResponse, bool, error) {
+func (s *Service) ListEnrichedBookingsByArtist(ctx context.Context, artistID uuid.UUID, requesterUserID uuid.UUID, requesterRole string, status string, cursor time.Time, limit int) ([]*EnrichedBookingResponse, bool, error) {
+	// Ownership first, before any work - see assertArtistAccess. Without
+	// this, any registered artist could read any other artist's entire
+	// booking book (customer names, phone numbers, prices, deposits).
+	if err := s.assertArtistAccess(ctx, artistID, requesterUserID, requesterRole); err != nil {
+		return nil, false, err
+	}
+
 	if limit <= 0 || limit > 100 {
 		limit = defaultPageSize
 	}
@@ -603,9 +672,15 @@ func (s *Service) ListEnrichedBookingsByArtist(ctx context.Context, artistID uui
 }
 
 // ListEnrichedBookingsForWeek returns the artist's committed appointments for the
-// 7-day window beginning at weekStart (calendar grid). No pagination — the whole
+// 7-day window beginning at weekStart (calendar grid). No pagination - the whole
 // week is returned, ordered by start time.
-func (s *Service) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBookingResponse, error) {
+func (s *Service) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, requesterUserID uuid.UUID, requesterRole string, weekStart time.Time) ([]*EnrichedBookingResponse, error) {
+	// Ownership first - see assertArtistAccess. Without this, any registered
+	// artist could read any other artist's full weekly schedule.
+	if err := s.assertArtistAccess(ctx, artistID, requesterUserID, requesterRole); err != nil {
+		return nil, err
+	}
+
 	// Normalise to the start of the day in UTC so the half-open window aligns to
 	// midnight boundaries regardless of any time component the client sent.
 	weekStart = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, time.UTC)
@@ -647,8 +722,9 @@ func (s *Service) ListEnrichedBookingsByCustomer(ctx context.Context, customerID
 
 // ApproveBooking transitions a pending booking to approved.
 // Sets the deposit deadline based on the service configuration.
+// ApproveBooking transitions a pending booking to approved and sets the deposit deadline.
 // Only the artist can approve a booking.
-func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, artistID uuid.UUID) (*BookingResponse, error) {
+func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID) (*BookingResponse, error) {
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
@@ -657,8 +733,18 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, artis
 		return nil, fmt.Errorf("approve booking: get booking: %w", err)
 	}
 
+	// Resolve the JWT user_id to the caller's artists.id. bookings.artist_id
+	// references artists.id, so we must compare like with like.
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to approve this booking")
+		}
+		return nil, fmt.Errorf("approve booking: resolve artist: %w", err)
+	}
+
 	// Only the artist on the booking can approve it
-	if b.ArtistID != artistID {
+	if b.ArtistID != requesterArtistID {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to approve this booking")
 	}
 
@@ -688,12 +774,36 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, artis
 
 	b.Status = StatusApproved
 	b.DepositDeadline = &depositDeadline
+
+	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
+	if ctxErr == nil {
+		var message string
+		if service.DepositAmount.IsPositive() {
+			message = fmt.Sprintf(
+				"Hi %s! Your %s request for %s has been approved. Please send a $%s deposit within %d hours to confirm your spot.",
+				customerName, serviceName, notificationTimeLabel(b.StartTime),
+				service.DepositAmount.String(), int(deadlineHours.Hours()),
+			)
+		} else {
+			// No deposit required, but this booking still isn't
+			// StatusConfirmed yet - the artist confirms it as a separate
+			// action even for $0-deposit services (see ConfirmDepositReceived).
+			// Claiming "confirmed" here would say something false over
+			// WhatsApp about the booking's actual state.
+			message = fmt.Sprintf(
+				"Hi %s! Your %s request for %s has been approved. You'll get a final confirmation shortly.",
+				customerName, serviceName, notificationTimeLabel(b.StartTime),
+			)
+		}
+		s.enqueueNotification(ctx, bookingID, b.CustomerID, "booking_approved", message)
+	}
+
 	return toResponse(b), nil
 }
 
 // ConfirmDeposit marks a deposit as received and confirms the booking.
 // Only the artist can confirm a deposit.
-func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, artistID uuid.UUID) (*BookingResponse, error) {
+func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID) (*BookingResponse, error) {
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
@@ -702,7 +812,15 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, artis
 		return nil, fmt.Errorf("confirm deposit: get booking: %w", err)
 	}
 
-	if b.ArtistID != artistID {
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to confirm this booking")
+		}
+		return nil, fmt.Errorf("confirm deposit: resolve artist: %w", err)
+	}
+
+	if b.ArtistID != requesterArtistID {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to confirm this booking")
 	}
 
@@ -723,7 +841,7 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, artis
 
 // MarkDepositReceived transitions approved → deposit_paid.
 // Called by the artist after verifying the Wish Money transfer.
-func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, artistID uuid.UUID) (*BookingResponse, error) {
+func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID) (*BookingResponse, error) {
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
@@ -732,7 +850,15 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 		return nil, fmt.Errorf("mark deposit received: get booking: %w", err)
 	}
 
-	if b.ArtistID != artistID {
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		}
+		return nil, fmt.Errorf("mark deposit received: resolve artist: %w", err)
+	}
+
+	if b.ArtistID != requesterArtistID {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
 	}
 
@@ -748,6 +874,71 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 	return toResponse(b), nil
 }
 
+// ConfirmDepositReceived is the primary artist-facing deposit action: she
+// checks her OMT/Wish transfer and confirms the moment it lands, so this
+// moves a booking straight from approved to confirmed in one call, stamping
+// deposit_paid_at along the way. The separate MarkDepositReceived / ConfirmDeposit
+// pair remains available for edge cases (partial payment, disputed transfer)
+// where the two steps genuinely need to happen apart.
+//
+// reference is an optional artist-entered note (e.g. an OMT/Wish transaction
+// code) for her own reconciliation - never shown to the customer, never
+// validated beyond a sanity length cap.
+func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string) (*BookingResponse, error) {
+	if reference != nil && len(*reference) > 255 {
+		return nil, apperror.BadRequest("REFERENCE_TOO_LONG", "Reference note must be 255 characters or fewer")
+	}
+
+	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+		}
+		return nil, fmt.Errorf("confirm deposit received: get booking: %w", err)
+	}
+
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		}
+		return nil, fmt.Errorf("confirm deposit received: resolve artist: %w", err)
+	}
+
+	if b.ArtistID != requesterArtistID {
+		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+	}
+
+	if b.Status != StatusApproved {
+		return nil, apperror.Conflict("BOOKING_NOT_APPROVED", "Only approved bookings can have a deposit confirmed")
+	}
+
+	if err := s.repo.ConfirmDepositReceived(ctx, bookingID, reference); err != nil {
+		if errors.Is(err, ErrBookingNotApproved) {
+			return nil, apperror.Conflict("BOOKING_NOT_APPROVED", "Only approved bookings can have a deposit confirmed")
+		}
+		return nil, fmt.Errorf("confirm deposit received: %w", err)
+	}
+
+	now := time.Now().UTC()
+	b.Status = StatusConfirmed
+	b.DepositPaidAt = &now
+	if reference != nil {
+		b.DepositReference = reference
+	}
+
+	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
+	if ctxErr == nil {
+		message := fmt.Sprintf(
+			"Hi %s! You're all confirmed for %s on %s. See you then!",
+			customerName, serviceName, notificationTimeLabel(b.StartTime),
+		)
+		s.enqueueNotification(ctx, bookingID, b.CustomerID, "booking_confirmed", message)
+	}
+
+	return toResponse(b), nil
+}
+
 // CancelBooking cancels a booking.
 // Enforces the 24-hour cancellation policy for customers.
 // Artists can always cancel but trigger a refund_due.
@@ -760,10 +951,21 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 		return nil, fmt.Errorf("cancel booking: get booking: %w", err)
 	}
 
-	// Determine if requester is the customer or artist on this booking
+	// Determine if requester is the customer or artist on this booking.
+	// b.CustomerID is genuinely users.id, so that comparison is direct.
+	// b.ArtistID is artists.id, so an "artist" requester must be resolved
+	// from their JWT user_id first before comparing like with like.
 	isCustomer := b.CustomerID == requesterID
-	isArtist := b.ArtistID == requesterID
 	isAdmin := requesterRole == "admin"
+
+	isArtist := false
+	if requesterRole == "artist" {
+		requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterID)
+		if err != nil && !errors.Is(err, ErrArtistNotFound) {
+			return nil, fmt.Errorf("cancel booking: resolve artist: %w", err)
+		}
+		isArtist = err == nil && b.ArtistID == requesterArtistID
+	}
 
 	if !isCustomer && !isArtist && !isAdmin {
 		return nil, apperror.Forbidden("NOT_BOOKING_OWNER", "You do not have permission to cancel this booking")
@@ -800,12 +1002,143 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 	} else {
 		b.Status = StatusCancelled
 	}
+
+	// Only notify if the ARTIST cancelled - a customer who just cancelled
+	// their own booking doesn't need to be told about it.
+	if isArtist || isAdmin {
+		customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
+		if ctxErr == nil {
+			message := fmt.Sprintf(
+				"Hi %s, your %s booking for %s has been cancelled.",
+				customerName, serviceName, notificationTimeLabel(b.StartTime),
+			)
+			if refundDue {
+				message += " Your deposit will be refunded."
+			}
+			if reason != "" {
+				message += " Reason: " + reason
+			}
+			s.enqueueNotification(ctx, bookingID, b.CustomerID, "booking_cancelled", message)
+		}
+	}
+
+	// A cancellation just freed up this exact date for this artist/store/
+	// service - check whether anyone's waiting for it. Fires regardless of
+	// who cancelled (artist or customer): either way, a real slot opened
+	// up, and that's the only thing the waitlist cares about. Best-effort,
+	// matching every other notification tonight - a failure here must
+	// never fail the cancellation that already succeeded.
+	waitlistDate := time.Date(b.StartTime.Year(), b.StartTime.Month(), b.StartTime.Day(), 0, 0, 0, 0, time.UTC)
+	if err := s.repo.NotifyNextWaitlistEntry(ctx, b.ArtistID, b.StoreID, b.ServiceID, waitlistDate); err != nil {
+		s.log.Error("failed to notify next waitlist entry - cancellation succeeded",
+			zap.Error(err),
+			zap.String("artist_id", b.ArtistID.String()),
+			zap.String("service_id", b.ServiceID.String()),
+		)
+	}
+
 	return toResponse(b), nil
 }
 
 // CompleteBooking marks a confirmed booking as completed.
 // Only the artist can mark a booking as completed.
-func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, artistID uuid.UUID) (*BookingResponse, error) {
+// JoinWaitlist adds a customer to the queue for a fully-booked (artist,
+// store, service, date) combination. Public - no account, matching guest
+// booking everywhere else. Identity is resolved by phone via the exact
+// same CreateGuestUser lookup-or-create logic a guest booking already
+// uses - reused directly rather than duplicated a third time, since it's
+// already race-safe and de-duplicated (migration 014).
+//
+// Deliberately does NOT verify the slot is actually fully booked before
+// allowing the join - the frontend only offers this option when a search
+// already came back empty, so the practical risk of an unnecessary join is
+// low, and adding that check here would couple this to the slot algorithm
+// for marginal benefit. A reasonable simplification for the first version,
+// not an oversight.
+func (s *Service) JoinWaitlist(ctx context.Context, req JoinWaitlistRequest) (uuid.UUID, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return uuid.Nil, mapValidationError(err)
+	}
+
+	artistID, err := uuid.Parse(req.ArtistID)
+	if err != nil {
+		return uuid.Nil, apperror.BadRequest("INVALID_ARTIST_ID", "Invalid artist ID")
+	}
+	storeID, err := uuid.Parse(req.StoreID)
+	if err != nil {
+		return uuid.Nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
+	}
+	serviceID, err := uuid.Parse(req.ServiceID)
+	if err != nil {
+		return uuid.Nil, apperror.BadRequest("INVALID_SERVICE_ID", "Invalid service ID")
+	}
+	date, err := time.Parse("2006-01-02", req.RequestedDate)
+	if err != nil {
+		return uuid.Nil, apperror.BadRequest("INVALID_DATE", "requested_date must be in YYYY-MM-DD format")
+	}
+
+	customerID, err := s.repo.CreateGuestUser(ctx, req.Name, req.Phone)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("join waitlist: resolve customer: %w", err)
+	}
+
+	entryID, err := s.repo.CreateWaitlistEntry(ctx, artistID, storeID, serviceID, customerID, date)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("join waitlist: %w", err)
+	}
+	return entryID, nil
+}
+
+// GetWaitlistByArtist returns an artist's active waitlist queue. Bearer
+// the requester must resolve to this artist (or admin).
+// assertArtistAccess verifies the caller is genuinely the artist whose data
+// they're asking for. This is the ownership check that must guard EVERY
+// endpoint taking an artist_id from the URL - RequireRole("artist","admin")
+// only proves the caller is *an* artist, never that they are *that* artist.
+// Its absence on the bookings-list and calendar endpoints was a real
+// cross-tenant data leak (any registered artist could read any other
+// artist's full booking book, customer phone numbers included).
+//
+// Admins are allowed through before the artist lookup, deliberately: an
+// admin has no `artists` row at all, so resolving one would fail with
+// ErrArtistNotFound and lock admins out of the very endpoints their role
+// is supposed to reach.
+//
+// Wrong-artist and no-artist-row both return the same generic 403 - the
+// response must not reveal whether the requested artist_id exists.
+func (s *Service) assertArtistAccess(ctx context.Context, artistID, requesterUserID uuid.UUID, requesterRole string) error {
+	if requesterRole == RoleAdmin {
+		return nil
+	}
+
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.Forbidden("FORBIDDEN", "You do not have permission to view this artist's data")
+		}
+		return fmt.Errorf("assert artist access: resolve requester: %w", err)
+	}
+	if requesterArtistID != artistID {
+		return apperror.Forbidden("FORBIDDEN", "You do not have permission to view this artist's data")
+	}
+	return nil
+}
+
+func (s *Service) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID, requesterUserID uuid.UUID, requesterRole string) ([]*WaitlistEntryResponse, error) {
+	if err := s.assertArtistAccess(ctx, artistID, requesterUserID, requesterRole); err != nil {
+		return nil, err
+	}
+
+	entries, err := s.repo.GetWaitlistByArtist(ctx, artistID)
+	if err != nil {
+		return nil, fmt.Errorf("get waitlist by artist: %w", err)
+	}
+	return entries, nil
+}
+
+// CompleteBooking marks a confirmed booking as completed, generating the
+// guest review-link token and enqueueing the review-request notification.
+func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID) (*BookingResponse, error) {
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
@@ -814,7 +1147,15 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, arti
 		return nil, fmt.Errorf("complete booking: get booking: %w", err)
 	}
 
-	if b.ArtistID != artistID {
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to complete this booking")
+		}
+		return nil, fmt.Errorf("complete booking: resolve artist: %w", err)
+	}
+
+	if b.ArtistID != requesterArtistID {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to complete this booking")
 	}
 
@@ -822,17 +1163,30 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, arti
 		return nil, apperror.Conflict("BOOKING_NOT_CONFIRMED", "Only confirmed bookings can be marked as completed")
 	}
 
-	if err := s.repo.CompleteBooking(ctx, bookingID); err != nil {
+	reviewToken, err := s.repo.CompleteBooking(ctx, bookingID)
+	if err != nil {
 		return nil, fmt.Errorf("complete booking: %w", err)
 	}
 
 	b.Status = StatusCompleted
+	b.ReviewToken = &reviewToken
+
+	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
+	if ctxErr == nil {
+		reviewURL := fmt.Sprintf("%s/review/%s", customerPWAURL, reviewToken)
+		message := fmt.Sprintf(
+			"Hi %s! Thanks for booking your %s with us. We'd love to hear how it went - leave a quick review here: %s",
+			customerName, serviceName, reviewURL,
+		)
+		s.enqueueNotification(ctx, bookingID, b.CustomerID, "review_request", message)
+	}
+
 	return toResponse(b), nil
 }
 
 // MarkNoShow marks a confirmed booking as no_show.
 // Only the artist can mark a no-show.
-func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, artistID uuid.UUID) (*BookingResponse, error) {
+func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID) (*BookingResponse, error) {
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
@@ -841,7 +1195,15 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, artistID 
 		return nil, fmt.Errorf("mark no show: get booking: %w", err)
 	}
 
-	if b.ArtistID != artistID {
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		}
+		return nil, fmt.Errorf("mark no show: resolve artist: %w", err)
+	}
+
+	if b.ArtistID != requesterArtistID {
 		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
 	}
 
@@ -881,10 +1243,109 @@ func (s *Service) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-// parseStoreTime parses a TIME string from PostgreSQL (e.g. "09:00:00")
-// and combines it with a date to produce a time.Time in UTC.
-func parseStoreTime(date time.Time, timeStr string) (time.Time, error) {
-	// PostgreSQL TIME columns return strings like "09:00:00"
+// customerPWAURL is the base URL for the guest-facing app, used to build
+// links (currently just the review link) sent to a customer over WhatsApp.
+// Read once at package init rather than per-call, matching the pattern
+// businessLocation uses in the earnings domain. Falls back to localhost
+// harmless in development, and a wrong-but-obvious value in production if
+// CUSTOMER_PWA_URL is ever forgotten, rather than a silent empty string
+// that would produce a broken link with no indication why.
+var customerPWAURL = func() string {
+	if v := os.Getenv("CUSTOMER_PWA_URL"); v != "" {
+		return v
+	}
+	return "http://localhost:4200"
+}()
+
+// enqueueNotification is a best-effort wrapper around
+// repo.EnqueueNotification: a queuing failure must never fail the booking
+// operation that already succeeded (the artist approved the booking; that's
+// done regardless of whether a WhatsApp message got queued for it). Service
+// has no logger yet - swallowing the error here rather than silently
+// dropping it entirely still isn't ideal, but is the honest state of things
+// until a logger is threaded through this layer. Tracked, not hidden.
+func (s *Service) enqueueNotification(ctx context.Context, bookingID, userID uuid.UUID, templateName, message string) {
+	// Still best-effort - a queuing failure must never fail the booking
+	// operation that already succeeded. But it is now LOGGED: previously a
+	// persistently broken notification queue was completely invisible,
+	// which is how "the customer never got their WhatsApp" becomes an
+	// unexplainable support ticket instead of an alert.
+	if err := s.repo.EnqueueNotification(ctx, &bookingID, userID, templateName, message); err != nil {
+		s.log.Error("failed to enqueue notification - booking succeeded, message will not be sent",
+			zap.Error(err),
+			zap.String("booking_id", bookingID.String()),
+			zap.String("user_id", userID.String()),
+			zap.String("template", templateName),
+		)
+	}
+}
+
+// notificationTimeLabel formats a booking's start time for a WhatsApp
+// message in Beirut local time - matching every other customer-facing time
+// display in the app. Hardcoded for the same reason as businessLocation in
+// the earnings domain: every store is currently in Lebanon.
+func notificationTimeLabel(startTime time.Time) string {
+	loc, err := time.LoadLocation("Asia/Beirut")
+	if err != nil {
+		loc = time.UTC
+	}
+	return startTime.In(loc).Format("Mon, 2 Jan · 3:04 PM")
+}
+
+// isEarlyBirdSlot reports whether startTime falls before the store's
+// early-bird cutoff on its own calendar day. Uses the exact same comparison
+// GetAvailableSlots uses to flag a slot with the early-bird badge for the
+// picker UI - the two call sites must agree, or a slot shown with the badge
+// could be booked without the surcharge actually being charged.
+//
+// The cutoff is a wall-clock LOCAL time in the store's zone ("09:00:00" means
+// 9am where the salon physically is). The calendar day is therefore also the
+// store's local day, not the UTC day - at 23:00 UTC it is already tomorrow in
+// Beirut, and comparing against the wrong day's cutoff is off by 24 hours.
+func isEarlyBirdSlot(store *Store, startTime time.Time) bool {
+	if store == nil || store.EarlyBirdCutoff == nil {
+		return false
+	}
+	loc := storeLocation(store)
+	local := startTime.In(loc)
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+
+	cutoff, err := parseStoreTimeIn(date, *store.EarlyBirdCutoff, loc)
+	if err != nil {
+		return false
+	}
+	return startTime.Before(cutoff)
+}
+
+// storeLocation resolves a store's IANA timezone to a *time.Location.
+//
+// Falls back to UTC only if the zone is unset or unloadable. That fallback is
+// deliberately loud in behaviour but silent in logs at this call depth - the
+// column is NOT NULL DEFAULT 'Asia/Beirut' (migration 010) and cmd/main.go
+// blank-imports time/tzdata so the IANA database is compiled into the binary,
+// which means reaching the fallback indicates a genuinely malformed zone
+// string rather than a missing tzdata file.
+func storeLocation(store *Store) *time.Location {
+	if store == nil || store.Timezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(store.Timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// parseStoreTimeIn parses a PostgreSQL TIME string (e.g. "09:00:00") and
+// combines it with a date to produce an instant, interpreting the wall-clock
+// time in the given location.
+//
+// Constructing the time.Date in loc rather than time.UTC is the whole point:
+// Go applies that zone's DST rules for that specific date, so "09:00:00" in
+// Asia/Beirut resolves to 06:00Z in summer and 07:00Z in winter automatically.
+// Pre-converting and storing UTC would freeze one of those two and silently
+// break at the next clock change.
+func parseStoreTimeIn(date time.Time, timeStr string, loc *time.Location) (time.Time, error) {
 	t, err := time.Parse("15:04:05", timeStr)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse store time %q: %w", timeStr, err)
@@ -892,7 +1353,7 @@ func parseStoreTime(date time.Time, timeStr string) (time.Time, error) {
 	return time.Date(
 		date.Year(), date.Month(), date.Day(),
 		t.Hour(), t.Minute(), t.Second(), 0,
-		time.UTC,
+		loc,
 	), nil
 }
 

@@ -24,13 +24,24 @@ const pollInterval = 5 * time.Second
 // maxAttempts is the maximum number of send attempts before marking dead.
 const maxAttempts = 3
 
+// leaseDuration is how long a claimed notification stays invisible to other
+// workers. Long enough to cover a slow Twilio call (the HTTP client's own
+// timeout is 10s, so this is generous), short enough that a worker killed
+// mid-send doesn't strand its rows for long. Expressed as a Postgres
+// interval string because it's interpolated as one.
+const leaseDuration = "5 minutes"
+
 // twilioAPIBase is the Twilio Messages API endpoint.
 const twilioAPIBase = "https://api.twilio.com/2010-04-01/Accounts"
 
 // PendingNotification holds the fields needed to send one notification.
 type PendingNotification struct {
-	ID           string
-	UserID       string
+	ID string
+	// UserID is nullable: a pre-verification customer OTP has no users row
+	// yet (see migration 018). RecipientPhone carries the destination in
+	// that case.
+	UserID         *string
+	RecipientPhone *string
 	BookingID    *string
 	TemplateName string
 	Channel      string
@@ -91,20 +102,71 @@ func (w *Worker) processBatch(ctx context.Context) {
 	w.log.Info("notification worker: processing batch", zap.Int("count", len(notifications)))
 
 	for _, n := range notifications {
-		w.send(ctx, n)
+		w.sendSafely(ctx, n)
 	}
+}
+
+// sendSafely wraps send with a per-notification recover. A single poisoned
+// row (malformed payload, unexpected nil) must not take down the batch, the
+// worker, or - since an unrecovered panic in a goroutine kills the whole
+// process - the entire API. The row is left pending and will be retried up
+// to maxAttempts, so a permanently poisoned row eventually stops on its own
+// rather than looping forever.
+func (w *Worker) sendSafely(ctx context.Context, n *PendingNotification) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.log.Error("notification worker: panic while sending - skipping this row",
+				zap.Any("panic", r),
+				zap.String("notification_id", n.ID),
+			)
+		}
+	}()
+	w.send(ctx, n)
 }
 
 // fetchPending returns up to 10 pending notifications ordered by created_at.
 func (w *Worker) fetchPending(ctx context.Context) ([]*PendingNotification, error) {
+	// Claims rows atomically using the standard Postgres job-queue pattern:
+	// FOR UPDATE SKIP LOCKED inside a subquery, wrapped in an UPDATE that
+	// stamps a lease. Two things this fixes, both real:
+	//
+	// 1. CONCURRENT DELIVERY. The previous plain SELECT let every replica
+	//    read the same 10 rows and send them all - duplicate WhatsApp
+	//    messages, billed per message, multiplied by replica count. Latent
+	//    with one replica; guaranteed the moment K8s scales past one.
+	//    SKIP LOCKED means a row claimed by one worker is invisible to its
+	//    peers rather than blocking them.
+	//
+	// 2. RETRIES NEVER HAPPENED. markFailed sets status='failed', but this
+	//    query only ever selected status='pending' - so a failed
+	//    notification was never picked up again and maxAttempts=3 was
+	//    effectively 1. 'failed' is now included, so a transient Twilio
+	//    error genuinely retries until it succeeds or hits 'dead'.
+	//
+	// The lease is last_attempted_at rather than a new 'processing' status
+	// because the status CHECK constraint has no such value and adding one
+	// would need a migration. A crashed worker's rows simply become
+	// claimable again once the lease expires, rather than being stuck
+	// forever - which a status flag alone would NOT give us.
+	//
+	// attempts is deliberately NOT incremented here: markSent/markFailed
+	// each already do attempts+1, and incrementing at claim time as well
+	// would double-count and burn the retry budget twice as fast.
 	rows, err := w.db.Query(ctx, `
-		SELECT id, user_id, booking_id, template_name, channel, payload, attempts
-		FROM notifications
-		WHERE status = 'pending'
-		AND attempts < $1
-		ORDER BY created_at ASC
-		LIMIT 10`,
-		maxAttempts,
+		UPDATE notifications
+		SET last_attempted_at = NOW()
+		WHERE id IN (
+			SELECT id
+			FROM notifications
+			WHERE status IN ('pending', 'failed')
+			AND attempts < $1
+			AND (last_attempted_at IS NULL OR last_attempted_at < NOW() - $2::interval)
+			ORDER BY created_at ASC
+			LIMIT 10
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING id, user_id, recipient_phone, booking_id, template_name, channel, payload, attempts`,
+		maxAttempts, leaseDuration,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("fetch pending notifications: %w", err)
@@ -115,7 +177,7 @@ func (w *Worker) fetchPending(ctx context.Context) ([]*PendingNotification, erro
 	for rows.Next() {
 		n := &PendingNotification{}
 		if err := rows.Scan(
-			&n.ID, &n.UserID, &n.BookingID,
+			&n.ID, &n.UserID, &n.RecipientPhone, &n.BookingID,
 			&n.TemplateName, &n.Channel, &n.Payload, &n.Attempts,
 		); err != nil {
 			return nil, fmt.Errorf("scan notification: %w", err)
@@ -128,7 +190,7 @@ func (w *Worker) fetchPending(ctx context.Context) ([]*PendingNotification, erro
 // send attempts to deliver one notification.
 func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 	// Get the recipient phone number from the users table
-	phone, err := w.getPhoneNumber(ctx, n.UserID)
+	phone, err := w.resolveRecipientPhone(ctx, n)
 	if err != nil {
 		w.log.Warn("notification worker: cannot get phone number",
 			zap.String("notification_id", n.ID),
@@ -173,7 +235,7 @@ func (w *Worker) sendWhatsApp(to, body string) error {
 	from := os.Getenv("TWILIO_WHATSAPP_FROM")
 
 	if accountSID == "" || authToken == "" || from == "" {
-		// Twilio not configured — log and skip in development
+		// Twilio not configured - log and skip in development
 		return fmt.Errorf("twilio not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM required)")
 	}
 
@@ -206,6 +268,22 @@ func (w *Worker) sendWhatsApp(to, body string) error {
 }
 
 // getPhoneNumber fetches the phone number for a user.
+// resolveRecipientPhone returns the destination number, preferring an
+// explicit recipient_phone (notifications queued before a users row exists
+// currently just pre-verification OTP codes) and falling back to the
+// user's own number for everything else.
+func (w *Worker) resolveRecipientPhone(ctx context.Context, n *PendingNotification) (string, error) {
+	if n.RecipientPhone != nil && *n.RecipientPhone != "" {
+		return *n.RecipientPhone, nil
+	}
+	if n.UserID == nil {
+		// The CHECK constraint in migration 018 should make this
+		// unreachable; treated as a delivery failure rather than a panic.
+		return "", fmt.Errorf("notification has neither user_id nor recipient_phone")
+	}
+	return w.getPhoneNumber(ctx, *n.UserID)
+}
+
 func (w *Worker) getPhoneNumber(ctx context.Context, userID string) (string, error) {
 	var phone *string
 	err := w.db.QueryRow(ctx, `
@@ -283,6 +361,6 @@ func buildMessageBody(templateName string, payload []byte) (string, error) {
 		return msg, nil
 	}
 
-	// Fallback — use template name as message
+	// Fallback - use template name as message
 	return templateName, nil
 }

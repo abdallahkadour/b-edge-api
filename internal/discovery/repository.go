@@ -17,8 +17,9 @@ import (
 type Repository interface {
 	// ListArtistCards returns discovery cards, one row per (artist, city), so an
 	// artist with stores in several cities appears under each. Optional filters:
-	// city (exact store city), category (exact), q (case-insensitive name match).
-	// Ordered verified-first then by rating; capped at Limit (no cursor — the
+	// city (exact store city), category (exact), q (case-insensitive match on
+	// name OR city - NOT service name; see the WHERE-building code for why).
+	// Ordered verified-first then by rating; capped at Limit (no cursor - the
 	// browse screen loads a bounded top-N, not an infinite scroll).
 	ListArtistCards(ctx context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error)
 
@@ -55,7 +56,7 @@ func NewRepository(db *pgxpool.Pool) Repository {
 
 // ListArtistCards returns discovery cards joined across artists, users (name),
 // artist_stores, and stores (city). One row per (artist, city). Verified artists
-// are surfaced first, then by rating, then name — a stable, sensible default order
+// are surfaced first, then by rating, then name - a stable, sensible default order
 // for a browse screen.
 func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error) {
 	// Build dynamic WHERE conditions. Arguments are positional and appended in
@@ -76,7 +77,15 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 	}
 	if f.Query != "" {
 		n++
-		conds = append(conds, fmt.Sprintf("u.name ILIKE $%d", n))
+		// Matches name OR city - the placeholder text on the discover screen
+		// promises "artist, service, or city", and a customer typing a city
+		// name into the one search box is a completely normal thing to do.
+		// Service-name matching is NOT included here: it would need a join
+		// to the salon's services table, which this query doesn't otherwise
+		// touch, and risks row duplication (one artist, multiple matching
+		// services) that would need a DISTINCT to handle correctly. Tracked
+		// separately rather than folded into this fix.
+		conds = append(conds, fmt.Sprintf("(u.name ILIKE $%d OR s.city ILIKE $%d)", n, n))
 		args = append(args, "%"+f.Query+"%")
 	}
 
@@ -95,7 +104,7 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 	args = append(args, f.Limit)
 
 	q := fmt.Sprintf(`
-		SELECT a.id, u.name, a.category, a.rating, a.review_count,
+		SELECT a.id, a.handle, u.name, a.category, a.rating, a.review_count,
 		       s.city, a.is_verified, a.created_at
 		FROM artists a
 		JOIN users u         ON u.id  = a.user_id
@@ -115,7 +124,7 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 	for rows.Next() {
 		c := &ArtistCardRow{}
 		if err := rows.Scan(
-			&c.ID, &c.Name, &c.Category, &c.Rating, &c.ReviewCount,
+			&c.ID, &c.Handle, &c.Name, &c.Category, &c.Rating, &c.ReviewCount,
 			&c.City, &c.IsVerified, &c.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan artist card: %w", err)

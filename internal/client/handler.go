@@ -27,9 +27,9 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //
 // All routes require an authenticated artist:
 //
-//	GET /api/v1/clients                       — list the artist's clients
-//	GET /api/v1/clients/:customer_id          — one client's profile + history
-//	PUT /api/v1/clients/:customer_id/notes    — upsert the private note
+//	GET /api/v1/clients                       - list the artist's clients
+//	GET /api/v1/clients/:customer_id          - one client's profile + history
+//	PUT /api/v1/clients/:customer_id/notes    - upsert the private note
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)

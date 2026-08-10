@@ -58,7 +58,7 @@ func RequireRole(roles ...string) fiber.Handler {
 }
 
 // UserIDFromContext extracts the user UUID from Fiber Locals.
-// Panics if RequireAuth was not applied — use only on authenticated routes.
+// Panics if RequireAuth was not applied - use only on authenticated routes.
 func UserIDFromContext(c *fiber.Ctx) uuid.UUID {
 	return c.Locals("user_id").(uuid.UUID)
 }

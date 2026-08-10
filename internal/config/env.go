@@ -1,5 +1,5 @@
 // env.go validates that all required environment variables are present
-// before the server starts. Fail fast — never silently use empty secrets.
+// before the server starts. Fail fast - never silently use empty secrets.
 package config
 
 import (
@@ -18,6 +18,9 @@ var requiredEnvVars = []string{
 	"JWT_SECRET",
 	"JWT_REFRESH_SECRET",
 	"CLIENT_URL",
+	// APP_ENV gates production-only behaviour (stack traces, log format).
+	// Required so a missing value can never silently select a dev default.
+	"APP_ENV",
 }
 
 // jwtMinLength is the minimum acceptable length for JWT secrets.

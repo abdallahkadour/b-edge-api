@@ -28,6 +28,15 @@ var (
 
 	// ErrDuplicateStore is returned when an artist is already assigned to a store.
 	ErrDuplicateStore = errors.New("artist already assigned to this store")
+
+	// ErrHandleTaken is returned when the requested handle is already in use
+	// by another artist.
+	ErrHandleTaken = errors.New("handle already taken")
+
+	// ErrInvalidHandleFormat is returned when a handle doesn't match the
+	// required format (lowercase alphanumeric + single hyphens, no
+	// leading/trailing hyphen), mirroring the DB CHECK constraint.
+	ErrInvalidHandleFormat = errors.New("handle must be lowercase letters, numbers, and hyphens only, and cannot start or end with a hyphen")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
@@ -37,6 +46,9 @@ type Artist struct {
 	ID          uuid.UUID       `db:"id"           json:"id"`
 	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
 	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
+	// Handle is the artist's public booking-link identifier (e.g. "rania" ->
+	// /book/rania). Nullable - an artist has none until they set one.
+	Handle      *string         `db:"handle"       json:"handle,omitempty"`
 	Bio         *string         `db:"bio"          json:"bio,omitempty"`
 	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
 	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
@@ -54,6 +66,7 @@ type ArtistProfile struct {
 	ID          uuid.UUID       `db:"id"           json:"id"`
 	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
 	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
+	Handle      *string         `db:"handle"       json:"handle,omitempty"`
 	Name        string          `db:"name"         json:"name"`
 	Email       string          `db:"email"        json:"email"`
 	Phone       *string         `db:"phone"        json:"phone,omitempty"`
@@ -84,8 +97,11 @@ type Store struct {
 	WeekdayBufferMin   int             `db:"weekday_buffer_min"    json:"weekday_buffer_min"`
 	WeekendBufferMin   int             `db:"weekend_buffer_min"    json:"weekend_buffer_min"`
 	IsActive           bool            `db:"is_active"             json:"is_active"`
-	CreatedAt          time.Time       `db:"created_at"            json:"created_at"`
-	UpdatedAt          time.Time       `db:"updated_at"            json:"updated_at"`
+	// Timezone is the store's IANA zone (e.g. "Asia/Beirut"). early_bird_cutoff
+	// and this store's business hours are wall-clock LOCAL times in this zone.
+	Timezone  string    `db:"timezone"   json:"timezone"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // SalonServiceRecord represents a service offered by a salon from the services table.
@@ -134,6 +150,11 @@ type BusinessHoursException struct {
 
 // UpdateProfileRequest is the request body for PATCH /api/v1/artists/:id.
 type UpdateProfileRequest struct {
+	// Handle is validated for length here; the exact format (lowercase
+	// alphanumeric + single hyphens, no leading/trailing hyphen) is checked
+	// in the service layer with a regex matching the DB CHECK constraint
+	// exactly - struct tags alone can't express that pattern cleanly.
+	Handle    *string `json:"handle"     validate:"omitempty,min=3,max=50"`
 	Bio       *string `json:"bio"        validate:"omitempty,max=500"`
 	BioAr     *string `json:"bio_ar"     validate:"omitempty,max=500"`
 	Instagram *string `json:"instagram"  validate:"omitempty,max=255"`
@@ -168,7 +189,7 @@ type UpdateServiceRequest struct {
 // UpdateStoreRequest is the request body for PATCH /api/v1/artists/stores/:store_id.
 //
 // All fields are optional pointers: a nil field means "leave unchanged".
-// EarlyBirdFee is a string for the same reason Price is — decimal.Decimal
+// EarlyBirdFee is a string for the same reason Price is - decimal.Decimal
 // round-trips as a quoted JSON string, and parsing money out of a float
 // loses precision.
 //
@@ -185,7 +206,11 @@ type UpdateStoreRequest struct {
 	EarlyBirdFee       *string `json:"early_bird_fee"         validate:"omitempty"`
 	WeekdayBufferMin   *int    `json:"weekday_buffer_min"     validate:"omitempty,min=0,max=480"`
 	WeekendBufferMin   *int    `json:"weekend_buffer_min"     validate:"omitempty,min=0,max=480"`
-	IsActive           *bool   `json:"is_active"`
+	// Timezone must be a valid IANA identifier ("Asia/Beirut", "Asia/Dubai").
+	// Validated in the service layer via time.LoadLocation - a raw UTC offset
+	// like "+03:00" is rejected because offsets do not encode DST rules.
+	Timezone *string `json:"timezone" validate:"omitempty,max=64"`
+	IsActive *bool   `json:"is_active"`
 }
 
 // SetBusinessHoursRequest sets working hours for a store on a specific day.
@@ -211,6 +236,7 @@ type CreateExceptionRequest struct {
 // Rating serializes as a string to preserve decimal precision on the client.
 type ArtistResponse struct {
 	ID          uuid.UUID       `json:"id"`
+	Handle      *string         `json:"handle,omitempty"`
 	Name        string          `json:"name"`
 	Bio         *string         `json:"bio,omitempty"`
 	BioAr       *string         `json:"bio_ar,omitempty"`

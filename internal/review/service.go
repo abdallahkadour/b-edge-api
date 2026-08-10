@@ -33,7 +33,7 @@ func NewService(repo Repository) *Service {
 // Rules enforced:
 //  1. Booking must exist and be completed
 //  2. Only the customer on the booking can review it
-//  3. One review per booking — cannot review twice
+//  3. One review per booking - cannot review twice
 //
 // On success the repository also recomputes the artist's cached rating.
 func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, customerID uuid.UUID) (*ReviewResponse, error) {
@@ -90,6 +90,47 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 	return toResponse(rev), nil
 }
 
+// GetBookingContextByToken resolves a review-link token to the booking
+// summary shown before submission. Public - no auth, the token itself is
+// the only credential.
+func (s *Service) GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error) {
+	ctxRow, err := s.repo.GetBookingContextByToken(ctx, token)
+	if err != nil {
+		if errors.Is(err, ErrInvalidReviewToken) {
+			return nil, apperror.NotFound("INVALID_REVIEW_TOKEN", "This review link is invalid or has expired")
+		}
+		return nil, fmt.Errorf("get booking context by token: %w", err)
+	}
+	return ctxRow, nil
+}
+
+// CreateReviewByToken is the guest review flow's entry point - no Bearer
+// token, no customer account. The review-link token stands in for what a
+// JWT would normally prove: resolve it to (bookingID, customerID), then
+// delegate to CreateReview so every existing rule (must be completed, one
+// review per booking, ownership) applies exactly as it does for an
+// authenticated submission. Nothing about the actual review logic is
+// duplicated or weakened for this path.
+func (s *Service) CreateReviewByToken(ctx context.Context, token string, req SubmitReviewByTokenRequest) (*ReviewResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	bookingID, customerID, err := s.repo.GetBookingIDByReviewToken(ctx, token)
+	if err != nil {
+		if errors.Is(err, ErrInvalidReviewToken) {
+			return nil, apperror.NotFound("INVALID_REVIEW_TOKEN", "This review link is invalid or has expired")
+		}
+		return nil, fmt.Errorf("create review by token: resolve token: %w", err)
+	}
+
+	return s.CreateReview(ctx, CreateReviewRequest{
+		BookingID: bookingID.String(),
+		Rating:    req.Rating,
+		Comment:   req.Comment,
+	}, customerID)
+}
+
 // GetReviewsByArtist returns all visible reviews for an artist.
 func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*ReviewResponse, error) {
 	reviews, err := s.repo.GetReviewsByArtist(ctx, artistID)
@@ -126,7 +167,7 @@ func (s *Service) DeleteReview(ctx context.Context, reviewID uuid.UUID, requeste
 
 // HideReview hides a review from public view. Artists can hide reviews on their
 // own profile. The requester is a user_id from the JWT, which must be resolved to
-// the caller's artists.id before it can be compared with the review's artist_id —
+// the caller's artists.id before it can be compared with the review's artist_id
 // the two are different identifier spaces.
 func (s *Service) HideReview(ctx context.Context, reviewID uuid.UUID, requesterUserID uuid.UUID) error {
 	return s.setReviewVisibility(ctx, reviewID, requesterUserID, false)

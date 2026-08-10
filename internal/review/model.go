@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // ── Sentinel errors ───────────────────────────────────────────────────────────
@@ -28,8 +29,13 @@ var (
 	ErrNotReviewOwner = errors.New("not authorised to delete this review")
 
 	// ErrArtistNotFound is returned when a user_id does not resolve to an artist
-	// profile — used when authorising artist-only moderation actions.
+	// profile - used when authorising artist-only moderation actions.
 	ErrArtistNotFound = errors.New("artist profile not found for user")
+
+	// ErrInvalidReviewToken is returned when a review link's token doesn't
+	// match any booking - either it was mistyped, or the booking doesn't
+	// have one (not completed yet, or predates the review-link feature).
+	ErrInvalidReviewToken = errors.New("invalid or expired review link")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
@@ -53,6 +59,29 @@ type CreateReviewRequest struct {
 	BookingID string  `json:"booking_id" validate:"required,uuid"`
 	Rating    int     `json:"rating"     validate:"required,min=1,max=5"`
 	Comment   *string `json:"comment"    validate:"omitempty,max=1000"`
+}
+
+// SubmitReviewByTokenRequest is the request body for
+// POST /api/v1/reviews/by-token/:token - the guest review-link flow.
+// No booking_id: the token itself resolves to exactly one booking, so
+// including it in the body would be redundant and would let a caller send
+// a mismatched token/booking_id pair with no clear rule for which wins.
+type SubmitReviewByTokenRequest struct {
+	Rating  int     `json:"rating"  validate:"required,min=1,max=5"`
+	Comment *string `json:"comment" validate:"omitempty,max=1000"`
+}
+
+// ReviewBookingContext is the booking summary shown on the review-link
+// landing screen before submission - "Your Booking: Bridal Makeup with
+// Rania, Mon 23 June, $200" - resolved from the token with no auth. Holds
+// only what's needed to render that confirmation card; not a full booking
+// representation.
+type ReviewBookingContext struct {
+	ServiceName string          `json:"service_name"`
+	ArtistName  string          `json:"artist_name"`
+	StoreName   string          `json:"store_name"`
+	StartTime   time.Time       `json:"start_time"`
+	FinalPrice  decimal.Decimal `json:"final_price"`
 }
 
 // ── Response structs ──────────────────────────────────────────────────────────

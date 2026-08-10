@@ -1,7 +1,7 @@
 -- disable the transaction
 -- ─────────────────────────────────────────────────────────────────────────────
 -- B-Edge Indexes
--- All indexes use CONCURRENTLY — never locks the table.
+-- All indexes use CONCURRENTLY - never locks the table.
 -- Runs outside a transaction (required for CONCURRENTLY).
 -- Rules applied:
 --   • Every foreign key column has an explicit index
@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_services_salon_id
 CREATE INDEX IF NOT EXISTS idx_services_category_id
   ON services(category_id);
 
--- bookings — most critical indexes
+-- bookings - most critical indexes
 -- artist + time range: used by slot availability algorithm on every request
 CREATE INDEX IF NOT EXISTS idx_bookings_artist_time
   ON bookings(artist_id, start_time, end_time)

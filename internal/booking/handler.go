@@ -32,30 +32,31 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //
 // Public routes (no auth):
 //
-//	GET   /api/v1/bookings/slots             — slot availability for a date
-//	POST  /api/v1/bookings/guest/hold        — guest holds a slot (C-04)
-//	PATCH /api/v1/bookings/guest/:id/submit  — guest submits details (C-05)
+//	GET   /api/v1/bookings/slots             - slot availability for a date
+//	POST  /api/v1/bookings/guest/hold        - guest holds a slot (C-04)
+//	PATCH /api/v1/bookings/guest/:id/submit  - guest submits details (C-05)
 //
 // Protected routes (RequireAuth):
 //
-//	POST   /api/v1/bookings/           — create booking (authenticated customer)
-//	GET    /api/v1/bookings/:id        — get booking by ID
-//	PATCH  /api/v1/bookings/:id/submit — submit a held booking
+//	POST   /api/v1/bookings/           - create booking (authenticated customer)
+//	GET    /api/v1/bookings/:id        - get booking by ID
+//	PATCH  /api/v1/bookings/:id/submit - submit a held booking
 //	... (artist-only lifecycle routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
-	svc := NewService(repo)
+	svc := NewService(repo, log)
 	handler := NewHandler(svc, log)
 
-	// ── Public routes — no authentication required ────────────────────────────
+	// ── Public routes - no authentication required ────────────────────────────
 	// Registered BEFORE the protected group so Fiber matches /slots and /guest/*
 	// before the parametric /:id route in the protected group.
 	pub := app.Group("/api/v1/bookings")
 	pub.Get("/slots", handler.GetAvailableSlots)
 	pub.Post("/guest/hold", handler.HoldGuestSlot)
+	pub.Post("/waitlist", handler.JoinWaitlist)
 	pub.Patch("/guest/:id/submit", handler.SubmitGuestBooking)
 
-	// ── Protected routes — JWT required ──────────────────────────────────────
+	// ── Protected routes - JWT required ──────────────────────────────────────
 	b := app.Group("/api/v1/bookings", middleware.RequireAuth())
 
 	// Booking lifecycle
@@ -65,6 +66,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	b.Patch("/:id/approve", handler.ApproveBooking)
 	b.Patch("/:id/deposit-received", handler.MarkDepositReceived)
 	b.Patch("/:id/confirm-deposit", handler.ConfirmDeposit)
+	b.Patch("/:id/confirm-payment", handler.ConfirmDepositReceived)
 	b.Patch("/:id/cancel", handler.CancelBooking)
 	b.Patch("/:id/complete", handler.CompleteBooking)
 	b.Patch("/:id/no-show", handler.MarkNoShow)
@@ -72,6 +74,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// List endpoints
 	b.Get("/artist/:artist_id", middleware.RequireRole("artist", "admin"), handler.GetBookingsByArtist)
 	b.Get("/artist/:artist_id/calendar", middleware.RequireRole("artist", "admin"), handler.GetArtistCalendar)
+	b.Get("/artist/:artist_id/waitlist", middleware.RequireRole("artist", "admin"), handler.GetWaitlistByArtist)
 	b.Get("/customer/me", handler.GetBookingsByCustomer)
 }
 
@@ -308,6 +311,54 @@ func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 	return response.OK(c, booking)
 }
 
+// ConfirmDepositReceivedRequest is the optional body for confirm-payment.
+// Both fields are optional - an empty body is valid and behaves exactly as
+// it did before this note field existed.
+type ConfirmDepositReceivedRequest struct {
+	Reference *string `json:"reference"`
+}
+
+// ConfirmDepositReceived godoc
+// @Summary      Confirm deposit received and confirm booking in one step (artist only)
+// @Description  Primary artist-facing deposit action - moves a booking straight
+// @Description  from approved to confirmed, for the common case where the artist
+// @Description  checks her OMT/Wish transfer and confirms the moment it lands.
+// @Description  For edge cases (partial payment, disputed transfer) use the
+// @Description  separate deposit-received / confirm-deposit endpoints instead.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Booking UUID"
+// @Param        body body ConfirmDepositReceivedRequest false "Optional reference note"
+// @Success      200 {object} response.Body{data=BookingResponse}
+// @Router       /bookings/{id}/confirm-payment [patch]
+func (h *Handler) ConfirmDepositReceived(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+
+	// Body is entirely optional - this endpoint has always been callable
+	// with no payload at all, and the reference note is a later addition.
+	// Only attempt to parse if the caller actually sent something.
+	var req ConfirmDepositReceivedRequest
+	if len(c.Body()) > 0 {
+		if err := c.BodyParser(&req); err != nil {
+			return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+		}
+	}
+
+	requesterUserID := middleware.UserIDFromContext(c)
+
+	booking, err := h.svc.ConfirmDepositReceived(c.Context(), bookingID, requesterUserID, req.Reference)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, booking)
+}
+
 // CancelBooking godoc
 // @Summary      Cancel a booking
 // @Tags         bookings
@@ -408,7 +459,11 @@ func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 	cursor, limit := parsePaginationParams(c)
 	status := c.Query("status") // optional; "" = all
 
-	bookings, hasMore, err := h.svc.ListEnrichedBookingsByArtist(c.Context(), artistID, status, cursor, limit)
+	requesterUserID := middleware.UserIDFromContext(c)
+	requesterRole := middleware.RoleFromContext(c)
+
+	bookings, hasMore, err := h.svc.ListEnrichedBookingsByArtist(
+		c.Context(), artistID, requesterUserID, requesterRole, status, cursor, limit)
 	if err != nil {
 		return err
 	}
@@ -451,13 +506,65 @@ func (h *Handler) GetArtistCalendar(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_WEEK_START", "week_start must be in YYYY-MM-DD format")
 	}
 
-	bookings, err := h.svc.ListEnrichedBookingsForWeek(c.Context(), artistID, weekStart)
+	requesterUserID := middleware.UserIDFromContext(c)
+	requesterRole := middleware.RoleFromContext(c)
+
+	bookings, err := h.svc.ListEnrichedBookingsForWeek(
+		c.Context(), artistID, requesterUserID, requesterRole, weekStart)
 	if err != nil {
 		return err
 	}
 
 	// A calendar week is bounded, so it returns as a plain list with no cursor.
 	return response.List(c, bookings, &response.Meta{HasMore: false})
+}
+
+// JoinWaitlist godoc
+// @Summary      Join the waitlist for a fully-booked date (public, no account)
+// @Description  Guest-friendly, matching the rest of the booking funnel
+// @Description  identity is resolved by phone, no login required.
+// @Tags         bookings
+// @Accept       json
+// @Param        body body JoinWaitlistRequest true "Waitlist request"
+// @Success      201
+// @Router       /bookings/waitlist [post]
+func (h *Handler) JoinWaitlist(c *fiber.Ctx) error {
+	var req JoinWaitlistRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	entryID, err := h.svc.JoinWaitlist(c.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	return response.Created(c, fiber.Map{"id": entryID})
+}
+
+// GetWaitlistByArtist godoc
+// @Summary      Get an artist's active waitlist queue
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        artist_id path string true "Artist UUID"
+// @Success      200 {object} response.Body{data=[]WaitlistEntryResponse}
+// @Router       /bookings/artist/{artist_id}/waitlist [get]
+func (h *Handler) GetWaitlistByArtist(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("artist_id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
+	}
+
+	requesterUserID := middleware.UserIDFromContext(c)
+	requesterRole := middleware.RoleFromContext(c)
+
+	entries, err := h.svc.GetWaitlistByArtist(c.Context(), artistID, requesterUserID, requesterRole)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, entries)
 }
 
 // GetBookingsByCustomer godoc

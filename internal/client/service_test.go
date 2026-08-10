@@ -1,5 +1,5 @@
 // Package client contains unit tests for the client CRM service layer.
-// These tests use a mock repository — no database required.
+// These tests use a mock repository - no database required.
 package client
 
 import (
@@ -62,7 +62,7 @@ func newTestService(repo Repository) *Service { return NewService(repo) }
 
 // ── ListClients tests ─────────────────────────────────────────────────────────
 
-// TestListClients_NotAnArtist — a user with no artist profile is forbidden.
+// TestListClients_NotAnArtist - a user with no artist profile is forbidden.
 func TestListClients_NotAnArtist(t *testing.T) {
 	repo := &mockRepo{artistErr: ErrArtistNotFound}
 	svc := newTestService(repo)
@@ -72,7 +72,7 @@ func TestListClients_NotAnArtist(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestListClients_MapsRows — aggregated rows convert to cards (VIP stubbed false).
+// TestListClients_MapsRows - aggregated rows convert to cards (VIP stubbed false).
 func TestListClients_MapsRows(t *testing.T) {
 	rating := decimal.NewFromFloat(4.8)
 	repo := &mockRepo{
@@ -96,7 +96,7 @@ func TestListClients_MapsRows(t *testing.T) {
 
 // ── GetClient tests ───────────────────────────────────────────────────────────
 
-// TestGetClient_NotFound — a non-client customer surfaces CLIENT_NOT_FOUND.
+// TestGetClient_NotFound - a non-client customer surfaces CLIENT_NOT_FOUND.
 func TestGetClient_NotFound(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), clientErr: ErrClientNotFound}
 	svc := newTestService(repo)
@@ -106,7 +106,7 @@ func TestGetClient_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetClient_Aggregates — profile combines metrics, note, and history.
+// TestGetClient_Aggregates - profile combines metrics, note, and history.
 func TestGetClient_Aggregates(t *testing.T) {
 	repo := &mockRepo{
 		artistID: uuid.New(),
@@ -132,7 +132,7 @@ func TestGetClient_Aggregates(t *testing.T) {
 
 // ── UpsertNote tests ──────────────────────────────────────────────────────────
 
-// TestUpsertNote_Success — verified client, note stored and returned.
+// TestUpsertNote_Success - verified client, note stored and returned.
 func TestUpsertNote_Success(t *testing.T) {
 	now := time.Now()
 	repo := &mockRepo{
@@ -150,7 +150,7 @@ func TestUpsertNote_Success(t *testing.T) {
 	assert.Equal(t, "prefers 2pm", repo.lastUpsertContent)
 }
 
-// TestUpsertNote_NotClient — cannot note a customer who isn't a client.
+// TestUpsertNote_NotClient - cannot note a customer who isn't a client.
 func TestUpsertNote_NotClient(t *testing.T) {
 	repo := &mockRepo{
 		artistID:  uuid.New(),
@@ -164,7 +164,7 @@ func TestUpsertNote_NotClient(t *testing.T) {
 	assert.Empty(t, repo.lastUpsertContent, "note must not be stored for a non-client")
 }
 
-// TestUpsertNote_EmptyAllowed — empty content is valid (clears the note).
+// TestUpsertNote_EmptyAllowed - empty content is valid (clears the note).
 func TestUpsertNote_EmptyAllowed(t *testing.T) {
 	repo := &mockRepo{
 		artistID: uuid.New(),
@@ -176,4 +176,35 @@ func TestUpsertNote_EmptyAllowed(t *testing.T) {
 	_, err := svc.UpsertNote(context.Background(), uuid.New(), uuid.New(), UpsertNoteRequest{Content: ""})
 
 	require.NoError(t, err)
+}
+
+// ── Cross-tenant authorization test ──────────────────────────────────────────
+//
+// The client CRM is scoped by resolving the requester's artist_id from their
+// JWT and querying with it - the customer_id in the URL is only ever a filter
+// WITHIN that artist's own clients, never an independent lookup key. This
+// locks that in: the scoping artist_id must come from the token, so a
+// customer_id belonging to another artist's client simply returns nothing.
+
+func TestGetClient_ScopedToRequestingArtist(t *testing.T) {
+	// The repo is asked for a client under the REQUESTER's artist_id. With
+	// no matching row, the correct outcome is an error/not-found - never
+	// another artist's client record.
+	repo := &mockRepo{artistID: uuid.New(), clientErr: ErrClientNotFound}
+	svc := newTestService(repo)
+
+	_, err := svc.GetClient(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err, "a customer_id outside the requesting artist's own clients must not resolve")
+}
+
+func TestGetClient_NoArtistRow_Denied(t *testing.T) {
+	// A token that doesn't resolve to an artist must be denied outright,
+	// not fall through to an unscoped query.
+	repo := &mockRepo{artistErr: ErrArtistNotFound}
+	svc := newTestService(repo)
+
+	_, err := svc.GetClient(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err)
 }

@@ -31,15 +31,15 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //
 // Public routes (no auth):
 //
-//	GET  /api/v1/media/portfolio/:artist_id  — public portfolio for a given artist
+//	GET  /api/v1/media/portfolio/:artist_id  - public portfolio for a given artist
 //
 // Protected routes (artist Bearer):
 //
-//	GET    /api/v1/media/my                  — own portfolio
-//	POST   /api/v1/media                     — upload a photo
-//	DELETE /api/v1/media/:id                 — delete a photo
-//	PATCH  /api/v1/media/:id/cover           — set cover photo
-//	PATCH  /api/v1/media/reorder             — reorder all photos
+//	GET    /api/v1/media/my                  - own portfolio
+//	POST   /api/v1/media                     - upload a photo
+//	DELETE /api/v1/media/:id                 - delete a photo
+//	PATCH  /api/v1/media/:id/cover           - set cover photo
+//	PATCH  /api/v1/media/reorder             - reorder all photos
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
@@ -60,7 +60,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // GetPortfolio godoc
 // @Summary      Get public portfolio for an artist
 // @Description  Returns all photos for the artist ordered by display_order.
-// @Description  No authentication required — used by the customer discovery screen.
+// @Description  No authentication required - used by the customer discovery screen.
 // @Tags         media
 // @Produce      json
 // @Param        artist_id path string true "Artist UUID"

@@ -14,8 +14,8 @@ import (
 )
 
 // Service handles all media business logic.
-// It knows nothing about HTTP — no fiber.Ctx, no status codes.
-// It knows nothing about SQL — all DB access goes through Repository.
+// It knows nothing about HTTP - no fiber.Ctx, no status codes.
+// It knows nothing about SQL - all DB access goes through Repository.
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
@@ -30,7 +30,7 @@ func NewService(repo Repository) *Service {
 }
 
 // GetPortfolio returns the public portfolio for any artist.
-// No authentication required — used by the customer PWA discovery screen.
+// No authentication required - used by the customer PWA discovery screen.
 func (s *Service) GetPortfolio(ctx context.Context, artistID uuid.UUID) (*PortfolioResponse, error) {
 	items, err := s.repo.ListByArtist(ctx, artistID)
 	if err != nil {
@@ -78,7 +78,7 @@ func (s *Service) AddPhoto(ctx context.Context, userID uuid.UUID, req AddMediaRe
 		return nil, fmt.Errorf("add photo: count: %w", err)
 	}
 	if count >= MaxPortfolioPhotos {
-		return nil, apperror.Conflict("PORTFOLIO_FULL", "Portfolio is full — maximum 20 photos allowed")
+		return nil, apperror.Conflict("PORTFOLIO_FULL", "Portfolio is full - maximum 20 photos allowed")
 	}
 
 	item := &MediaItem{
@@ -115,7 +115,7 @@ func (s *Service) DeletePhoto(ctx context.Context, userID uuid.UUID, mediaID uui
 		return fmt.Errorf("delete photo: get item: %w", err)
 	}
 
-	// Ownership check — artist can only delete their own photos
+	// Ownership check - artist can only delete their own photos
 	if item.OwnerID != artistID {
 		return apperror.Forbidden("FORBIDDEN", "You do not have permission to delete this photo")
 	}

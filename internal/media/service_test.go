@@ -294,3 +294,39 @@ func TestReorder_InvalidUUID_ReturnsError(t *testing.T) {
 	err := svc.Reorder(context.Background(), userID, req)
 	assert.Error(t, err)
 }
+
+// ── Cross-tenant authorization tests ─────────────────────────────────────────
+//
+// Portfolio photos are owned by an artist. These lock in the OwnerID checks
+// so a future refactor can't drop them - without one, any artist could delete
+// a competitor's portfolio photos or hijack their cover image.
+
+func TestDeletePhoto_OtherArtistsPhoto_Denied(t *testing.T) {
+	mediaID := uuid.New()
+	attackerArtistID := uuid.New()
+	victimArtistID := uuid.New()
+
+	repo := &mockRepo{
+		artistID:    attackerArtistID,
+		getByIDItem: &MediaItem{ID: mediaID, OwnerID: victimArtistID},
+	}
+	svc := NewService(repo)
+
+	err := svc.DeletePhoto(context.Background(), uuid.New(), mediaID)
+
+	assert.Error(t, err, "an artist must not be able to delete another artist's photo")
+}
+
+func TestSetCover_OtherArtistsPhoto_Denied(t *testing.T) {
+	mediaID := uuid.New()
+
+	repo := &mockRepo{
+		artistID:    uuid.New(),
+		getByIDItem: &MediaItem{ID: mediaID, OwnerID: uuid.New()},
+	}
+	svc := NewService(repo)
+
+	err := svc.SetCover(context.Background(), uuid.New(), mediaID)
+
+	assert.Error(t, err, "an artist must not be able to set another artist's photo as a cover")
+}

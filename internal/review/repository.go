@@ -12,7 +12,7 @@ import (
 )
 
 // uniqueViolationCode is the PostgreSQL error code for a unique-constraint
-// violation — raised when a second review is inserted for the same booking.
+// violation - raised when a second review is inserted for the same booking.
 const uniqueViolationCode = "23505"
 
 // Repository defines all database operations for the review domain.
@@ -44,6 +44,19 @@ type Repository interface {
 	// GetBookingStatus returns the status, customer_id, and artist_id of a booking.
 	// Used to verify the booking is completed before allowing a review.
 	GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error)
+
+	// GetBookingIDByReviewToken resolves a review-link token to its booking's
+	// ID and customer_id - the identity proof for the guest review flow,
+	// replacing what a JWT would normally establish. Returns
+	// ErrInvalidReviewToken if no booking has this token.
+	GetBookingIDByReviewToken(ctx context.Context, token string) (bookingID, customerID uuid.UUID, err error)
+
+	// GetBookingContextByToken returns the display summary for the review
+	// link's landing screen - service, artist, store, time, price. Separate
+	// from GetBookingIDByReviewToken because the two callers need different
+	// shapes: one just needs IDs to authorise a write, the other needs
+	// human-readable fields to render a confirmation card.
+	GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error)
 
 	// GetArtistIDByUserID resolves a user's UUID to their artists.id. Returns
 	// ErrArtistNotFound if the user is not an artist. Used to authorise artist-only
@@ -257,6 +270,55 @@ func (r *pgRepo) GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (str
 		return "", uuid.Nil, uuid.Nil, fmt.Errorf("get booking status: %w", err)
 	}
 	return status, customerID, artistID, nil
+}
+
+// GetBookingIDByReviewToken resolves a review-link token to the booking's ID
+// and customer_id. Deliberately does NOT filter by status here - a token
+// only ever exists because CompleteBooking generated one at the moment the
+// booking became 'completed' (migration 013), so its existence already
+// implies that. The status check still happens, just once, inside the
+// existing CreateReview path this hands off to - no reason to duplicate it.
+func (r *pgRepo) GetBookingIDByReviewToken(ctx context.Context, token string) (uuid.UUID, uuid.UUID, error) {
+	var bookingID, customerID uuid.UUID
+	err := r.db.QueryRow(ctx, `
+		SELECT id, customer_id
+		FROM bookings
+		WHERE review_token = $1
+		AND deleted_at IS NULL`,
+		token,
+	).Scan(&bookingID, &customerID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, uuid.Nil, ErrInvalidReviewToken
+		}
+		return uuid.Nil, uuid.Nil, fmt.Errorf("get booking id by review token: %w", err)
+	}
+	return bookingID, customerID, nil
+}
+
+// GetBookingContextByToken returns the display fields for the review link's
+// landing screen, resolved with no auth - only what's needed to render
+// "Your Booking: X with Y, date, price" before the customer submits.
+func (r *pgRepo) GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error) {
+	ctxRow := &ReviewBookingContext{}
+	err := r.db.QueryRow(ctx, `
+		SELECT s.name, u.name, st.name, b.start_time, b.final_price
+		FROM bookings b
+		JOIN services s ON s.id = b.service_id
+		JOIN artists  a ON a.id = b.artist_id
+		JOIN users    u ON u.id = a.user_id
+		JOIN stores  st ON st.id = b.store_id
+		WHERE b.review_token = $1
+		AND b.deleted_at IS NULL`,
+		token,
+	).Scan(&ctxRow.ServiceName, &ctxRow.ArtistName, &ctxRow.StoreName, &ctxRow.StartTime, &ctxRow.FinalPrice)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidReviewToken
+		}
+		return nil, fmt.Errorf("get booking context by review token: %w", err)
+	}
+	return ctxRow, nil
 }
 
 // GetArtistIDByUserID resolves a user's UUID to their artists.id.

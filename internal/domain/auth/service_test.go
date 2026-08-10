@@ -1,5 +1,5 @@
 // Package auth contains unit tests for the auth service layer.
-// These tests use mock repositories — no database required.
+// These tests use mock repositories - no database required.
 package auth
 
 import (
@@ -282,7 +282,7 @@ func TestLogin_UserNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 
-	// Same error as wrong password — never reveal which one failed
+	// Same error as wrong password - never reveal which one failed
 	var appErr *apperror.AppError
 	errors.As(err, &appErr)
 	assert.Equal(t, "INVALID_CREDENTIALS", appErr.Code)

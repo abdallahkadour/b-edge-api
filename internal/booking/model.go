@@ -55,7 +55,7 @@ const SlotHoldDuration = 10 * time.Minute
 // form, ReleaseExpiredHolds expires the booking and there is nothing to clean up
 // because no real guest user was ever created.
 //
-// REQUIRED SEED — insert this user once (see seed_system_guest.sql):
+// REQUIRED SEED - insert this user once (see seed_system_guest.sql):
 //
 //	INSERT INTO users (id, name, email, password_hash, role, phone, status)
 //	VALUES ('00000000-0000-0000-0000-0000000000ff', 'Held Slot Placeholder',
@@ -74,8 +74,12 @@ var (
 	ErrBookingNotCancellable = errors.New("booking cannot be cancelled in its current status")
 	ErrNotBookingOwner       = errors.New("not authorised to act on this booking")
 	// ErrBookingNotHeld is returned when a held guest booking can no longer be
-	// submitted — it was already submitted or its 10-minute hold expired.
+	// submitted - it was already submitted or its 10-minute hold expired.
 	ErrBookingNotHeld = errors.New("booking is not in held status")
+	// ErrArtistNotFound is returned when a user has no matching artists row
+	// used when resolving a requester's users.id to their artists.id for
+	// ownership checks (bookings.artist_id references artists.id, not users.id).
+	ErrArtistNotFound = errors.New("artist profile not found for user")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
@@ -100,6 +104,13 @@ type Booking struct {
 	DepositAmount      decimal.Decimal `db:"deposit_amount"`
 	DepositDeadline    *time.Time      `db:"deposit_deadline"`
 	DepositPaidAt      *time.Time      `db:"deposit_paid_at"`
+	// DepositReference is an optional artist-entered note captured on
+	// confirmation - e.g. an OMT/Wish transaction code. Free text, never
+	// customer-facing.
+	DepositReference  *string `db:"deposit_reference"`
+	// ReviewToken is generated when the booking completes, letting the guest
+	// leave a review with no login required. See migration 013.
+	ReviewToken *string `db:"review_token"`
 	Channel            string          `db:"channel"`
 	SpecialRequests    *string         `db:"special_requests"`
 	CancellationReason *string         `db:"cancellation_reason"`
@@ -131,6 +142,10 @@ type Store struct {
 	WeekdayBufferMin   int             `db:"weekday_buffer_min"`
 	WeekendBufferMin   int             `db:"weekend_buffer_min"`
 	IsActive           bool            `db:"is_active"`
+	// Timezone is the store's IANA zone (e.g. "Asia/Beirut"). early_bird_cutoff
+	// and the store's business hours are wall-clock local times in this zone,
+	// resolved to instants at query time so DST transitions are handled.
+	Timezone string `db:"timezone"`
 }
 
 // BusinessHours holds working hours for a store on a given day.
@@ -165,7 +180,7 @@ var BlockingStatuses = []string{
 }
 
 // CalendarStatuses are the booking statuses shown on the artist calendar grid.
-// These are the committed/booked appointments — pending requests live in a
+// These are the committed/booked appointments - pending requests live in a
 // separate "requests" tab, and held/expired/cancelled/refunded are noise that
 // never belongs on the schedule. Mirrors how salon dashboards separate the
 // confirmed calendar from the incoming-request queue.
@@ -269,7 +284,7 @@ type CreateBookingRequest struct {
 
 // HoldGuestSlotRequest is the body for POST /api/v1/bookings/guest/hold.
 //
-// Sent when the customer taps a time slot on C-04. No identity is collected yet —
+// Sent when the customer taps a time slot on C-04. No identity is collected yet
 // only the chosen slot. The server creates a held booking (10-minute hold) pointed
 // at the system placeholder customer and returns its ID for the submit step.
 type HoldGuestSlotRequest struct {
@@ -319,6 +334,7 @@ type BookingResponse struct {
 	DepositAmount      decimal.Decimal `json:"deposit_amount"`
 	DepositDeadline    *time.Time      `json:"deposit_deadline,omitempty"`
 	DepositPaidAt      *time.Time      `json:"deposit_paid_at,omitempty"`
+	DepositReference   *string         `json:"deposit_reference,omitempty"`
 	Channel            string          `json:"channel"`
 	SpecialRequests    *string         `json:"special_requests,omitempty"`
 	CancellationReason *string         `json:"cancellation_reason,omitempty"`
@@ -343,6 +359,7 @@ func toResponse(b *Booking) *BookingResponse {
 		DepositAmount:      b.DepositAmount,
 		DepositDeadline:    b.DepositDeadline,
 		DepositPaidAt:      b.DepositPaidAt,
+		DepositReference:   b.DepositReference,
 		Channel:            b.Channel,
 		SpecialRequests:    b.SpecialRequests,
 		CancellationReason: b.CancellationReason,
@@ -359,6 +376,7 @@ type EnrichedBooking struct {
 	Booking
 	CustomerName  string  `db:"customer_name"`
 	CustomerPhone *string `db:"customer_phone"`
+	ArtistName    string  `db:"artist_name"`
 	ServiceName   string  `db:"service_name"`
 	StoreName     string  `db:"store_name"`
 	StoreCity     string  `db:"store_city"`
@@ -379,6 +397,7 @@ type EnrichedBookingResponse struct {
 	// Joined display fields
 	CustomerName  string  `json:"customer_name"`
 	CustomerPhone *string `json:"customer_phone,omitempty"`
+	ArtistName    string  `json:"artist_name"`
 	ServiceName   string  `json:"service_name"`
 	StoreName     string  `json:"store_name"`
 	StoreCity     string  `json:"store_city"`
@@ -394,6 +413,13 @@ type EnrichedBookingResponse struct {
 	// Deposit lifecycle
 	DepositDeadline *time.Time `json:"deposit_deadline,omitempty"`
 	DepositPaidAt   *time.Time `json:"deposit_paid_at,omitempty"`
+	DepositReference *string   `json:"deposit_reference,omitempty"`
+	// ReviewToken is present once the booking is completed. Artist-facing
+	// only - used to build a review-request link to send the customer
+	// manually (Calendar detail view) until automated WhatsApp delivery
+	// exists. Deliberately NOT exposed on the plain BookingResponse the
+	// guest funnel returns.
+	ReviewToken *string `json:"review_token,omitempty"`
 	// Meta
 	Channel            string    `json:"channel"`
 	SpecialRequests    *string   `json:"special_requests,omitempty"`
@@ -412,6 +438,7 @@ func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
 		ServiceID:          e.ServiceID,
 		CustomerName:       e.CustomerName,
 		CustomerPhone:      e.CustomerPhone,
+		ArtistName:         e.ArtistName,
 		ServiceName:        e.ServiceName,
 		StoreName:          e.StoreName,
 		StoreCity:          e.StoreCity,
@@ -424,6 +451,8 @@ func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
 		DepositAmount:      e.DepositAmount,
 		DepositDeadline:    e.DepositDeadline,
 		DepositPaidAt:      e.DepositPaidAt,
+		DepositReference:   e.DepositReference,
+		ReviewToken:        e.ReviewToken,
 		Channel:            e.Channel,
 		SpecialRequests:    e.SpecialRequests,
 		CancellationReason: e.CancellationReason,
@@ -436,3 +465,63 @@ const (
 	RoleArtist   = "artist"
 	RoleAdmin    = "admin"
 )
+
+// ── Waitlist (PRD §9.5) ──────────────────────────────────────────────────────
+
+// Waitlist entry statuses.
+const (
+	WaitlistStatusWaiting   = "waiting"
+	WaitlistStatusNotified  = "notified"
+	WaitlistStatusExpired   = "expired"
+	WaitlistStatusCancelled = "cancelled"
+)
+
+// waitlistConfirmWindow is how long a notified customer has to book before
+// the next person in line gets notified instead. PRD §9.5 gives "e.g. 30
+// minutes" as an example, not a hard number - 30 minutes taken as the
+// actual default.
+const waitlistConfirmWindow = 30 * time.Minute
+
+// WaitlistEntry mirrors a row in waitlist_entries.
+type WaitlistEntry struct {
+	ID              uuid.UUID
+	ArtistID        uuid.UUID
+	StoreID         uuid.UUID
+	ServiceID       uuid.UUID
+	CustomerID      uuid.UUID
+	RequestedDate   time.Time // date only, time component unused
+	Status          string
+	NotifiedAt      *time.Time
+	ConfirmDeadline *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// JoinWaitlistRequest is the body for POST /bookings/waitlist. Public - no
+// account needed, matching the guest-booking philosophy everywhere else in
+// this app. Identity is resolved by phone, same as a guest booking.
+type JoinWaitlistRequest struct {
+	ArtistID      string `json:"artist_id"      validate:"required,uuid"`
+	StoreID       string `json:"store_id"       validate:"required,uuid"`
+	ServiceID     string `json:"service_id"     validate:"required,uuid"`
+	RequestedDate string `json:"requested_date" validate:"required"` // YYYY-MM-DD
+	Name          string `json:"name"           validate:"required,min=2,max=100"`
+	Phone         string `json:"phone"          validate:"required,min=7,max=20"`
+}
+
+// WaitlistEntryResponse is the artist-facing view of a queue entry
+// includes customer name/phone (the artist-facing bookings list already
+// exposes these for the same reason: the artist needs to be able to reach
+// the person, not just know an ID exists).
+type WaitlistEntryResponse struct {
+	ID              uuid.UUID  `json:"id"`
+	ServiceID       uuid.UUID  `json:"service_id"`
+	ServiceName     string     `json:"service_name"`
+	CustomerName    string     `json:"customer_name"`
+	CustomerPhone   string     `json:"customer_phone"`
+	RequestedDate   string     `json:"requested_date"`
+	Status          string     `json:"status"`
+	NotifiedAt      *time.Time `json:"notified_at,omitempty"`
+	ConfirmDeadline *time.Time `json:"confirm_deadline,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}

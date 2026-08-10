@@ -127,7 +127,7 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 		})
 	}
 
-	// Unknown error — return 500, never expose internal details to client
+	// Unknown error - return 500, never expose internal details to client
 	// CRITICAL: We log this at .Error level because this means a server panic or lost database link!
 	log.Error("Critical system error or panic caught",
 		zap.String("path", c.Path()),
@@ -167,7 +167,7 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 // 		})
 // 	}
 
-// 	// Unknown error — return 500, never expose internal details
+// 	// Unknown error - return 500, never expose internal details
 // 	return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
 // 		"data": nil,
 // 		"error": fiber.Map{

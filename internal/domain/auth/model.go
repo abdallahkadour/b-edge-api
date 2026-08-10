@@ -37,7 +37,7 @@ const (
 )
 
 // Sentinel errors returned by the auth repository.
-// Services convert these into apperror types — never return apperror from a repository.
+// Services convert these into apperror types - never return apperror from a repository.
 var (
 	// ErrUserNotFound is returned when no user matches the given criteria.
 	ErrUserNotFound = errors.New("user not found")
@@ -86,7 +86,7 @@ type User struct {
 }
 
 // RefreshToken represents a stored hashed refresh token entry in the refresh_tokens table.
-// The raw token is never persisted — only its SHA-256 hash is stored.
+// The raw token is never persisted - only its SHA-256 hash is stored.
 type RefreshToken struct {
 	ID        uuid.UUID  `db:"id"`
 	UserID    uuid.UUID  `db:"user_id"`

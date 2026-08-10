@@ -2,6 +2,8 @@
 package artist
 
 import (
+	"errors"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,28 +33,28 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //     ("/me", "/salon/...", "/stores/...") must be registered before any
 //     "/:id" route, or Fiber parses the literal as an artist UUID.
 //
-//  2. Middleware attached to a prefix group — app.Group(prefix, mw) — applies
+//  2. Middleware attached to a prefix group - app.Group(prefix, mw) - applies
 //     to the WHOLE prefix from the moment the group is created, regardless of
 //     where later routes are registered. A public route under that same prefix
 //     therefore still runs the group's auth middleware and 401s. This is why
 //     auth is attached per-route below rather than via a group: the guest
 //     booking funnel reads /:id and /:id/services with no JWT.
 //
-// Public routes (no auth) — the customer PWA guest funnel:
+// Public routes (no auth) - the customer PWA guest funnel:
 //
-//	GET /api/v1/artists/:id          — public artist profile
-//	GET /api/v1/artists/:id/services — active services for an artist
+//	GET /api/v1/artists/:id          - public artist profile
+//	GET /api/v1/artists/:id/services - active services for an artist
 //
 // Protected routes (RequireAuth):
 //
-//	GET    /api/v1/artists/me                          — own profile
-//	PATCH  /api/v1/artists/:id                         — update own profile
-//	GET    /api/v1/artists/:id/stores                  — stores for an artist
-//	GET    /api/v1/artists/salon/stores                — stores for own salon
-//	GET    /api/v1/artists/salon/services              — services for own salon
-//	POST   /api/v1/artists/salon/services              — add service
-//	PATCH  /api/v1/artists/salon/services/:service_id  — update service
-//	DELETE /api/v1/artists/salon/services/:service_id  — deactivate service
+//	GET    /api/v1/artists/me                          - own profile
+//	PATCH  /api/v1/artists/:id                         - update own profile
+//	GET    /api/v1/artists/:id/stores                  - stores for an artist
+//	GET    /api/v1/artists/salon/stores                - stores for own salon
+//	GET    /api/v1/artists/salon/services              - services for own salon
+//	POST   /api/v1/artists/salon/services              - add service
+//	PATCH  /api/v1/artists/salon/services/:service_id  - update service
+//	DELETE /api/v1/artists/salon/services/:service_id  - deactivate service
 //	... (business hours routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
@@ -64,7 +66,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	const base = "/api/v1/artists"
 
-	// ── Literal paths — must precede every /:id route ────────────────────────
+	// ── Literal paths - must precede every /:id route ────────────────────────
 
 	// Profile
 	app.Get(base+"/me", auth, handler.GetMyProfile)
@@ -72,7 +74,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// Stores (own salon)
 	app.Get(base+"/salon/stores", auth, artistOnly, handler.GetStoresBySalon)
 
-	// Services (artist dashboard — own salon)
+	// Services (artist dashboard - own salon)
 	app.Get(base+"/salon/services", auth, artistOnly, handler.GetServicesBySalon)
 	app.Post(base+"/salon/services", auth, artistOnly, handler.CreateService)
 	app.Patch(base+"/salon/services/:service_id", auth, artistOnly, handler.UpdateService)
@@ -85,7 +87,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	app.Post(base+"/stores/:store_id/exceptions", auth, artistOnly, handler.CreateException)
 	app.Delete(base+"/stores/:store_id/exceptions/:date", auth, artistOnly, handler.DeleteException)
 
-	// ── Public parametric — no JWT, read by the guest booking funnel ─────────
+	// ── Public parametric - no JWT, read by the guest booking funnel ─────────
 	app.Patch(base+"/stores/:store_id", auth, artistOnly, handler.UpdateStore)
 	app.Get(base+"/:id/services", handler.GetPublicServicesByArtist)
 	app.Get(base+"/:id/stores", handler.GetStoresByArtist)
@@ -93,7 +95,12 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	// ── Protected parametric ─────────────────────────────────────────────────
 
-	app.Patch(base+"/:id", auth, handler.UpdateProfile)
+	// artistOnly is defence in depth. UpdateProfile already verifies
+	// profile.UserID == the caller's user_id, but that check alone is
+	// satisfied by ANY token carrying that user_id - including a
+	// customer-role token minted by the OTP flow. Requiring the artist role
+	// as well means a customer session can never reach this route at all.
+	app.Patch(base+"/:id", auth, artistOnly, handler.UpdateProfile)
 }
 
 // UpdateStore godoc
@@ -143,8 +150,15 @@ func (h *Handler) UpdateStore(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody
 // @Router       /artists/{id} [get]
 func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
-	artistID, err := uuid.Parse(c.Params("id"))
+	// The :id param accepts either a real UUID or a public handle (e.g.
+	// "rania") - ResolveArtistID tries UUID first, falls back to a handle
+	// lookup. This keeps every existing UUID-based link working exactly as
+	// before while letting new links use the shorter, human-readable form.
+	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
 	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+		}
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
@@ -170,8 +184,11 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody
 // @Router       /artists/{id}/services [get]
 func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
-	artistID, err := uuid.Parse(c.Params("id"))
+	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
 	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+		}
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
@@ -243,8 +260,11 @@ func (h *Handler) UpdateProfile(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=[]Store}
 // @Router       /artists/{id}/stores [get]
 func (h *Handler) GetStoresByArtist(c *fiber.Ctx) error {
-	artistID, err := uuid.Parse(c.Params("id"))
+	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
 	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+		}
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
@@ -400,7 +420,12 @@ func (h *Handler) GetBusinessHours(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid store ID")
 	}
 
-	hours, err := h.svc.GetBusinessHours(c.Context(), storeID)
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	hours, err := h.svc.GetBusinessHours(c.Context(), storeID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -429,7 +454,12 @@ func (h *Handler) SetBusinessHours(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
 	}
 
-	if err := h.svc.SetBusinessHours(c.Context(), storeID, req); err != nil {
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	if err := h.svc.SetBusinessHours(c.Context(), storeID, *salonID, req); err != nil {
 		return err
 	}
 
@@ -450,7 +480,12 @@ func (h *Handler) GetExceptions(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid store ID")
 	}
 
-	exceptions, err := h.svc.GetExceptions(c.Context(), storeID)
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	exceptions, err := h.svc.GetExceptions(c.Context(), storeID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -479,7 +514,12 @@ func (h *Handler) CreateException(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
 	}
 
-	if err := h.svc.CreateException(c.Context(), storeID, req); err != nil {
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	if err := h.svc.CreateException(c.Context(), storeID, *salonID, req); err != nil {
 		return err
 	}
 
@@ -506,7 +546,12 @@ func (h *Handler) DeleteException(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_DATE", "Date is required")
 	}
 
-	if err := h.svc.DeleteException(c.Context(), storeID, date); err != nil {
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+
+	if err := h.svc.DeleteException(c.Context(), storeID, *salonID, date); err != nil {
 		return err
 	}
 

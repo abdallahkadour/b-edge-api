@@ -24,10 +24,10 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 
 // RegisterRoutes attaches discovery routes to the Fiber app.
 //
-// All discovery routes are public (no auth) — this is the customer browse surface.
+// All discovery routes are public (no auth) - this is the customer browse surface.
 //
-//	GET /api/v1/discovery/artists      — browse/search artist cards
-//	GET /api/v1/discovery/artists/:id  — public artist profile (stores + services)
+//	GET /api/v1/discovery/artists      - browse/search artist cards
+//	GET /api/v1/discovery/artists/:id  - public artist profile (stores + services)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)

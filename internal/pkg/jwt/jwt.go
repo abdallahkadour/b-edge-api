@@ -51,6 +51,7 @@ func GenerateAccessToken(userID uuid.UUID, salonID *uuid.UUID, role string) (str
 			ExpiresAt: gojwt.NewNumericDate(time.Now().Add(accessTokenDuration)),
 			IssuedAt:  gojwt.NewNumericDate(time.Now()),
 			Issuer:    issuer,
+			ID:        uuid.New().String(),
 		},
 	}
 
@@ -63,7 +64,18 @@ func GenerateAccessToken(userID uuid.UUID, salonID *uuid.UUID, role string) (str
 }
 
 // GenerateRefreshToken creates a signed long-lived JWT refresh token.
-// It only embeds the user ID — no business data.
+// It only embeds the user ID - no business data.
+//
+// The ID (jti) claim is a random UUID, not left empty. Without it, two
+// refresh tokens generated for the same user within the same second are
+// byte-for-byte identical - every claim (sub, iat, exp, iss) matches
+// exactly, since JWT signing is deterministic. That's not just a
+// theoretical concern: refresh_tokens.token_hash has a UNIQUE constraint,
+// so a real collision (e.g. two refresh calls landing in the same second)
+// would make the second StoreRefreshToken call fail with a genuine 23505
+// constraint violation, not just "unlikely." Found via a test asserting
+// token rotation actually changes the token, which caught this before it
+// could surface as an intermittent production failure.
 func GenerateRefreshToken(userID uuid.UUID) (string, error) {
 	secret := os.Getenv("JWT_REFRESH_SECRET")
 	if secret == "" {
@@ -75,6 +87,7 @@ func GenerateRefreshToken(userID uuid.UUID) (string, error) {
 		ExpiresAt: gojwt.NewNumericDate(time.Now().Add(refreshTokenDuration)),
 		IssuedAt:  gojwt.NewNumericDate(time.Now()),
 		Issuer:    issuer,
+		ID:        uuid.New().String(),
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodHS256, claims)

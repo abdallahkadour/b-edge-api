@@ -40,6 +40,12 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	r.Delete("/:id", handler.DeleteReview)
 	r.Patch("/:id/hide", middleware.RequireRole("artist", "admin"), handler.HideReview)
 	r.Patch("/:id/show", middleware.RequireRole("artist", "admin"), handler.ShowReview)
+
+	// Guest review-link flow - deliberately OUTSIDE the RequireAuth() group.
+	// A guest who booked never receives a JWT; the token in the URL is the
+	// only credential these two routes accept, in place of a Bearer header.
+	app.Get("/api/v1/reviews/by-token/:token", handler.GetBookingContextByToken)
+	app.Post("/api/v1/reviews/by-token/:token", handler.CreateReviewByToken)
 }
 
 // CreateReview godoc
@@ -61,6 +67,53 @@ func (h *Handler) CreateReview(c *fiber.Ctx) error {
 	customerID := middleware.UserIDFromContext(c)
 
 	review, err := h.svc.CreateReview(c.Context(), req, customerID)
+	if err != nil {
+		return err
+	}
+
+	return response.Created(c, review)
+}
+
+// GetBookingContextByToken godoc
+// @Summary      Get booking summary for a review link (public, no auth)
+// @Description  Resolves a review-link token to the booking's service,
+// @Description  artist, store, time, and price - for rendering the
+// @Description  confirmation card before the customer submits a review.
+// @Tags         reviews
+// @Produce      json
+// @Param        token path string true "Review link token"
+// @Success      200 {object} response.Body{data=ReviewBookingContext}
+// @Router       /reviews/by-token/{token} [get]
+func (h *Handler) GetBookingContextByToken(c *fiber.Ctx) error {
+	ctxRow, err := h.svc.GetBookingContextByToken(c.Context(), c.Params("token"))
+	if err != nil {
+		return err
+	}
+	return response.OK(c, ctxRow)
+}
+
+// CreateReviewByToken godoc
+// @Summary      Submit a review via a guest review link (public, no auth)
+// @Description  The token in the URL is the only credential - there is no
+// @Description  Bearer header, since a guest customer never receives a
+// @Description  login session. Every existing review rule (must be
+// @Description  completed, one review per booking) still applies.
+// @Tags         reviews
+// @Accept       json
+// @Produce      json
+// @Param        token path string true "Review link token"
+// @Param        body body SubmitReviewByTokenRequest true "Review details"
+// @Success      201 {object} response.Body{data=ReviewResponse}
+// @Failure      404 {object} response.ErrorBody
+// @Failure      409 {object} response.ErrorBody
+// @Router       /reviews/by-token/{token} [post]
+func (h *Handler) CreateReviewByToken(c *fiber.Ctx) error {
+	var req SubmitReviewByTokenRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	review, err := h.svc.CreateReviewByToken(c.Context(), c.Params("token"), req)
 	if err != nil {
 		return err
 	}

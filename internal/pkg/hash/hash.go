@@ -35,7 +35,7 @@ func Password(plaintext string) (string, error) {
 
 // VerifyPassword checks a plaintext password against a bcrypt hash.
 // Returns nil if they match. Returns bcrypt.ErrMismatchedHashAndPassword
-// if they do not match — caller must not expose this distinction to the user.
+// if they do not match - caller must not expose this distinction to the user.
 func VerifyPassword(plaintext, hashed string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hashed), []byte(plaintext))
 }

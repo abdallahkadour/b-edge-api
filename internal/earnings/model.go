@@ -71,7 +71,9 @@ type EarningsSummaryResponse struct {
 	// Period is the date range that was queried.
 	Period Period `json:"period"`
 
-	// ThisMonth is the summary for the queried date range.
+	// ThisMonth is the summary for the real current calendar month
+	// independent of Period/TotalRevenue below. Does NOT change based on a
+	// requested custom range, same as Today and ThisWeek.
 	ThisMonth PeriodStats `json:"this_month"`
 
 	// Today is the summary for today.
@@ -107,7 +109,9 @@ type Period struct {
 
 // DailyEarnings holds revenue for a single day.
 type DailyEarnings struct {
-	// Day is the calendar day (time component is midnight UTC).
+	// Day is midnight in the business's reporting timezone (Asia/Beirut),
+	// expressed as its UTC instant - NOT midnight UTC. See GetDailyBreakdown
+	// for why this distinction matters.
 	Day time.Time `json:"day"`
 	// Revenue is the total earned on that day.
 	Revenue decimal.Decimal `json:"revenue"`

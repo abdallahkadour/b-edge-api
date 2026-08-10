@@ -29,7 +29,7 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //
 // Protected routes (artist Bearer):
 //
-//	GET /api/v1/earnings/summary  — earnings summary + breakdown
+//	GET /api/v1/earnings/summary  - earnings summary + breakdown
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)

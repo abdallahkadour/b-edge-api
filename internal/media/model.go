@@ -30,7 +30,7 @@ var (
 	ErrNotMediaOwner = errors.New("not authorised to modify this media item")
 
 	// ErrPortfolioFull is returned when the artist has reached the 20-photo limit.
-	ErrPortfolioFull = errors.New("portfolio is full — maximum 20 photos allowed")
+	ErrPortfolioFull = errors.New("portfolio is full - maximum 20 photos allowed")
 
 	// ErrArtistNotFound is returned when no artist profile matches the given user ID.
 	ErrArtistNotFound = errors.New("artist not found")
@@ -62,12 +62,12 @@ type AddMediaRequest struct {
 
 // ReorderRequest is the request body for PATCH /api/v1/media/reorder.
 type ReorderRequest struct {
-	// IDs is the desired order — all media IDs for this artist, ordered 0..N.
+	// IDs is the desired order - all media IDs for this artist, ordered 0..N.
 	IDs []string `json:"ids" validate:"required,min=1"`
 }
 
 // SetCoverRequest is the request body for PATCH /api/v1/media/:id/cover.
-// (No body needed — the ID is in the path. Struct kept for Swagger docs.)
+// (No body needed - the ID is in the path. Struct kept for Swagger docs.)
 type SetCoverRequest struct{}
 
 // ── Response structs ──────────────────────────────────────────────────────────

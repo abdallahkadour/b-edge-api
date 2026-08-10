@@ -39,8 +39,8 @@ const refreshTokenCookie = "refresh_token"
 const refreshTokenCookieDuration = 7 * 24 * time.Hour
 
 // Handler handles all HTTP requests for the auth domain.
-// It knows about HTTP — fiber.Ctx, cookies, status codes.
-// It knows nothing about SQL or business rules — those belong to Service.
+// It knows about HTTP - fiber.Ctx, cookies, status codes.
+// It knows nothing about SQL or business rules - those belong to Service.
 type Handler struct {
 	svc *Service
 	log *zap.Logger
@@ -64,14 +64,14 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	auth := app.Group("/api/v1/auth")
 
-	// Public routes — no token required
+	// Public routes - no token required
 	auth.Post("/register", handler.Register)
 	auth.Post("/login", handler.Login)
 	auth.Post("/refresh", handler.Refresh)
 	auth.Post("/forgot-password", handler.ForgotPassword)
 	auth.Post("/reset-password", handler.ResetPassword)
 
-	// Protected routes — valid JWT required
+	// Protected routes - valid JWT required
 	auth.Post("/logout", middleware.RequireAuth(), handler.Logout)
 	auth.Patch("/change-password", middleware.RequireAuth(), handler.ChangePassword)
 	auth.Patch("/freeze-account", middleware.RequireAuth(), handler.FreezeAccount)
@@ -155,7 +155,7 @@ func (h *Handler) Refresh(c *fiber.Ctx) error {
 		return err
 	}
 
-	// Rotate the cookie — old token revoked, new token set
+	// Rotate the cookie - old token revoked, new token set
 	setRefreshTokenCookie(c, result.RefreshToken)
 
 	return response.OK(c, fiber.Map{
@@ -175,7 +175,7 @@ func (h *Handler) Refresh(c *fiber.Ctx) error {
 func (h *Handler) Logout(c *fiber.Ctx) error {
 	rawToken := c.Cookies(refreshTokenCookie)
 	if rawToken != "" {
-		// Best effort — do not fail logout if token not found
+		// Best effort - do not fail logout if token not found
 		if err := h.svc.Logout(c.Context(), rawToken); err != nil {
 			h.log.Warn("logout: failed to revoke token", zap.Error(err))
 		}
@@ -201,10 +201,10 @@ func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
 	}
 
-	// Service is always silent — never reveals if email exists
+	// Service is always silent - never reveals if email exists
 	h.svc.ForgotPassword(c.Context(), req) //nolint:errcheck
 
-	// Always return 204 — never reveal if the email is registered
+	// Always return 204 - never reveal if the email is registered
 	return response.NoContent(c)
 }
 
@@ -314,7 +314,7 @@ func (h *Handler) DeleteAccount(c *fiber.Ctx) error {
 // ── Cookie helpers ───────────────────────────────────────────────────────────
 
 // setRefreshTokenCookie writes the refresh token as a secure httpOnly cookie.
-// JavaScript cannot read this cookie — only the browser and server can see it.
+// JavaScript cannot read this cookie - only the browser and server can see it.
 func setRefreshTokenCookie(c *fiber.Ctx, token string) {
 	c.Cookie(&fiber.Cookie{
 		Name:     refreshTokenCookie,

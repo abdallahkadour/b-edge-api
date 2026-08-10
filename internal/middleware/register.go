@@ -23,9 +23,14 @@ const rateLimitWindow = 15 * time.Minute
 // recover → requestid → logger → cors → rate limiter.
 // Auth middleware is applied per-route, not globally.
 func Register(app *fiber.App, logger *zap.Logger) {
-	// 1. Recover from panics — must be first so it wraps everything
+	// 1. Recover from panics - must be first so it wraps everything
+	// Fails CLOSED, deliberately. The inverse (`!= "production"`) leaks
+	// stack traces to clients whenever APP_ENV is unset, empty, or merely
+	// misspelled ("Production", "prod") - and APP_ENV is now required at
+	// startup, but this must stay safe even if that changes. Only an
+	// explicit "development" turns traces on.
 	app.Use(recover.New(recover.Config{
-		EnableStackTrace: os.Getenv("APP_ENV") != "production",
+		EnableStackTrace: os.Getenv("APP_ENV") == "development",
 	}))
 
 	// 2. Assign X-Request-ID to every request
@@ -34,7 +39,7 @@ func Register(app *fiber.App, logger *zap.Logger) {
 	// 3. Structured request logging via Zap
 	app.Use(NewLogger(logger))
 
-	// 4. CORS — allow only the configured client origin
+	// 4. CORS - allow only the configured client origin
 	clientURL := os.Getenv("CLIENT_URL")
 	if clientURL == "" {
 		clientURL = "http://localhost:4200"
@@ -46,7 +51,7 @@ func Register(app *fiber.App, logger *zap.Logger) {
 		AllowCredentials: true,
 	}))
 
-	// 5. Rate limiter — 100 requests per 15 minutes per IP
+	// 5. Rate limiter - 100 requests per 15 minutes per IP
 	app.Use(limiter.New(limiter.Config{
 		Max:        maxRequestsPerWindow,
 		Expiration: rateLimitWindow,

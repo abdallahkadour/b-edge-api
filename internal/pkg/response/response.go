@@ -1,11 +1,11 @@
 // Package response provides standardised HTTP response helpers for the B-Edge API.
-// All handlers use these helpers — never call c.JSON directly in a handler.
+// All handlers use these helpers - never call c.JSON directly in a handler.
 package response
 
 import "github.com/gofiber/fiber/v2"
 
 // Body is the standard success response envelope.
-// Used only for Swagger documentation — never instantiated directly.
+// Used only for Swagger documentation - never instantiated directly.
 type Body struct {
 	Data  interface{} `json:"data"`
 	Error interface{} `json:"error"`
@@ -13,7 +13,7 @@ type Body struct {
 }
 
 // ErrorBody is the standard error response envelope.
-// Used only for Swagger documentation — never instantiated directly.
+// Used only for Swagger documentation - never instantiated directly.
 type ErrorBody struct {
 	Data  interface{}  `json:"data"`
 	Error ErrorDetails `json:"error"`

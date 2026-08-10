@@ -1,11 +1,11 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- B-Edge Initial Schema
 -- Rules applied:
---   • TIMESTAMPTZ everywhere — never TIMESTAMP
---   • NUMERIC(10,2) for all money — never FLOAT
+--   • TIMESTAMPTZ everywhere - never TIMESTAMP
+--   • NUMERIC(10,2) for all money - never FLOAT
 --   • lock_timeout on every migration
 --   • Explicit FK indexes (separate migration 002)
---   • GIST exclusion constraint on bookings — prevents double booking at DB level
+--   • GIST exclusion constraint on bookings - prevents double booking at DB level
 -- ─────────────────────────────────────────────────────────────────────────────
 
 SET lock_timeout = '5s';
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS stores (
   -- early bird: slots before this time are flagged with extra fee
   early_bird_cutoff     TIME,
   early_bird_fee        NUMERIC(10,2) NOT NULL DEFAULT 0.00,
-  -- cross-store travel buffers (minutes) — weekday vs weekend
+  -- cross-store travel buffers (minutes) - weekday vs weekend
   weekday_buffer_min    INTEGER      NOT NULL DEFAULT 150,
   weekend_buffer_min    INTEGER      NOT NULL DEFAULT 90,
   is_active             BOOLEAN      NOT NULL DEFAULT TRUE,
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS services (
   description           TEXT,
   duration_min          INTEGER       NOT NULL CHECK (duration_min >= 15 AND duration_min <= 480),
   -- active_duration_min: artist working time before processing gap starts
-  -- NULL means no processing gap — artist is blocked for full duration
+  -- NULL means no processing gap - artist is blocked for full duration
   active_duration_min   INTEGER,
   price                 NUMERIC(10,2) NOT NULL CHECK (price >= 0),
   deposit_amount        NUMERIC(10,2) NOT NULL DEFAULT 0.00,
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS services (
 -- ─────────────────────────────────────────────────────────────────────────────
 -- BOOKINGS
 -- Core entity. GIST exclusion constraint prevents double booking at DB level.
--- This is the final atomic guard — no application-level check can replace it.
+-- This is the final atomic guard - no application-level check can replace it.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS bookings (
   id                  UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   customer_id         UUID          NOT NULL REFERENCES users(id),
   service_id          UUID          NOT NULL REFERENCES services(id),
   -- start_time and end_time replace separate date + time columns
-  -- stored as TIMESTAMPTZ — always UTC, displayed in Asia/Beirut
+  -- stored as TIMESTAMPTZ - always UTC, displayed in Asia/Beirut
   start_time          TIMESTAMPTZ   NOT NULL,
   end_time            TIMESTAMPTZ   NOT NULL,
   -- held_until: slot is reserved during checkout for 10 minutes
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS bookings (
                         'refund_due',      -- refund approved, not yet sent
                         'refunded'         -- refund sent
                       )),
-  -- financial fields — all NUMERIC(10,2), never FLOAT
+  -- financial fields - all NUMERIC(10,2), never FLOAT
   original_price      NUMERIC(10,2) NOT NULL,
   discount_amount     NUMERIC(10,2) NOT NULL DEFAULT 0.00,
   final_price         NUMERIC(10,2) NOT NULL,

@@ -1,5 +1,5 @@
 // Package discovery contains unit tests for the discovery service layer.
-// These tests use a mock repository — no database required.
+// These tests use a mock repository - no database required.
 package discovery
 
 import (
@@ -52,7 +52,7 @@ func newTestService(repo Repository, now time.Time) *Service {
 
 // ── ListArtists tests ─────────────────────────────────────────────────────────
 
-// TestListArtists_InvalidCategory — an unknown category is rejected.
+// TestListArtists_InvalidCategory - an unknown category is rejected.
 func TestListArtists_InvalidCategory(t *testing.T) {
 	svc := newTestService(&mockRepo{}, time.Now())
 
@@ -61,7 +61,7 @@ func TestListArtists_InvalidCategory(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestListArtists_ValidCategoryPassesThrough — a valid category reaches the repo.
+// TestListArtists_ValidCategoryPassesThrough - a valid category reaches the repo.
 func TestListArtists_ValidCategoryPassesThrough(t *testing.T) {
 	repo := &mockRepo{listCards: nil}
 	svc := newTestService(repo, time.Now())
@@ -73,7 +73,7 @@ func TestListArtists_ValidCategoryPassesThrough(t *testing.T) {
 	assert.Equal(t, "Beirut", repo.lastListParams.City)
 }
 
-// TestListArtists_DefaultsLimit — a zero/oversized limit is normalised.
+// TestListArtists_DefaultsLimit - a zero/oversized limit is normalised.
 func TestListArtists_DefaultsLimit(t *testing.T) {
 	repo := &mockRepo{}
 	svc := newTestService(repo, time.Now())
@@ -87,7 +87,7 @@ func TestListArtists_DefaultsLimit(t *testing.T) {
 	assert.Equal(t, defaultPageSize, repo.lastListParams.Limit)
 }
 
-// TestListArtists_NewBadge — an artist created within the window is flagged new;
+// TestListArtists_NewBadge - an artist created within the window is flagged new;
 // an older one is not.
 func TestListArtists_NewBadge(t *testing.T) {
 	now := time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC)
@@ -112,7 +112,7 @@ func TestListArtists_NewBadge(t *testing.T) {
 
 // ── GetArtistProfile tests ────────────────────────────────────────────────────
 
-// TestGetArtistProfile_NotFound — missing artist surfaces ARTIST_NOT_FOUND.
+// TestGetArtistProfile_NotFound - missing artist surfaces ARTIST_NOT_FOUND.
 func TestGetArtistProfile_NotFound(t *testing.T) {
 	repo := &mockRepo{profileErr: ErrArtistNotFound}
 	svc := newTestService(repo, time.Now())
@@ -122,7 +122,7 @@ func TestGetArtistProfile_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetArtistProfile_Aggregates — profile, stores, and services combine.
+// TestGetArtistProfile_Aggregates - profile, stores, and services combine.
 func TestGetArtistProfile_Aggregates(t *testing.T) {
 	salonID := uuid.New()
 	repo := &mockRepo{
@@ -151,7 +151,7 @@ func TestGetArtistProfile_Aggregates(t *testing.T) {
 	assert.Equal(t, salonID, repo.lastSalonServices, "services fetched for the artist's salon")
 }
 
-// TestGetArtistProfile_NoSalon — an artist with no salon returns an empty (non-nil)
+// TestGetArtistProfile_NoSalon - an artist with no salon returns an empty (non-nil)
 // services list and does not call GetSalonServices.
 func TestGetArtistProfile_NoSalon(t *testing.T) {
 	repo := &mockRepo{

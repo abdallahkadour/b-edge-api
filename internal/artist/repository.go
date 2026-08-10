@@ -9,13 +9,23 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
+const uniqueViolationCode = "23505"
 
 // Repository defines all database operations for the artist domain.
 type Repository interface {
 	GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error)
 	GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error)
+	// GetArtistIDByHandle resolves a public handle (e.g. "rania") to the
+	// artist's real UUID. Returns ErrArtistNotFound if no artist has that
+	// handle - deliberately the same error a bad UUID lookup returns, so
+	// the caller can't distinguish "handle doesn't exist" from "UUID
+	// doesn't exist" and probe for which handles are taken.
+	GetArtistIDByHandle(ctx context.Context, handle string) (uuid.UUID, error)
 	UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error
 	GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error)
 	GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error)
@@ -47,7 +57,7 @@ func NewRepository(db *pgxpool.Pool) Repository {
 //
 // COALESCE($n, col) preserves the existing value when a field is omitted.
 // early_bird_cutoff is the exception: it is nullable, and COALESCE alone
-// cannot clear a column — passing NULL preserves rather than clears. The
+// cannot clear a column - passing NULL preserves rather than clears. The
 // CASE branch lets an explicit empty string mean "remove the cutoff".
 func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error {
 	tag, err := r.db.Exec(ctx, `
@@ -61,13 +71,15 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 			early_bird_fee        = COALESCE($8::NUMERIC, early_bird_fee),
 			weekday_buffer_min    = COALESCE($9, weekday_buffer_min),
 			weekend_buffer_min    = COALESCE($10, weekend_buffer_min),
-			is_active             = COALESCE($11, is_active),
+			timezone              = COALESCE($11, timezone),
+			is_active             = COALESCE($12, is_active),
 			updated_at            = NOW()
 		WHERE id = $1`,
 		storeID,
 		req.Name, req.NameAr, req.Address, req.Phone,
 		req.SameDayNoticeHours, req.EarlyBirdCutoff, req.EarlyBirdFee,
-		req.WeekdayBufferMin, req.WeekendBufferMin, req.IsActive,
+		req.WeekdayBufferMin, req.WeekendBufferMin,
+		req.Timezone, req.IsActive,
 	)
 	if err != nil {
 		return fmt.Errorf("update store: %w", err)
@@ -83,7 +95,7 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error) {
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
-		SELECT a.id, a.user_id, a.salon_id,
+		SELECT a.id, a.user_id, a.salon_id, a.handle,
 		       u.name, u.email, u.phone,
 		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
@@ -94,7 +106,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 		AND u.deleted_at IS NULL`,
 		artistID,
 	).Scan(
-		&p.ID, &p.UserID, &p.SalonID,
+		&p.ID, &p.UserID, &p.SalonID, &p.Handle,
 		&p.Name, &p.Email, &p.Phone,
 		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
@@ -109,10 +121,23 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 	return p, nil
 }
 
+// GetArtistIDByHandle resolves a public handle to the artist's UUID.
+func (r *pgRepo) GetArtistIDByHandle(ctx context.Context, handle string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT id FROM artists WHERE handle = $1`, handle).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrArtistNotFound
+		}
+		return uuid.Nil, fmt.Errorf("get artist id by handle: %w", err)
+	}
+	return id, nil
+}
+
 func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error) {
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
-		SELECT a.id, a.user_id, a.salon_id,
+		SELECT a.id, a.user_id, a.salon_id, a.handle,
 		       u.name, u.email, u.phone,
 		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
@@ -123,7 +148,7 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 		AND u.deleted_at IS NULL`,
 		userID,
 	).Scan(
-		&p.ID, &p.UserID, &p.SalonID,
+		&p.ID, &p.UserID, &p.SalonID, &p.Handle,
 		&p.Name, &p.Email, &p.Phone,
 		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
@@ -141,15 +166,20 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE artists
-		SET bio        = COALESCE($1, bio),
-		    bio_ar     = COALESCE($2, bio_ar),
-		    instagram  = COALESCE($3, instagram),
-		    avatar_url = CASE WHEN $4 = '' THEN NULL ELSE COALESCE($4, avatar_url) END,
+		SET handle     = COALESCE($1, handle),
+		    bio        = COALESCE($2, bio),
+		    bio_ar     = COALESCE($3, bio_ar),
+		    instagram  = COALESCE($4, instagram),
+		    avatar_url = CASE WHEN $5 = '' THEN NULL ELSE COALESCE($5, avatar_url) END,
 		    updated_at = NOW()
-		WHERE id = $5`,
-		req.Bio, req.BioAr, req.Instagram, req.AvatarURL, artistID,
+		WHERE id = $6`,
+		req.Handle, req.Bio, req.BioAr, req.Instagram, req.AvatarURL, artistID,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode {
+			return ErrHandleTaken
+		}
 		return fmt.Errorf("update artist profile: %w", err)
 	}
 	return nil
@@ -166,7 +196,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		SELECT id, salon_id, name, name_ar, address, city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
-		       is_active, created_at, updated_at
+		       timezone, is_active, created_at, updated_at
 		FROM stores
 		WHERE id = $1`,
 		storeID,
@@ -174,7 +204,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		&s.ID, &s.SalonID, &s.Name, &s.NameAr, &s.Address, &s.City, &s.Country, &s.Phone,
 		&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 		&s.WeekdayBufferMin, &s.WeekendBufferMin,
-		&s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+		&s.Timezone, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -191,7 +221,7 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 		       s.city, s.country, s.phone,
 		       s.same_day_notice_hours, s.early_bird_cutoff, s.early_bird_fee,
 		       s.weekday_buffer_min, s.weekend_buffer_min,
-		       s.is_active, s.created_at, s.updated_at
+		       s.timezone, s.is_active, s.created_at, s.updated_at
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
 		WHERE ast.artist_id = $1
@@ -212,7 +242,7 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 		       city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
-		       is_active, created_at, updated_at
+		       timezone, is_active, created_at, updated_at
 		FROM stores
 		WHERE salon_id = $1
 		AND is_active = TRUE
@@ -451,7 +481,7 @@ func scanStores(rows pgx.Rows) ([]*Store, error) {
 			&s.City, &s.Country, &s.Phone,
 			&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 			&s.WeekdayBufferMin, &s.WeekendBufferMin,
-			&s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+			&s.Timezone, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan store: %w", err)
 		}

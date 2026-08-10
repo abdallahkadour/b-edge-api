@@ -3,6 +3,9 @@ package booking
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -15,8 +18,26 @@ import (
 )
 
 // exclusionViolationCode is the PostgreSQL error code for GIST exclusion violations.
-// Returned when two bookings overlap for the same artist — double booking attempt.
+// Returned when two bookings overlap for the same artist - double booking attempt.
 const exclusionViolationCode = "23P01"
+
+// reviewTokenLength matches the byte length used for password reset tokens
+// in internal/domain/auth (generateSecureToken) - 32 random bytes, hex
+// encoded to 64 characters, matching the VARCHAR(64) column.
+const reviewTokenLength = 32
+
+// generateReviewToken produces a cryptographically random, URL-safe token
+// for the guest review-link feature. A customer proves "this is my
+// appointment" by possessing this token - the same trust model as a
+// password reset link - since they never receive a login session to prove
+// identity any other way.
+func generateReviewToken() (string, error) {
+	b := make([]byte, reviewTokenLength)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate review token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
 const uniqueViolationCode = "23505"
@@ -49,13 +70,13 @@ type Repository interface {
 	GetArtistCrossStoreBookings(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, date time.Time) ([]*Booking, error)
 
 	// GetArtistStoreBuffer returns the travel buffer between two stores for an artist.
-	// Returns nil if no specific buffer is configured — caller uses store defaults.
+	// Returns nil if no specific buffer is configured - caller uses store defaults.
 	GetArtistStoreBuffer(ctx context.Context, artistID uuid.UUID, fromStoreID uuid.UUID, toStoreID uuid.UUID) (*ArtistStoreBuffer, error)
 
 	// ── Booking lifecycle ───────────────────────────────────────────────
 
 	// CreateBooking inserts a new booking. The GIST constraint is the final
-	// atomic guard — returns ErrSlotUnavailable on exclusion violation.
+	// atomic guard - returns ErrSlotUnavailable on exclusion violation.
 	CreateBooking(ctx context.Context, b *Booking) error
 
 	// GetBookingByID fetches a single booking by primary key.
@@ -73,7 +94,7 @@ type Repository interface {
 
 	// ListEnrichedBookingsForWeek returns an artist's committed appointments
 	// (CalendarStatuses) within the 7-day window [weekStart, weekStart+7d),
-	// ordered by start_time. No pagination — a week is bounded. Used by the
+	// ordered by start_time. No pagination - a week is bounded. Used by the
 	// calendar grid.
 	ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error)
 
@@ -94,6 +115,49 @@ type Repository interface {
 	// UpdateBookingStatus transitions a booking to a new status.
 	UpdateBookingStatus(ctx context.Context, id uuid.UUID, status string) error
 
+	// GetArtistIDByUserID resolves a requester's users.id to their artists.id.
+	// bookings.artist_id references artists.id, not users.id, so any ownership
+	// check comparing a requester against a booking's artist must resolve
+	// through this first. Returns ErrArtistNotFound if the user has no
+	// artist profile.
+	GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
+
+	// CreateWaitlistEntry adds a customer to the queue for a fully-booked
+	// (artist, store, service, date) combination.
+	CreateWaitlistEntry(ctx context.Context, artistID, storeID, serviceID, customerID uuid.UUID, date time.Time) (uuid.UUID, error)
+
+	// GetWaitlistByArtist returns every active (waiting or notified) entry
+	// for an artist, newest-service-request-first per queue but overall
+	// ordered so the artist can scan their whole waitlist at a glance.
+	GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([]*WaitlistEntryResponse, error)
+
+	// NotifyNextWaitlistEntry is called after a booking cancellation/no-show
+	// frees up a slot. First expires any stale 'notified' entry for this
+	// exact (artist, store, service, date) group past its confirm_deadline
+	// - the lazy-expiry mechanism migration 016 documents - then, if a
+	// 'waiting' entry exists (the oldest one, FIFO), notifies it: stamps
+	// notified_at/confirm_deadline, flips status to 'notified', and enqueues
+	// the WhatsApp message. A no-op (returns nil, does nothing) if the
+	// waitlist for this exact group is empty - the common case, since most
+	// cancellations don't have anyone waiting.
+	NotifyNextWaitlistEntry(ctx context.Context, artistID, storeID, serviceID uuid.UUID, date time.Time) error
+
+	// GetBookingNotificationContext returns the customer name and service
+	// name for a booking - the minimum needed to personalise a WhatsApp
+	// message ("Hi Sarah! Your Bridal Makeup booking..."). A small, focused
+	// query rather than reusing the full enriched-booking query, since
+	// that pulls far more than a notification message needs.
+	GetBookingNotificationContext(ctx context.Context, bookingID uuid.UUID) (customerName, serviceName string, err error)
+
+	// EnqueueNotification inserts a pending row for the WhatsApp worker to
+	// pick up. Always succeeds regardless of whether Twilio is actually
+	// configured - the worker itself is what checks for credentials and
+	// logs/skips if they're missing (see internal/notification/worker.go).
+	// This means notifications simply queue up and start sending
+	// automatically the moment real credentials exist; nothing here needs
+	// to change when that happens.
+	EnqueueNotification(ctx context.Context, bookingID *uuid.UUID, userID uuid.UUID, templateName, message string) error
+
 	// AttachGuestAndSubmit repoints a held guest booking from the placeholder
 	// customer to the real guest user and transitions held → pending, in one
 	// guarded UPDATE. Returns ErrBookingNotHeld if the booking is no longer a
@@ -106,12 +170,24 @@ type Repository interface {
 	// ConfirmDeposit transitions deposit_paid → confirmed.
 	ConfirmDeposit(ctx context.Context, id uuid.UUID) error
 
+	// ConfirmDepositReceived transitions approved → confirmed directly,
+	// setting deposit_paid_at in the same statement. This is the primary
+	// artist-facing action: she checks OMT/Wish and confirms the moment
+	// the transfer lands, so the deposit_paid and confirmed steps collapse
+	// into a single atomic transition rather than two separate clicks.
+	// reference is an optional artist-entered note (e.g. a transaction
+	// code) for her own reconciliation - nil leaves the column untouched.
+	ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference *string) error
+
 	// CancelBooking cancels a booking with a reason and sets cancelled_at.
 	// refundDue=true sets status to refund_due instead of cancelled.
 	CancelBooking(ctx context.Context, id uuid.UUID, reason string, refundDue bool) error
 
-	// CompleteBooking transitions confirmed → completed.
-	CompleteBooking(ctx context.Context, id uuid.UUID) error
+	// CompleteBooking transitions confirmed → completed, generating the
+	// guest review-link token in the same statement and returning it so the
+	// caller can enqueue the review-request notification immediately,
+	// without a second query to re-fetch what was just written.
+	CompleteBooking(ctx context.Context, id uuid.UUID) (reviewToken string, err error)
 
 	// MarkNoShow transitions confirmed → no_show.
 	MarkNoShow(ctx context.Context, id uuid.UUID) error
@@ -138,7 +214,7 @@ func NewRepository(db *pgxpool.Pool) Repository {
 }
 
 // isExclusionViolation reports whether err is a PostgreSQL GIST exclusion violation.
-// This is the double-booking signal — two overlapping bookings for the same artist.
+// This is the double-booking signal - two overlapping bookings for the same artist.
 func isExclusionViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == exclusionViolationCode
@@ -148,7 +224,7 @@ func isExclusionViolation(err error) bool {
 // Column order must match every SELECT that uses this function.
 //
 // NOTE: b.SessionID is intentionally NOT scanned here. The bookings table has
-// no session_id column yet — it will be added by migration 005 alongside
+// no session_id column yet - it will be added by migration 005 alongside
 // multi-artist session support. Until then SessionID always remains nil.
 func scanBooking(row pgx.Row, b *Booking) error {
 	return row.Scan(
@@ -168,6 +244,8 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositAmount,
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
+		&b.DepositReference,
+		&b.ReviewToken,
 		&b.Channel,
 		&b.SpecialRequests,
 		&b.CancellationReason,
@@ -183,12 +261,12 @@ func scanBooking(row pgx.Row, b *Booking) error {
 // bookingSelectCols is the canonical column list for booking SELECT queries.
 // Must match scanBooking and scanBookings exactly.
 //
-// NOTE: session_id is intentionally excluded — see scanBooking.
+// NOTE: session_id is intentionally excluded - see scanBooking.
 const bookingSelectCols = `
 	id, salon_id, store_id, artist_id, customer_id, service_id,
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price,
-	deposit_amount, deposit_deadline, deposit_paid_at,
+	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
@@ -201,20 +279,29 @@ const enrichedSelectCols = `
 	b.id, b.salon_id, b.store_id, b.artist_id, b.customer_id, b.service_id,
 	b.start_time, b.end_time, b.held_until, b.status,
 	b.original_price, b.discount_amount, b.final_price,
-	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at,
+	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.review_token,
 	b.channel, b.special_requests, b.cancellation_reason,
 	b.cancelled_at, b.completed_at, b.no_show_at,
 	b.created_at, b.updated_at, b.deleted_at,
 	u.name  AS customer_name,
 	u.phone AS customer_phone,
+	au.name AS artist_name,
 	s.name  AS service_name,
 	st.name AS store_name,
 	st.city AS store_city`
 
 // enrichedFrom is the shared FROM + JOIN clause for enriched booking queries.
+// The artists/au double-join exists purely to surface the ARTIST's name
+// needed by the customer-facing "My Bookings" screen (a customer looking at
+// their own history needs to know whose appointment it was), which none of
+// the other enriched-query consumers (artist's own bookings list, Calendar,
+// Deposit Queue) actually need since they already know who they are. Harmless
+// there - just an unused extra column - genuinely necessary here.
 const enrichedFrom = `
 	FROM bookings b
 	JOIN users    u  ON u.id  = b.customer_id
+	JOIN artists  art ON art.id = b.artist_id
+	JOIN users    au ON au.id = art.user_id
 	JOIN services s  ON s.id  = b.service_id
 	JOIN stores   st ON st.id = b.store_id`
 
@@ -225,11 +312,11 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 		&e.ID, &e.SalonID, &e.StoreID, &e.ArtistID, &e.CustomerID, &e.ServiceID,
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
-		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt,
+		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.ReviewToken,
 		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
 		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
-		&e.CustomerName, &e.CustomerPhone, &e.ServiceName, &e.StoreName, &e.StoreCity,
+		&e.CustomerName, &e.CustomerPhone, &e.ArtistName, &e.ServiceName, &e.StoreName, &e.StoreCity,
 	)
 }
 
@@ -337,14 +424,14 @@ func (r *pgRepo) GetStore(ctx context.Context, storeID uuid.UUID) (*Store, error
 	err := r.db.QueryRow(ctx, `
 		SELECT id, salon_id, name, city,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
-		       weekday_buffer_min, weekend_buffer_min, is_active
+		       weekday_buffer_min, weekend_buffer_min, is_active, timezone
 		FROM stores
 		WHERE id = $1 AND is_active = TRUE`,
 		storeID,
 	).Scan(
 		&s.ID, &s.SalonID, &s.Name, &s.City,
 		&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
-		&s.WeekdayBufferMin, &s.WeekendBufferMin, &s.IsActive,
+		&s.WeekdayBufferMin, &s.WeekendBufferMin, &s.IsActive, &s.Timezone,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -366,7 +453,7 @@ func (r *pgRepo) GetBusinessHours(ctx context.Context, storeID uuid.UUID, dayOfW
 	).Scan(&bh.ID, &bh.StoreID, &bh.DayOfWeek, &bh.OpenTime, &bh.CloseTime, &bh.IsOpen)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // no hours configured for this day — treat as closed
+			return nil, nil // no hours configured for this day - treat as closed
 		}
 		return nil, fmt.Errorf("get business hours: %w", err)
 	}
@@ -374,7 +461,7 @@ func (r *pgRepo) GetBusinessHours(ctx context.Context, storeID uuid.UUID, dayOfW
 }
 
 // GetBusinessHoursException checks for a holiday or special hours on a date.
-// Returns nil if no exception exists — caller uses regular business hours.
+// Returns nil if no exception exists - caller uses regular business hours.
 func (r *pgRepo) GetBusinessHoursException(ctx context.Context, storeID uuid.UUID, date time.Time) (*BusinessHoursException, error) {
 	ex := &BusinessHoursException{}
 	err := r.db.QueryRow(ctx, `
@@ -385,7 +472,7 @@ func (r *pgRepo) GetBusinessHoursException(ctx context.Context, storeID uuid.UUI
 	).Scan(&ex.ID, &ex.StoreID, &ex.ExceptionDate, &ex.IsClosed, &ex.OpenTime, &ex.CloseTime, &ex.Reason)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // no exception — normal day
+			return nil, nil // no exception - normal day
 		}
 		return nil, fmt.Errorf("get business hours exception: %w", err)
 	}
@@ -476,7 +563,7 @@ func (r *pgRepo) GetArtistStoreBuffer(ctx context.Context, artistID uuid.UUID, f
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // no override — use store defaults
+			return nil, nil // no override - use store defaults
 		}
 		return nil, fmt.Errorf("get artist store buffer: %w", err)
 	}
@@ -489,7 +576,7 @@ func (r *pgRepo) GetArtistStoreBuffer(ctx context.Context, artistID uuid.UUID, f
 // The GIST exclusion constraint on the database is the final atomic guard.
 // If two requests race for the same slot, one wins and the other gets ErrSlotUnavailable.
 //
-// NOTE: session_id is intentionally NOT inserted here — the bookings table has
+// NOTE: session_id is intentionally NOT inserted here - the bookings table has
 // no such column yet. See scanBooking for details. b.SessionID always remains
 // nil until migration 005 adds the column and this INSERT is updated alongside it.
 func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking) error {
@@ -610,13 +697,181 @@ func (r *pgRepo) UpdateBookingStatus(ctx context.Context, id uuid.UUID, status s
 	return nil
 }
 
+// GetArtistIDByUserID resolves a user's UUID to their artists.id.
+// Returns ErrArtistNotFound if the user has no artist profile.
+func (r *pgRepo) GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	var artistID uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT id FROM artists WHERE user_id = $1`, userID).Scan(&artistID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrArtistNotFound
+		}
+		return uuid.Nil, fmt.Errorf("get artist id by user id: %w", err)
+	}
+	return artistID, nil
+}
+
+// CreateWaitlistEntry adds a customer to the queue.
+func (r *pgRepo) CreateWaitlistEntry(ctx context.Context, artistID, storeID, serviceID, customerID uuid.UUID, date time.Time) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO waitlist_entries (artist_id, store_id, service_id, customer_id, requested_date)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id`,
+		artistID, storeID, serviceID, customerID, date,
+	).Scan(&id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create waitlist entry: %w", err)
+	}
+	return id, nil
+}
+
+// GetWaitlistByArtist returns every active waitlist entry for an artist,
+// with the customer/service names an artist actually needs to act on it.
+func (r *pgRepo) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([]*WaitlistEntryResponse, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT w.id, w.service_id, s.name, u.name, u.phone,
+		       w.requested_date, w.status, w.notified_at, w.confirm_deadline, w.created_at
+		FROM waitlist_entries w
+		JOIN services s ON s.id = w.service_id
+		JOIN users    u ON u.id = w.customer_id
+		WHERE w.artist_id = $1
+		AND w.status IN ('waiting', 'notified')
+		ORDER BY w.requested_date ASC, w.created_at ASC`,
+		artistID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get waitlist by artist: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*WaitlistEntryResponse
+	for rows.Next() {
+		e := &WaitlistEntryResponse{}
+		var date time.Time
+		var phone *string
+		if err := rows.Scan(
+			&e.ID, &e.ServiceID, &e.ServiceName, &e.CustomerName, &phone,
+			&date, &e.Status, &e.NotifiedAt, &e.ConfirmDeadline, &e.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan waitlist entry: %w", err)
+		}
+		e.RequestedDate = date.Format("2006-01-02")
+		if phone != nil {
+			e.CustomerPhone = *phone
+		}
+		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get waitlist by artist: rows: %w", err)
+	}
+	return result, nil
+}
+
+// NotifyNextWaitlistEntry: expire any stale notified entry for this exact
+// group, then notify the oldest waiting one, if any. See the Repository
+// interface doc comment and migration 016 for the lazy-expiry reasoning.
+func (r *pgRepo) NotifyNextWaitlistEntry(ctx context.Context, artistID, storeID, serviceID uuid.UUID, date time.Time) error {
+	// Step 1: expire a stale 'notified' entry for this exact group, if one
+	// exists and its window has passed. Harmless no-op if there isn't one.
+	_, err := r.db.Exec(ctx, `
+		UPDATE waitlist_entries
+		SET status = $1, updated_at = NOW()
+		WHERE artist_id = $2 AND store_id = $3 AND service_id = $4 AND requested_date = $5
+		AND status = $6
+		AND confirm_deadline < NOW()`,
+		WaitlistStatusExpired, artistID, storeID, serviceID, date, WaitlistStatusNotified,
+	)
+	if err != nil {
+		return fmt.Errorf("notify next waitlist entry: expire stale: %w", err)
+	}
+
+	// Step 2: find the oldest still-waiting entry for this exact group.
+	var entryID, customerID uuid.UUID
+	err = r.db.QueryRow(ctx, `
+		SELECT id, customer_id
+		FROM waitlist_entries
+		WHERE artist_id = $1 AND store_id = $2 AND service_id = $3 AND requested_date = $4
+		AND status = $5
+		ORDER BY created_at ASC
+		LIMIT 1`,
+		artistID, storeID, serviceID, date, WaitlistStatusWaiting,
+	).Scan(&entryID, &customerID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // nobody waiting for this exact group - the common case
+		}
+		return fmt.Errorf("notify next waitlist entry: find waiting: %w", err)
+	}
+
+	deadline := time.Now().Add(waitlistConfirmWindow)
+	_, err = r.db.Exec(ctx, `
+		UPDATE waitlist_entries
+		SET status = $1, notified_at = NOW(), confirm_deadline = $2, updated_at = NOW()
+		WHERE id = $3`,
+		WaitlistStatusNotified, deadline, entryID,
+	)
+	if err != nil {
+		return fmt.Errorf("notify next waitlist entry: mark notified: %w", err)
+	}
+
+	message := fmt.Sprintf(
+		"Good news! A spot just opened up for %s. Book now before it's gone - you have about %d minutes: %s/book/%s",
+		date.Format("Mon, 2 Jan"), int(waitlistConfirmWindow.Minutes()), customerPWAURL, artistID.String(),
+	)
+	if err := r.EnqueueNotification(ctx, nil, customerID, "waitlist_slot_open", message); err != nil {
+		return fmt.Errorf("notify next waitlist entry: enqueue: %w", err)
+	}
+	return nil
+}
+
+// GetBookingNotificationContext returns the customer and service names
+// needed to personalise a WhatsApp message.
+func (r *pgRepo) GetBookingNotificationContext(ctx context.Context, bookingID uuid.UUID) (string, string, error) {
+	var customerName, serviceName string
+	err := r.db.QueryRow(ctx, `
+		SELECT u.name, s.name
+		FROM bookings b
+		JOIN users    u ON u.id = b.customer_id
+		JOIN services s ON s.id = b.service_id
+		WHERE b.id = $1`,
+		bookingID,
+	).Scan(&customerName, &serviceName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", ErrBookingNotFound
+		}
+		return "", "", fmt.Errorf("get booking notification context: %w", err)
+	}
+	return customerName, serviceName, nil
+}
+
+// EnqueueNotification inserts a pending notification row. See the
+// Repository interface doc comment for why this is always safe to call
+// regardless of whether Twilio is configured yet.
+func (r *pgRepo) EnqueueNotification(ctx context.Context, bookingID *uuid.UUID, userID uuid.UUID, templateName, message string) error {
+	payload, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return fmt.Errorf("enqueue notification: marshal payload: %w", err)
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO notifications (booking_id, user_id, template_name, channel, payload)
+		VALUES ($1, $2, $3, 'whatsapp', $4)`,
+		bookingID, userID, templateName, payload,
+	)
+	if err != nil {
+		return fmt.Errorf("enqueue notification: %w", err)
+	}
+	return nil
+}
+
 // AttachGuestAndSubmit repoints a held guest booking to the real guest user and
 // transitions it held → pending atomically.
 //
 // The UPDATE is guarded by `status = 'held' AND held_until > NOW()`, so if the
 // background ReleaseExpiredHolds job expired the booking between the service-layer
 // read and this write, zero rows are affected and ErrBookingNotHeld is returned.
-// The database is the final arbiter — no lost update is possible.
+// The database is the final arbiter - no lost update is possible.
 func (r *pgRepo) AttachGuestAndSubmit(
 	ctx context.Context,
 	bookingID, guestUserID uuid.UUID,
@@ -686,6 +941,37 @@ func (r *pgRepo) ConfirmDeposit(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ConfirmDepositReceived transitions a booking directly from approved to
+// confirmed, stamping deposit_paid_at in the same UPDATE. This is the
+// single-action path used when the artist confirms a deposit the moment
+// she sees the transfer land, collapsing the deposit_paid intermediate
+// status into one atomic write rather than two round trips.
+//
+// reference is bound via COALESCE($4, deposit_reference): a nil reference
+// leaves the existing column value untouched (SQL NULL loses to the
+// existing value in COALESCE), rather than overwriting a previously-entered
+// note with NULL just because this particular call didn't supply one.
+func (r *pgRepo) ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference *string) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		SET status = $1,
+		    deposit_paid_at = NOW(),
+		    deposit_reference = COALESCE($4, deposit_reference),
+		    updated_at = NOW()
+		WHERE id = $2
+		AND status = $3
+		AND deleted_at IS NULL`,
+		StatusConfirmed, id, StatusApproved, reference,
+	)
+	if err != nil {
+		return fmt.Errorf("confirm deposit received: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrBookingNotApproved
+	}
+	return nil
+}
+
 // CancelBooking cancels a booking. If refundDue is true, status becomes refund_due.
 func (r *pgRepo) CancelBooking(ctx context.Context, id uuid.UUID, reason string, refundDue bool) error {
 	status := StatusCancelled
@@ -712,25 +998,37 @@ func (r *pgRepo) CancelBooking(ctx context.Context, id uuid.UUID, reason string,
 	return nil
 }
 
-// CompleteBooking marks a confirmed booking as completed.
-func (r *pgRepo) CompleteBooking(ctx context.Context, id uuid.UUID) error {
+// CompleteBooking marks a confirmed booking as completed, and generates the
+// guest review-link token in the same statement, returning it so the caller
+// can enqueue the review-request notification without a second query.
+// Regenerating a token that already exists is harmless in practice - a
+// booking only reaches 'completed' once, since this UPDATE is guarded by
+// "status = StatusConfirmed" and the row won't match a second time - but
+// there's no reason to depend on that; a fresh token here is always correct.
+func (r *pgRepo) CompleteBooking(ctx context.Context, id uuid.UUID) (string, error) {
+	token, err := generateReviewToken()
+	if err != nil {
+		return "", err
+	}
+
 	result, err := r.db.Exec(ctx, `
 		UPDATE bookings
 		SET status = $1,
 		    completed_at = NOW(),
+		    review_token = $2,
 		    updated_at = NOW()
-		WHERE id = $2
-		AND status = $3
+		WHERE id = $3
+		AND status = $4
 		AND deleted_at IS NULL`,
-		StatusCompleted, id, StatusConfirmed,
+		StatusCompleted, token, id, StatusConfirmed,
 	)
 	if err != nil {
-		return fmt.Errorf("complete booking: %w", err)
+		return "", fmt.Errorf("complete booking: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrBookingNotFound
+		return "", ErrBookingNotFound
 	}
-	return nil
+	return token, nil
 }
 
 // MarkNoShow marks a confirmed booking as no_show.
@@ -794,7 +1092,7 @@ func (r *pgRepo) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 
 // scanBookings scans multiple rows into a slice of Booking pointers.
 //
-// NOTE: b.SessionID is intentionally NOT scanned here — see scanBooking.
+// NOTE: b.SessionID is intentionally NOT scanned here - see scanBooking.
 func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 	var bookings []*Booking
 	for rows.Next() {
@@ -803,7 +1101,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.ID, &b.SalonID, &b.StoreID, &b.ArtistID, &b.CustomerID, &b.ServiceID,
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice,
-			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt,
+			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,
 			&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt,
@@ -818,19 +1116,58 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 	return bookings, nil
 }
 
-// CreateGuestUser inserts a minimal users row for a guest booking.
+// CreateGuestUser resolves a guest booking's customer identity by phone.
+// If an active user already exists with this phone number, reuses that
+// identity rather than inserting a new row - this is what makes "one phone
+// number = one account" true, which customer OTP login and My Bookings
+// both depend on (see migration 014). Only inserts a new row when no
+// existing user has this phone.
+//
+// Deliberately does NOT update the existing user's name to whatever was
+// typed this time - the established name is treated as the real identity;
+// overwriting it on every repeat booking risks clobbering it with a typo,
+// or with someone booking on a friend's behalf using their own phone.
 func (r *pgRepo) CreateGuestUser(ctx context.Context, name string, phone string) (uuid.UUID, error) {
+	var existingID uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT id FROM users WHERE phone = $1 AND deleted_at IS NULL`,
+		phone,
+	).Scan(&existingID)
+	if err == nil {
+		return existingID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("create guest user: lookup by phone: %w", err)
+	}
+
 	id := uuid.New()
-	// Email is never used — guests cannot log in or receive password resets.
-	// The format guest_<uuid>@bedge.guest is unique and out of normal email range.
+	// Email is never used - guests cannot log in via email or receive
+	// password resets there. The format guest_<uuid>@bedge.guest is unique
+	// and out of normal email range.
 	email := fmt.Sprintf("guest_%s@bedge.guest", id.String())
 
-	_, err := r.db.Exec(ctx, `
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO users (id, name, email, password_hash, role, phone, status)
 		VALUES ($1, $2, $3, 'GUEST_ACCOUNT_NO_PASSWORD', 'customer', $4, 'active')`,
 		id, name, email, phone,
 	)
 	if err != nil {
+		// Race: another concurrent guest submission with this same new
+		// phone number won the insert between our lookup and our own
+		// insert. Rather than fail the booking outright over a timing
+		// coincidence, fall back to whichever row just won - the outcome
+		// is identical to our lookup simply having run a moment later.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode {
+			var winnerID uuid.UUID
+			lookupErr := r.db.QueryRow(ctx,
+				`SELECT id FROM users WHERE phone = $1 AND deleted_at IS NULL`,
+				phone,
+			).Scan(&winnerID)
+			if lookupErr == nil {
+				return winnerID, nil
+			}
+		}
 		return uuid.Nil, fmt.Errorf("create guest user: %w", err)
 	}
 	return id, nil

@@ -43,6 +43,7 @@ var ValidCategories = map[string]bool{
 // in each city's section on the discovery screen.
 type ArtistCardRow struct {
 	ID          uuid.UUID       `db:"id"`
+	Handle      *string         `db:"handle"`
 	Name        string          `db:"name"`
 	Category    *string         `db:"category"`
 	Rating      decimal.Decimal `db:"rating"`
@@ -84,10 +85,11 @@ type ServiceRow struct {
 
 // ── Response structs ──────────────────────────────────────────────────────────
 
-// ArtistCard is one card on the discovery screen. No price field — the card shows
+// ArtistCard is one card on the discovery screen. No price field - the card shows
 // identity, specialty, rating, city, and the New badge only.
 type ArtistCard struct {
 	ID          uuid.UUID       `json:"id"`
+	Handle      *string         `json:"handle,omitempty"`
 	Name        string          `json:"name"`
 	Category    *string         `json:"category,omitempty"`
 	Rating      decimal.Decimal `json:"rating"`
@@ -136,6 +138,7 @@ type ServiceCard struct {
 func toArtistCard(r *ArtistCardRow, now time.Time) *ArtistCard {
 	return &ArtistCard{
 		ID:          r.ID,
+		Handle:      r.Handle,
 		Name:        r.Name,
 		Category:    r.Category,
 		Rating:      r.Rating,

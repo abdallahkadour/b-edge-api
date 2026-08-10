@@ -20,3 +20,6 @@ docs/
 
 # Air
 build-errors.log
+
+frontend/
+full_project.txt

@@ -33,7 +33,7 @@ func NewService(repo Repository) *Service {
 // Rules enforced:
 //  1. Booking must exist and be completed
 //  2. Only the customer on the booking can review it
-//  3. One review per booking - cannot review twice
+//  3. One review per booking — cannot review twice
 //
 // On success the repository also recomputes the artist's cached rating.
 func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, customerID uuid.UUID) (*ReviewResponse, error) {
@@ -91,7 +91,7 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 }
 
 // GetBookingContextByToken resolves a review-link token to the booking
-// summary shown before submission. Public - no auth, the token itself is
+// summary shown before submission. Public — no auth, the token itself is
 // the only credential.
 func (s *Service) GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error) {
 	ctxRow, err := s.repo.GetBookingContextByToken(ctx, token)
@@ -104,7 +104,7 @@ func (s *Service) GetBookingContextByToken(ctx context.Context, token string) (*
 	return ctxRow, nil
 }
 
-// CreateReviewByToken is the guest review flow's entry point - no Bearer
+// CreateReviewByToken is the guest review flow's entry point — no Bearer
 // token, no customer account. The review-link token stands in for what a
 // JWT would normally prove: resolve it to (bookingID, customerID), then
 // delegate to CreateReview so every existing rule (must be completed, one
@@ -145,6 +145,17 @@ func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([
 	return result, nil
 }
 
+// GetPublicReviewsByArtist is what the public review list actually calls -
+// enriched with a display name (see EnrichedReviewResponse). Public means
+// exactly that: no auth check here, unlike GetReviewsByArtist above.
+func (s *Service) GetPublicReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*EnrichedReviewResponse, error) {
+	reviews, err := s.repo.GetEnrichedReviewsByArtist(ctx, artistID)
+	if err != nil {
+		return nil, fmt.Errorf("get public reviews by artist: %w", err)
+	}
+	return reviews, nil
+}
+
 // DeleteReview permanently removes a review.
 // Only the review owner (customer) or an admin can delete.
 // The repository recomputes the artist's cached rating in the same transaction.
@@ -167,7 +178,7 @@ func (s *Service) DeleteReview(ctx context.Context, reviewID uuid.UUID, requeste
 
 // HideReview hides a review from public view. Artists can hide reviews on their
 // own profile. The requester is a user_id from the JWT, which must be resolved to
-// the caller's artists.id before it can be compared with the review's artist_id
+// the caller's artists.id before it can be compared with the review's artist_id —
 // the two are different identifier spaces.
 func (s *Service) HideReview(ctx context.Context, reviewID uuid.UUID, requesterUserID uuid.UUID) error {
 	return s.setReviewVisibility(ctx, reviewID, requesterUserID, false)

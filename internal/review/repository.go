@@ -12,7 +12,7 @@ import (
 )
 
 // uniqueViolationCode is the PostgreSQL error code for a unique-constraint
-// violation - raised when a second review is inserted for the same booking.
+// violation — raised when a second review is inserted for the same booking.
 const uniqueViolationCode = "23505"
 
 // Repository defines all database operations for the review domain.
@@ -33,6 +33,14 @@ type Repository interface {
 	// GetReviewsByArtist returns all visible reviews for an artist.
 	GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*Review, error)
 
+	// GetEnrichedReviewsByArtist is what the PUBLIC review list actually
+	// uses - joins to users for a display name, formatted server-side as
+	// "first name + last initial" (see EnrichedReviewResponse's doc
+	// comment for why this differs from the artist_name/customer_name
+	// enrichments elsewhere, which show a full name to a party who already
+	// has a real relationship to that person).
+	GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*EnrichedReviewResponse, error)
+
 	// DeleteReview permanently removes a review AND recomputes the artist's
 	// cached rating in the same transaction. artistID is needed for the recompute.
 	DeleteReview(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID) error
@@ -46,13 +54,13 @@ type Repository interface {
 	GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error)
 
 	// GetBookingIDByReviewToken resolves a review-link token to its booking's
-	// ID and customer_id - the identity proof for the guest review flow,
+	// ID and customer_id — the identity proof for the guest review flow,
 	// replacing what a JWT would normally establish. Returns
 	// ErrInvalidReviewToken if no booking has this token.
 	GetBookingIDByReviewToken(ctx context.Context, token string) (bookingID, customerID uuid.UUID, err error)
 
 	// GetBookingContextByToken returns the display summary for the review
-	// link's landing screen - service, artist, store, time, price. Separate
+	// link's landing screen — service, artist, store, time, price. Separate
 	// from GetBookingIDByReviewToken because the two callers need different
 	// shapes: one just needs IDs to authorise a write, the other needs
 	// human-readable fields to render a confirmation card.
@@ -206,6 +214,44 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 	return result, rows.Err()
 }
 
+// GetEnrichedReviewsByArtist joins to users for a display name. The name
+// formatting (first name + last initial) happens in SQL rather than Go so
+// a NULL or single-word name can't produce something odd like "Sarah ." -
+// split_part against a string with no space simply returns an empty
+// string for the second part, and the CASE handles that explicitly.
+func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*EnrichedReviewResponse, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT r.id, r.booking_id, r.customer_id, r.artist_id, r.rating, r.comment, r.created_at,
+		       CASE
+		         WHEN split_part(u.name, ' ', 2) = '' THEN split_part(u.name, ' ', 1)
+		         ELSE split_part(u.name, ' ', 1) || ' ' || left(split_part(u.name, ' ', 2), 1) || '.'
+		       END AS reviewer_name
+		FROM reviews r
+		JOIN users u ON u.id = r.customer_id
+		WHERE r.artist_id = $1
+		AND r.is_visible = TRUE
+		ORDER BY r.created_at DESC`,
+		artistID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get enriched reviews by artist: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*EnrichedReviewResponse
+	for rows.Next() {
+		e := &EnrichedReviewResponse{}
+		if err := rows.Scan(
+			&e.ID, &e.BookingID, &e.CustomerID, &e.ArtistID, &e.Rating, &e.Comment, &e.CreatedAt,
+			&e.ReviewerName,
+		); err != nil {
+			return nil, fmt.Errorf("scan enriched review: %w", err)
+		}
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
 // DeleteReview permanently removes a review and recomputes the artist's cached
 // rating in one transaction.
 func (r *pgRepo) DeleteReview(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID) error {
@@ -273,11 +319,11 @@ func (r *pgRepo) GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (str
 }
 
 // GetBookingIDByReviewToken resolves a review-link token to the booking's ID
-// and customer_id. Deliberately does NOT filter by status here - a token
+// and customer_id. Deliberately does NOT filter by status here — a token
 // only ever exists because CompleteBooking generated one at the moment the
 // booking became 'completed' (migration 013), so its existence already
 // implies that. The status check still happens, just once, inside the
-// existing CreateReview path this hands off to - no reason to duplicate it.
+// existing CreateReview path this hands off to — no reason to duplicate it.
 func (r *pgRepo) GetBookingIDByReviewToken(ctx context.Context, token string) (uuid.UUID, uuid.UUID, error) {
 	var bookingID, customerID uuid.UUID
 	err := r.db.QueryRow(ctx, `
@@ -297,7 +343,7 @@ func (r *pgRepo) GetBookingIDByReviewToken(ctx context.Context, token string) (u
 }
 
 // GetBookingContextByToken returns the display fields for the review link's
-// landing screen, resolved with no auth - only what's needed to render
+// landing screen, resolved with no auth — only what's needed to render
 // "Your Booking: X with Y, date, price" before the customer submits.
 func (r *pgRepo) GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error) {
 	ctxRow := &ReviewBookingContext{}

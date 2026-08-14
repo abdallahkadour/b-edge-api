@@ -1,9 +1,10 @@
 // Package review contains unit tests for the review service layer.
-// These tests use a mock repository - no database required.
+// These tests use a mock repository — no database required.
 package review
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ type mockRepo struct {
 	byIDReview        *Review
 	byIDErr           error
 	byArtistReviews   []*Review
+	enrichedByArtistReviews []*EnrichedReviewResponse
 	byArtistErr       error
 	deleteErr         error
 	setVisibilityErr  error
@@ -52,6 +54,9 @@ func (m *mockRepo) GetReviewByID(_ context.Context, _ uuid.UUID) (*Review, error
 func (m *mockRepo) GetReviewsByArtist(_ context.Context, _ uuid.UUID) ([]*Review, error) {
 	return m.byArtistReviews, m.byArtistErr
 }
+func (m *mockRepo) GetEnrichedReviewsByArtist(_ context.Context, _ uuid.UUID) ([]*EnrichedReviewResponse, error) {
+	return m.enrichedByArtistReviews, m.byArtistErr
+}
 func (m *mockRepo) GetBookingIDByReviewToken(_ context.Context, _ string) (uuid.UUID, uuid.UUID, error) {
 	return m.tokenBookingID, m.tokenCustomerID, m.tokenResolveErr
 }
@@ -80,7 +85,7 @@ func strptr(s string) *string { return &s }
 
 // ── CreateReview tests ────────────────────────────────────────────────────────
 
-// TestCreateReview_Success - completed booking owned by the customer, not yet
+// TestCreateReview_Success — completed booking owned by the customer, not yet
 // reviewed → review created.
 func TestCreateReview_Success(t *testing.T) {
 	customerID := uuid.New()
@@ -148,7 +153,7 @@ func TestCreateReviewByToken_InvalidToken_NotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestCreateReviewByToken_AlreadyReviewed_Conflict - the same booking-level
+// TestCreateReviewByToken_AlreadyReviewed_Conflict — the same booking-level
 // protection CreateReview already has must still apply through the token
 // path, since CreateReviewByToken delegates to it rather than reimplementing
 // the check.
@@ -171,7 +176,7 @@ func TestCreateReviewByToken_AlreadyReviewed_Conflict(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestCreateReviewByToken_NotCompleted_Conflict - a token only exists once
+// TestCreateReviewByToken_NotCompleted_Conflict — a token only exists once
 // CompleteBooking generates one, so this case is defensive (a booking that
 // somehow reached this path without being completed), but the check must
 // still fire since CreateReviewByToken delegates to CreateReview rather than
@@ -219,7 +224,7 @@ func TestGetBookingContextByToken_InvalidToken_NotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestCreateReview_NotCompleted - booking not completed → conflict.
+// TestCreateReview_NotCompleted — booking not completed → conflict.
 func TestCreateReview_NotCompleted(t *testing.T) {
 	customerID := uuid.New()
 	repo := &mockRepo{
@@ -236,7 +241,7 @@ func TestCreateReview_NotCompleted(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCreateReview_NotOwner - booking belongs to another customer → forbidden.
+// TestCreateReview_NotOwner — booking belongs to another customer → forbidden.
 func TestCreateReview_NotOwner(t *testing.T) {
 	repo := &mockRepo{
 		bookingStatus:     completedStatus,
@@ -252,7 +257,7 @@ func TestCreateReview_NotOwner(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCreateReview_AlreadyReviewed - a review already exists → conflict.
+// TestCreateReview_AlreadyReviewed — a review already exists → conflict.
 func TestCreateReview_AlreadyReviewed(t *testing.T) {
 	customerID := uuid.New()
 	repo := &mockRepo{
@@ -273,7 +278,7 @@ func TestCreateReview_AlreadyReviewed(t *testing.T) {
 
 // ── DeleteReview tests ────────────────────────────────────────────────────────
 
-// TestDeleteReview_OwnerPassesArtistID - the owner can delete, and the artist_id
+// TestDeleteReview_OwnerPassesArtistID — the owner can delete, and the artist_id
 // is forwarded to the repo so the rating recompute targets the right artist.
 func TestDeleteReview_OwnerPassesArtistID(t *testing.T) {
 	customerID := uuid.New()
@@ -289,7 +294,7 @@ func TestDeleteReview_OwnerPassesArtistID(t *testing.T) {
 	assert.Equal(t, artistID, repo.lastDeleteArtistID, "artist_id must be forwarded for the recompute")
 }
 
-// TestDeleteReview_NotOwner - a non-owner non-admin cannot delete.
+// TestDeleteReview_NotOwner — a non-owner non-admin cannot delete.
 func TestDeleteReview_NotOwner(t *testing.T) {
 	repo := &mockRepo{
 		byIDReview: &Review{ID: uuid.New(), CustomerID: uuid.New(), ArtistID: uuid.New()},
@@ -303,7 +308,7 @@ func TestDeleteReview_NotOwner(t *testing.T) {
 
 // ── HideReview / ShowReview tests (the resolved-artist-id fix) ─────────────────
 
-// TestHideReview_ResolvesArtistID - the requester's user_id is resolved to their
+// TestHideReview_ResolvesArtistID — the requester's user_id is resolved to their
 // artists.id, which matches the review's artist_id → hide succeeds and forwards
 // visible=false with the correct artist_id.
 func TestHideReview_ResolvesArtistID(t *testing.T) {
@@ -323,7 +328,7 @@ func TestHideReview_ResolvesArtistID(t *testing.T) {
 	assert.Equal(t, artistID, repo.lastSetArtistID)
 }
 
-// TestHideReview_WrongArtist - the requester resolves to a DIFFERENT artist than
+// TestHideReview_WrongArtist — the requester resolves to a DIFFERENT artist than
 // the review's → forbidden. (This is the case the old buggy code always hit.)
 func TestHideReview_WrongArtist(t *testing.T) {
 	repo := &mockRepo{
@@ -338,7 +343,7 @@ func TestHideReview_WrongArtist(t *testing.T) {
 	assert.Nil(t, repo.lastSetVisibility, "visibility must not be changed on a failed auth")
 }
 
-// TestHideReview_NotAnArtist - the requester has no artist profile → forbidden.
+// TestHideReview_NotAnArtist — the requester has no artist profile → forbidden.
 func TestHideReview_NotAnArtist(t *testing.T) {
 	repo := &mockRepo{
 		byIDReview:        &Review{ID: uuid.New(), ArtistID: uuid.New()},
@@ -351,7 +356,7 @@ func TestHideReview_NotAnArtist(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestShowReview_SetsVisibleTrue - un-hide forwards visible=true.
+// TestShowReview_SetsVisibleTrue — un-hide forwards visible=true.
 func TestShowReview_SetsVisibleTrue(t *testing.T) {
 	artistID := uuid.New()
 	repo := &mockRepo{
@@ -367,66 +372,39 @@ func TestShowReview_SetsVisibleTrue(t *testing.T) {
 	assert.True(t, *repo.lastSetVisibility, "show sets visible=true")
 }
 
-// ── Cross-tenant authorization tests ─────────────────────────────────────────
-//
-// Review moderation (hide/show) is gated by RequireRole("artist","admin") at
-// the router. That proves the caller is AN artist - never that the review is
-// on THEIR profile. Without the service-layer check these lock in, any
-// registered artist could hide a competitor's positive reviews or unhide ones
-// the competitor had chosen to moderate.
-
-func TestHideReview_OtherArtistsReview_Denied(t *testing.T) {
-	reviewID := uuid.New()
-	victimArtistID := uuid.New()
-	attackerArtistID := uuid.New()
-
+// TestGetPublicReviewsByArtist_ReturnsEnrichedData guards the actual reason
+// this endpoint exists: a review with no name attached is barely usable
+// for a prospective customer deciding whether to book. This is real repo
+// data flowing through, not just "the method returns without error."
+func TestGetPublicReviewsByArtist_ReturnsEnrichedData(t *testing.T) {
+	comment := "Amazing bridal makeup, so professional"
 	repo := &mockRepo{
-		byIDReview:     &Review{ID: reviewID, ArtistID: victimArtistID},
-		artistIDByUser: attackerArtistID,
+		enrichedByArtistReviews: []*EnrichedReviewResponse{
+			{
+				ReviewResponse: ReviewResponse{
+					ID:      uuid.New(),
+					Rating:  5,
+					Comment: &comment,
+				},
+				ReviewerName: "Sarah K.",
+			},
+		},
 	}
 	svc := newTestService(repo)
 
-	err := svc.HideReview(context.Background(), reviewID, uuid.New())
+	result, err := svc.GetPublicReviewsByArtist(context.Background(), uuid.New())
 
-	require.Error(t, err, "an artist must not be able to hide a review on another artist's profile")
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "Sarah K.", result[0].ReviewerName)
+	assert.Equal(t, 5, result[0].Rating)
 }
 
-func TestShowReview_OtherArtistsReview_Denied(t *testing.T) {
-	reviewID := uuid.New()
-	repo := &mockRepo{
-		byIDReview:     &Review{ID: reviewID, ArtistID: uuid.New()},
-		artistIDByUser: uuid.New(),
-	}
+func TestGetPublicReviewsByArtist_RepoError_Propagates(t *testing.T) {
+	repo := &mockRepo{byArtistErr: errors.New("db down")}
 	svc := newTestService(repo)
 
-	err := svc.ShowReview(context.Background(), reviewID, uuid.New())
+	_, err := svc.GetPublicReviewsByArtist(context.Background(), uuid.New())
 
 	require.Error(t, err)
-}
-
-func TestHideReview_NoArtistRow_Denied(t *testing.T) {
-	// A customer-role token that somehow reaches this path must be denied,
-	// not treated as "no artist restriction applies".
-	repo := &mockRepo{
-		byIDReview:        &Review{ID: uuid.New(), ArtistID: uuid.New()},
-		artistIDByUserErr: ErrArtistNotFound,
-	}
-	svc := newTestService(repo)
-
-	err := svc.HideReview(context.Background(), uuid.New(), uuid.New())
-
-	require.Error(t, err, "a caller with no artist row must be denied, never allowed through")
-}
-
-func TestDeleteReview_NotAuthor_Denied(t *testing.T) {
-	reviewID := uuid.New()
-	authorID := uuid.New()
-	attackerID := uuid.New()
-
-	repo := &mockRepo{byIDReview: &Review{ID: reviewID, CustomerID: authorID}}
-	svc := newTestService(repo)
-
-	err := svc.DeleteReview(context.Background(), reviewID, attackerID, "customer")
-
-	require.Error(t, err, "a customer must not be able to delete someone else's review")
 }

@@ -41,11 +41,19 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	r.Patch("/:id/hide", middleware.RequireRole("artist", "admin"), handler.HideReview)
 	r.Patch("/:id/show", middleware.RequireRole("artist", "admin"), handler.ShowReview)
 
-	// Guest review-link flow - deliberately OUTSIDE the RequireAuth() group.
+	// Guest review-link flow — deliberately OUTSIDE the RequireAuth() group.
 	// A guest who booked never receives a JWT; the token in the URL is the
 	// only credential these two routes accept, in place of a Bearer header.
 	app.Get("/api/v1/reviews/by-token/:token", handler.GetBookingContextByToken)
 	app.Post("/api/v1/reviews/by-token/:token", handler.CreateReviewByToken)
+
+	// Public review list - deliberately a DIFFERENT path
+	// (/public/reviews/... not /reviews/...) rather than moving the
+	// existing /reviews/artist/:id route. The old authed one stays exactly
+	// as it was in case anything already depends on its exact shape;
+	// this is a genuinely new, additive endpoint, not a behavior change
+	// to an existing one.
+	app.Get("/api/v1/public/reviews/artist/:artist_id", handler.GetPublicReviewsByArtist)
 }
 
 // CreateReview godoc
@@ -77,7 +85,7 @@ func (h *Handler) CreateReview(c *fiber.Ctx) error {
 // GetBookingContextByToken godoc
 // @Summary      Get booking summary for a review link (public, no auth)
 // @Description  Resolves a review-link token to the booking's service,
-// @Description  artist, store, time, and price - for rendering the
+// @Description  artist, store, time, and price — for rendering the
 // @Description  confirmation card before the customer submits a review.
 // @Tags         reviews
 // @Produce      json
@@ -94,7 +102,7 @@ func (h *Handler) GetBookingContextByToken(c *fiber.Ctx) error {
 
 // CreateReviewByToken godoc
 // @Summary      Submit a review via a guest review link (public, no auth)
-// @Description  The token in the URL is the only credential - there is no
+// @Description  The token in the URL is the only credential — there is no
 // @Description  Bearer header, since a guest customer never receives a
 // @Description  login session. Every existing review rule (must be
 // @Description  completed, one review per booking) still applies.
@@ -136,6 +144,30 @@ func (h *Handler) GetReviewsByArtist(c *fiber.Ctx) error {
 	}
 
 	reviews, err := h.svc.GetReviewsByArtist(c.Context(), artistID)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, reviews)
+}
+
+// GetPublicReviewsByArtist godoc
+// @Summary      Get an artist's visible reviews (public, no account needed)
+// @Description  A prospective customer deciding whether to book has no
+// @Description  reason to be logged in yet - reviews must be readable
+// @Description  before that decision, not after.
+// @Tags         reviews
+// @Produce      json
+// @Param        artist_id path string true "Artist UUID"
+// @Success      200 {object} response.Body{data=[]EnrichedReviewResponse}
+// @Router       /public/reviews/artist/{artist_id} [get]
+func (h *Handler) GetPublicReviewsByArtist(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("artist_id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
+	}
+
+	reviews, err := h.svc.GetPublicReviewsByArtist(c.Context(), artistID)
 	if err != nil {
 		return err
 	}

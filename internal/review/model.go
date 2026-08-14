@@ -29,11 +29,11 @@ var (
 	ErrNotReviewOwner = errors.New("not authorised to delete this review")
 
 	// ErrArtistNotFound is returned when a user_id does not resolve to an artist
-	// profile - used when authorising artist-only moderation actions.
+	// profile — used when authorising artist-only moderation actions.
 	ErrArtistNotFound = errors.New("artist profile not found for user")
 
 	// ErrInvalidReviewToken is returned when a review link's token doesn't
-	// match any booking - either it was mistyped, or the booking doesn't
+	// match any booking — either it was mistyped, or the booking doesn't
 	// have one (not completed yet, or predates the review-link feature).
 	ErrInvalidReviewToken = errors.New("invalid or expired review link")
 )
@@ -62,7 +62,7 @@ type CreateReviewRequest struct {
 }
 
 // SubmitReviewByTokenRequest is the request body for
-// POST /api/v1/reviews/by-token/:token - the guest review-link flow.
+// POST /api/v1/reviews/by-token/:token — the guest review-link flow.
 // No booking_id: the token itself resolves to exactly one booking, so
 // including it in the body would be redundant and would let a caller send
 // a mismatched token/booking_id pair with no clear rule for which wins.
@@ -72,8 +72,8 @@ type SubmitReviewByTokenRequest struct {
 }
 
 // ReviewBookingContext is the booking summary shown on the review-link
-// landing screen before submission - "Your Booking: Bridal Makeup with
-// Rania, Mon 23 June, $200" - resolved from the token with no auth. Holds
+// landing screen before submission — "Your Booking: Bridal Makeup with
+// Rania, Mon 23 June, $200" — resolved from the token with no auth. Holds
 // only what's needed to render that confirmation card; not a full booking
 // representation.
 type ReviewBookingContext struct {
@@ -95,4 +95,24 @@ type ReviewResponse struct {
 	Rating     int       `json:"rating"`
 	Comment    *string   `json:"comment,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// EnrichedReviewResponse is the PUBLIC-facing shape - it adds a display
+// name so a review reads as coming from a real person, not a UUID. This is
+// the same enrichment lesson learned twice already elsewhere in this
+// codebase (EnrichedBookingResponse needed artist_name, EnrichedOrderResponse
+// needed customer_name) - a customer-facing list with no name attached is
+// barely usable for whoever's reading it.
+//
+// ReviewerName is deliberately NOT the customer's full stored name.
+// Unlike EnrichedBookingResponse (seen only by the artist who owns that
+// booking) or EnrichedOrderResponse (same), this response is PUBLIC - shown
+// to any anonymous visitor deciding whether to book. Showing a stranger's
+// full name next to their comment is a real privacy exposure the other two
+// cases don't have. Formatted server-side as "first name + last initial"
+// (e.g. "Sarah K."), a standard pattern deliberately chosen over showing
+// nothing (which reads as fake/generated) or the full name (which doesn't).
+type EnrichedReviewResponse struct {
+	ReviewResponse
+	ReviewerName string `json:"reviewer_name"`
 }

@@ -51,6 +51,10 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// ── Protected routes ──────────────────────────────────────────────────────
 	m := app.Group("/api/v1/media", middleware.RequireAuth(), middleware.RequireRole("artist", "admin"))
 	m.Get("/my", handler.GetMyPortfolio)
+	// Signature endpoint sits INSIDE the authed group deliberately: an
+	// unauthenticated signature endpoint would recreate the exact hole
+	// signed uploads are meant to close.
+	m.Get("/signature", handler.GetUploadSignature)
 	m.Post("/", handler.AddPhoto)
 	m.Patch("/reorder", handler.Reorder) // must be before /:id to avoid route conflict
 	m.Delete("/:id", handler.DeletePhoto)
@@ -207,4 +211,30 @@ func (h *Handler) Reorder(c *fiber.Ctx) error {
 	}
 
 	return response.NoContent(c)
+}
+
+// GetUploadSignature godoc
+// @Summary      Get a short-lived Cloudinary upload signature
+// @Description  Returns the signature the browser needs to upload directly
+// @Description  to Cloudinary. Replaces the previous unsigned-preset flow,
+// @Description  where the cloud name and preset shipped in the JS bundle
+// @Description  were sufficient for anyone to upload without authenticating.
+// @Tags         media
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200 {object} response.Body{data=UploadSignatureResponse}
+// @Failure      401 {object} response.Body
+// @Failure      500 {object} response.Body
+// @Router       /media/signature [get]
+func (h *Handler) GetUploadSignature(c *fiber.Ctx) error {
+	sig, err := GenerateUploadSignature()
+	if err != nil {
+		// Misconfiguration, not a client error. Log server-side; the
+		// caller gets the generic INTERNAL_ERROR from the error handler
+		// rather than anything describing our credential state.
+		h.log.Error("failed to generate cloudinary upload signature", zap.Error(err))
+		return err
+	}
+
+	return response.OK(c, sig)
 }

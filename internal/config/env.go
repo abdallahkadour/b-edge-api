@@ -21,6 +21,13 @@ var requiredEnvVars = []string{
 	// APP_ENV gates production-only behaviour (stack traces, log format).
 	// Required so a missing value can never silently select a dev default.
 	"APP_ENV",
+	// Cloudinary credentials back the signed-upload flow. Required at boot
+	// rather than checked lazily: a missing secret would mean portfolio and
+	// product image uploads silently fail at the moment an artist tries to
+	// use them, which is a far worse way to discover the problem.
+	"CLOUDINARY_CLOUD_NAME",
+	"CLOUDINARY_API_KEY",
+	"CLOUDINARY_API_SECRET",
 }
 
 // jwtMinLength is the minimum acceptable length for JWT secrets.

@@ -82,11 +82,27 @@ func (r *pgRepo) Complete(ctx context.Context, userID uuid.UUID, req CompleteOnb
 		return uuid.Nil, fmt.Errorf("complete onboarding: create artist: %w", err)
 	}
 
-	if _, err = tx.Exec(ctx,
-		`INSERT INTO stores (salon_id, name, city, address) VALUES ($1, $2, $3, $4)`,
+	var storeID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`INSERT INTO stores (salon_id, name, city, address) VALUES ($1, $2, $3, $4) RETURNING id`,
 		salonID, req.StoreName, req.City, req.Address,
-	); err != nil {
+	).Scan(&storeID)
+	if err != nil {
 		return uuid.Nil, fmt.Errorf("complete onboarding: create store: %w", err)
+	}
+
+	// Without this, the new artist is a ghost: approved and 'active', but
+	// invisible on Discover (internal/discovery/repository.go's
+	// ListArtistCards INNER JOINs artist_stores) and unbookable (the
+	// booking funnel's own store picker, GetStoresByArtist, reads the same
+	// table). Every other store-creation path (artist/repository.go's
+	// CreateStore, used by the dashboard's "Add store") already does this
+	// insert - onboarding's first store was the one path that didn't.
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO artist_stores (artist_id, store_id) VALUES ($1, $2)`,
+		artistID, storeID,
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("complete onboarding: link artist to store: %w", err)
 	}
 
 	// deposit_amount and deposit_deadline_hours are both omitted

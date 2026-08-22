@@ -91,6 +91,7 @@ type mockRepo struct {
 	releaseExpiredHoldsCalled      bool
 	expireDeadlineBookingsCount    int64
 	expireDeadlineBookingsErr      error
+	expireDeadlineBookingsCalled   bool
 	expireStalePendingCount        int64
 	expireStalePendingErr          error
 	expireStalePendingCalled       bool
@@ -225,6 +226,7 @@ func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) (int64, error) {
 	return m.releaseExpiredHoldsCount, m.releaseExpiredHoldsErr
 }
 func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) (int64, error) {
+	m.expireDeadlineBookingsCalled = true
 	return m.expireDeadlineBookingsCount, m.expireDeadlineBookingsErr
 }
 func (m *mockRepo) ExpireStalePendingBookings(_ context.Context, artistID uuid.UUID) (int64, error) {
@@ -444,6 +446,47 @@ func TestGetAvailableSlots_ExpiredHoldsSweepFails_StillReturnsSlots(t *testing.T
 		getBusinessHoursBH:          defaultBusinessHours(),
 		getServiceSvc:               defaultService(),
 		releaseExpiredHoldsErr:      errors.New("boom"),
+	}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), validSlotsReq())
+
+	require.NoError(t, err, "a sweep failure must not fail the slots request")
+	assert.NotEmpty(t, slots)
+}
+
+// TestGetAvailableSlots_SweepsExpiredDeadlineBookings guards a second real
+// gap in the same family: 'approved' is in BlockingStatuses, so a booking
+// whose deposit_deadline lapsed without payment - and nobody manually
+// cancelled - blocks its slot forever, exactly like a stale hold. Found
+// while auditing this fix for a second real issue: ExpireDeadlineBookings
+// existed and was correct but, like ReleaseExpiredHolds before it, was
+// never called from anywhere.
+func TestGetAvailableSlots_SweepsExpiredDeadlineBookings(t *testing.T) {
+	repo := &mockRepo{
+		getStoreStore:               defaultStore(),
+		getBusinessHoursExceptionEx: nil,
+		getBusinessHoursBH:          defaultBusinessHours(),
+		getServiceSvc:               defaultService(),
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.GetAvailableSlots(context.Background(), validSlotsReq())
+
+	require.NoError(t, err)
+	assert.True(t, repo.expireDeadlineBookingsCalled, "GetAvailableSlots must sweep deposit-deadline-lapsed approvals before reading blocked ranges")
+}
+
+// TestGetAvailableSlots_ExpireDeadlineBookingsFails_StillReturnsSlots - same
+// best-effort guarantee as the holds sweep: a failure here must never fail
+// the availability request itself.
+func TestGetAvailableSlots_ExpireDeadlineBookingsFails_StillReturnsSlots(t *testing.T) {
+	repo := &mockRepo{
+		getStoreStore:               defaultStore(),
+		getBusinessHoursExceptionEx: nil,
+		getBusinessHoursBH:          defaultBusinessHours(),
+		getServiceSvc:               defaultService(),
+		expireDeadlineBookingsErr:   errors.New("boom"),
 	}
 	svc := newTestService(repo)
 

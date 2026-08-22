@@ -154,7 +154,9 @@ func (h *Handler) GetReviewsByArtist(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	reviews, err := h.svc.GetReviewsByArtist(c.Context(), artistID)
+	requesterUserID := middleware.UserIDFromContext(c)
+
+	reviews, err := h.svc.GetReviewsByArtist(c.Context(), artistID, requesterUserID)
 	if err != nil {
 		return err
 	}

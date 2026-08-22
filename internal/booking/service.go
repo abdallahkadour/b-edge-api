@@ -172,19 +172,26 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	serviceDuration := time.Duration(service.DurationMin) * time.Minute
 
-	// ── Step 3.5: Lazily release stale holds before reading blocked ranges ──
+	// ── Step 3.5: Lazily release stale holds and deposit-lapsed approvals ──
 	//
 	// A held booking nobody ever submitted stays in 'held' forever unless
 	// something moves it past its 10-minute window - there is no background
 	// scheduler running ReleaseExpiredHolds (found live while testing this
 	// endpoint: several holds from days earlier were still permanently
-	// blocking their slots). Rather than standing up a real scheduler, this
-	// self-heals opportunistically on the read path every availability
+	// blocking their slots). The same problem exists for 'approved' bookings
+	// whose deposit_deadline lapsed without payment - StatusApproved is in
+	// BlockingStatuses too, so an artist who never got paid and never
+	// manually cancelled leaves that slot permanently unbookable, forever,
+	// exactly like a stale hold. Rather than standing up a real scheduler,
+	// both self-heal opportunistically on the read path every availability
 	// query already takes: best-effort, since a sweep failure here should
-	// never fail the slots request itself - worst case, a stale hold keeps
+	// never fail the slots request itself - worst case, a stale row keeps
 	// blocking for one more request, exactly like before this fix.
 	if _, err := s.repo.ReleaseExpiredHolds(ctx); err != nil {
 		s.log.Warn("get available slots: release expired holds failed, continuing", zap.Error(err))
+	}
+	if _, err := s.repo.ExpireDeadlineBookings(ctx); err != nil {
+		s.log.Warn("get available slots: expire deadline bookings failed, continuing", zap.Error(err))
 	}
 
 	// ── Step 4: Build blocked ranges from existing bookings ───────────────

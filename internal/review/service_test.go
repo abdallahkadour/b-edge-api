@@ -356,6 +356,52 @@ func TestHideReview_NotAnArtist(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGetReviewsByArtist_OwnReviews_Allowed - an artist reading their own
+// review list (the moderation view, including hidden reviews) succeeds.
+func TestGetReviewsByArtist_OwnReviews_Allowed(t *testing.T) {
+	artistID := uuid.New()
+	userID := uuid.New()
+	repo := &mockRepo{
+		artistIDByUser:  artistID,
+		byArtistReviews: []*Review{{ID: uuid.New(), ArtistID: artistID, Rating: 5}},
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.GetReviewsByArtist(context.Background(), artistID, userID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+}
+
+// TestGetReviewsByArtist_AnotherArtist_Forbidden guards against the real gap
+// found live while executing E2E-TEST-PLAN.md: without this check, any
+// authenticated artist could read another artist's full review list -
+// including reviews that artist deliberately hid - just by passing a
+// different artist_id in the URL.
+func TestGetReviewsByArtist_AnotherArtist_Forbidden(t *testing.T) {
+	repo := &mockRepo{
+		artistIDByUser: uuid.New(), // resolves to a DIFFERENT artist than requested
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.GetReviewsByArtist(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err, "an artist must not be able to read another artist's review list")
+}
+
+// TestGetReviewsByArtist_NotAnArtist_Forbidden - the requester has no artist
+// profile at all (e.g. a customer JWT) → forbidden, not a 500 or a leak.
+func TestGetReviewsByArtist_NotAnArtist_Forbidden(t *testing.T) {
+	repo := &mockRepo{
+		artistIDByUserErr: ErrArtistNotFound,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.GetReviewsByArtist(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err)
+}
+
 // TestShowReview_SetsVisibleTrue — un-hide forwards visible=true.
 func TestShowReview_SetsVisibleTrue(t *testing.T) {
 	artistID := uuid.New()

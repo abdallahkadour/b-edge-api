@@ -131,8 +131,25 @@ func (s *Service) CreateReviewByToken(ctx context.Context, token string, req Sub
 	}, customerID)
 }
 
-// GetReviewsByArtist returns all visible reviews for an artist.
-func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*ReviewResponse, error) {
+// GetReviewsByArtist returns an artist's own reviews, including hidden ones
+// - this is the moderation view (see GetPublicReviewsByArtist for the
+// no-auth, visible-only equivalent anyone can read). Without the ownership
+// check below, any authenticated artist could read another artist's full
+// review list - including reviews that artist deliberately hid - just by
+// knowing or guessing their artist ID; found live while executing
+// E2E-TEST-PLAN.md, previously deferred as a known gap.
+func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID, requesterUserID uuid.UUID) ([]*ReviewResponse, error) {
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view these reviews")
+		}
+		return nil, fmt.Errorf("get reviews by artist: resolve artist: %w", err)
+	}
+	if requesterArtistID != artistID {
+		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view these reviews")
+	}
+
 	reviews, err := s.repo.GetReviewsByArtist(ctx, artistID)
 	if err != nil {
 		return nil, fmt.Errorf("get reviews by artist: %w", err)

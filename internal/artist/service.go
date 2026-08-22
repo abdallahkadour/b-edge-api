@@ -141,7 +141,9 @@ func (s *Service) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]
 	return stores, nil
 }
 
-// GetStoresBySalon returns all active stores for a salon.
+// GetStoresBySalon returns every store owned by this salon, active or not -
+// this is the artist's own view of their own stores, not a customer-facing
+// list (see the repository doc comment for why that distinction matters).
 func (s *Service) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error) {
 	stores, err := s.repo.GetStoresBySalon(ctx, salonID)
 	if err != nil {

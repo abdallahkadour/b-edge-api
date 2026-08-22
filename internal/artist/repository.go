@@ -304,6 +304,14 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 	return scanStores(rows)
 }
 
+// GetStoresBySalon returns every store owned by this salon, active or not -
+// deliberately unfiltered, unlike GetStoresByArtist below. This is the
+// artist-only route (GET /artists/salon/stores, RequireRole("artist")) that
+// backs their own Hours screen; if it hid inactive stores the same way the
+// customer-facing GetStoresByArtist correctly does, an artist who
+// deactivated a store (see UpdateStore) would lose all access to it -
+// nothing left to click to reactivate. An owner should always see
+// everything they own; a customer should only ever see what's bookable.
 func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, salon_id, name, name_ar, address,
@@ -313,7 +321,6 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 		       timezone, is_active, created_at, updated_at
 		FROM stores
 		WHERE salon_id = $1
-		AND is_active = TRUE
 		ORDER BY name ASC`,
 		salonID,
 	)

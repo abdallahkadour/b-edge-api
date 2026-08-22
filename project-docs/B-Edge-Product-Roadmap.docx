@@ -10,6 +10,8 @@
 
 Version 1.0  Confidential  2025
 
+**Update note (Aug 15, 2026):** Product Store ("Buy beauty products" / "Sell products") and Waitlist management were reclassified from Phase 3/Phase 2 to MVP below, resolving a conflict with `B-Edge-PRD-v7-Final.docx`, which specced both as Phase 1 launch requirements. Both are now genuinely built and live. This is the only change made in this pass — the rest of this document (email/password auth, SendGrid email notifications, the 7-week MVP timeline) still reflects the original 2025 plan rather than the actual current build (JWT + customer OTP auth, WhatsApp via Twilio, 12 live backend domains as of schema v19). See `CLAUDE-v6.md` for what's actually built.
+
 | **Prepared By** | **Market** | **Launch Target** | **Version** |
 | --- | --- | --- | --- |
 | Edge (Founder) | Lebanon to MENA | 7 Weeks | 1.0 |
@@ -58,7 +60,7 @@ Version 1.0  Confidential  2025
 | Referral system | Phase 2 | Share B-Edge and earn discounts | Growth mechanism |
 | Browse by neighbourhood | Phase 2 | Find artists near specific Beirut areas | Hyper local discovery |
 | Gift a booking | Phase 3 | Send a booking as a gift to someone | New revenue stream |
-| Buy beauty products | Phase 3 | Purchase products sold by artists | New revenue stream |
+| Buy beauty products | MVP (built) | Purchase products sold by artists | Reclassified from Phase 3 on Aug 15, 2026 to match PRD v7 Final, which specced this as a Phase 1 launch requirement. Live: full catalogue browse, cart, and order placement in customer-pwa's Shop. |
 | Loyalty points | Phase 3 | Earn points per booking redeemable for discounts | Retention program |
 | Multi country support | Phase 3 | Use B-Edge in Jordan, Egypt, UAE | MENA expansion |
 | Video consultation | Phase 4 | Video call with artist before booking | Premium feature |
@@ -92,10 +94,10 @@ Version 1.0  Confidential  2025
 | SMS notifications | Phase 2 | SMS alerts in addition to email | Better reach in Lebanon |
 | Customer rebooking prompts | Phase 2 | Automated reminder to past customers to rebook | Retention tool |
 | Service packages | Phase 2 | Bundle multiple services at a package price | Upselling tool |
-| Waitlist management | Phase 2 | Allow customers to join waitlist for full slots | Revenue recovery |
+| Waitlist management | MVP (built) | Allow customers to join waitlist for full slots | Reclassified from Phase 2 on Aug 15, 2026 to match PRD v7 Final §9.5, which specced this as a Phase 1 launch requirement. Live: `waitlist_entries` table (migration 016), booking-domain waitlist logic, and a Waitlist screen in artist-dashboard. |
 | Availability sync | Phase 2 | Sync calendar with Google Calendar | Avoid double booking |
 | Advanced CRM | Phase 2 | Track customer birthdays, preferences, spend history | Professional tool |
-| Sell products | Phase 3 | List beauty products for sale on B-Edge profile | New revenue stream |
+| Sell products | MVP (built) | List beauty products for sale on B-Edge profile | Reclassified from Phase 3 on Aug 15, 2026 to match PRD v7 Final, which specced this as a Phase 1 launch requirement. Live: full product catalogue + order lifecycle (`placed → confirmed → shipped → delivered`) in artist-dashboard's Products and Orders screens. |
 | Promo codes | Phase 3 | Create discount codes for new or returning customers | Marketing tool |
 | Analytics dashboard | Phase 3 | Detailed reports on bookings, revenue, and growth | Business intelligence |
 | Staff management | Phase 3 | Add team members if running a salon | Salon growth feature |
@@ -198,7 +200,6 @@ The MVP contains everything needed to validate B-Edge with real Lebanese beauty 
 | Native mobile app | PWA covers this for MVP | Phase 3 |
 | Instagram Book Now button | Requires Meta business review process | Phase 2 |
 | In-app chat | WhatsApp still works for MVP | Phase 2 |
-| Product catalogue | Out of scope for booking platform MVP | Phase 3 |
 | SMS notifications | Email sufficient for MVP | Phase 2 |
 | Push notifications | PWA install not required for MVP | Phase 2 |
 | Analytics dashboard | Not needed until scale | Phase 3 |

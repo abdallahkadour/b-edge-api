@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
@@ -59,7 +60,8 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 // Called once from cmd/main.go during server startup.
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
-	svc := NewService(repo)
+	auditRepo := audit.NewRepository(pool)
+	svc := NewService(repo, auditRepo)
 	handler := NewHandler(svc, log)
 
 	auth := app.Group("/api/v1/auth")
@@ -123,7 +125,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
 	}
 
-	result, err := h.svc.Login(c.Context(), req)
+	result, err := h.svc.Login(c.Context(), req, c.IP())
 	if err != nil {
 		return err
 	}

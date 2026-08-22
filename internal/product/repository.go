@@ -71,10 +71,10 @@ func NewRepository(db *pgxpool.Pool) Repository {
 
 func (r *pgRepo) CreateProduct(ctx context.Context, p *Product) error {
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO products (id, salon_id, name, description, category, price, image_url, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+		INSERT INTO products (id, salon_id, name, description, category, price, image_url, stock_quantity, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
 		RETURNING created_at, updated_at`,
-		p.ID, p.SalonID, p.Name, p.Description, p.Category, p.Price, p.ImageURL,
+		p.ID, p.SalonID, p.Name, p.Description, p.Category, p.Price, p.ImageURL, p.StockQuantity,
 	).Scan(&p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create product: %w", err)
@@ -85,11 +85,11 @@ func (r *pgRepo) CreateProduct(ctx context.Context, p *Product) error {
 func (r *pgRepo) GetProductByID(ctx context.Context, id uuid.UUID) (*Product, error) {
 	p := &Product{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, salon_id, name, description, category, price, image_url, is_active, created_at, updated_at
+		SELECT id, salon_id, name, description, category, price, image_url, stock_quantity, is_active, created_at, updated_at
 		FROM products
 		WHERE id = $1`,
 		id,
-	).Scan(&p.ID, &p.SalonID, &p.Name, &p.Description, &p.Category, &p.Price, &p.ImageURL, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+	).Scan(&p.ID, &p.SalonID, &p.Name, &p.Description, &p.Category, &p.Price, &p.ImageURL, &p.StockQuantity, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrProductNotFound
@@ -101,7 +101,7 @@ func (r *pgRepo) GetProductByID(ctx context.Context, id uuid.UUID) (*Product, er
 
 func (r *pgRepo) GetProductsBySalon(ctx context.Context, salonID uuid.UUID, activeOnly bool) ([]*Product, error) {
 	q := `
-		SELECT id, salon_id, name, description, category, price, image_url, is_active, created_at, updated_at
+		SELECT id, salon_id, name, description, category, price, image_url, stock_quantity, is_active, created_at, updated_at
 		FROM products
 		WHERE salon_id = $1`
 	if activeOnly {
@@ -118,7 +118,7 @@ func (r *pgRepo) GetProductsBySalon(ctx context.Context, salonID uuid.UUID, acti
 	var result []*Product
 	for rows.Next() {
 		p := &Product{}
-		if err := rows.Scan(&p.ID, &p.SalonID, &p.Name, &p.Description, &p.Category, &p.Price, &p.ImageURL, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.SalonID, &p.Name, &p.Description, &p.Category, &p.Price, &p.ImageURL, &p.StockQuantity, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan product: %w", err)
 		}
 		result = append(result, p)
@@ -132,15 +132,16 @@ func (r *pgRepo) GetProductsBySalon(ctx context.Context, salonID uuid.UUID, acti
 func (r *pgRepo) UpdateProduct(ctx context.Context, id uuid.UUID, req UpdateProductRequest) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE products
-		SET name        = COALESCE($1, name),
-		    description = COALESCE($2, description),
-		    category    = COALESCE($3, category),
-		    price       = COALESCE($4, price),
-		    image_url   = COALESCE($5, image_url),
-		    is_active   = COALESCE($6, is_active),
-		    updated_at  = NOW()
-		WHERE id = $7`,
-		req.Name, req.Description, req.Category, req.Price, req.ImageURL, req.IsActive, id,
+		SET name           = COALESCE($1, name),
+		    description    = COALESCE($2, description),
+		    category       = COALESCE($3, category),
+		    price          = COALESCE($4, price),
+		    image_url      = COALESCE($5, image_url),
+		    stock_quantity = COALESCE($6, stock_quantity),
+		    is_active      = COALESCE($7, is_active),
+		    updated_at     = NOW()
+		WHERE id = $8`,
+		req.Name, req.Description, req.Category, req.Price, req.ImageURL, req.StockQuantity, req.IsActive, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update product: %w", err)
@@ -158,10 +159,10 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem) 
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO orders (id, salon_id, customer_id, status, total_amount, delivery_notes)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO orders (id, salon_id, customer_id, status, total_amount, delivery_notes, delivery_lat, delivery_lng)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at, updated_at`,
-		o.ID, o.SalonID, o.CustomerID, OrderStatusPlaced, o.TotalAmount, o.DeliveryNotes,
+		o.ID, o.SalonID, o.CustomerID, OrderStatusPlaced, o.TotalAmount, o.DeliveryNotes, o.DeliveryLat, o.DeliveryLng,
 	).Scan(&o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create order: insert order: %w", err)
@@ -170,6 +171,28 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem) 
 
 	for _, item := range items {
 		item.OrderID = o.ID
+
+		// Atomic, race-safe stock decrement - the WHERE clause is the whole
+		// guarantee. It only succeeds if there's still enough stock RIGHT
+		// NOW, inside this transaction, not whatever PlaceOrder's earlier
+		// unlocked read saw a moment before. A NULL stock_quantity
+		// (unlimited/not tracked) always satisfies the OR and stays NULL
+		// after the subtraction (NULL arithmetic in Postgres), so untracked
+		// products are never touched by this.
+		tag, err := tx.Exec(ctx, `
+			UPDATE products
+			SET stock_quantity = stock_quantity - $1, updated_at = NOW()
+			WHERE id = $2
+			AND (stock_quantity IS NULL OR stock_quantity >= $1)`,
+			item.Quantity, item.ProductID,
+		)
+		if err != nil {
+			return fmt.Errorf("create order: decrement stock: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrInsufficientStock
+		}
+
 		_, err = tx.Exec(ctx, `
 			INSERT INTO order_items (id, order_id, product_id, product_name, unit_price, quantity, subtotal)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -190,7 +213,7 @@ func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*Ord
 	o := &Order{}
 	err := r.db.QueryRow(ctx, `
 		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, cancellation_reason,
+		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
 		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
 		FROM orders
 		WHERE id = $1
@@ -198,7 +221,7 @@ func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*Ord
 		id,
 	).Scan(
 		&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.PaymentReference,
-		&o.DeliveryNotes, &o.CancellationReason,
+		&o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
 		&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
@@ -245,7 +268,7 @@ func (r *pgRepo) GetOrderItems(ctx context.Context, orderID uuid.UUID) ([]*Order
 func (r *pgRepo) GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*Order, error) {
 	q := `
 		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, cancellation_reason,
+		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
 		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
 		FROM orders
 		WHERE salon_id = $1
@@ -271,7 +294,7 @@ func (r *pgRepo) GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status
 func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*EnrichedOrderResponse, error) {
 	q := `
 		SELECT o.id, o.status, o.total_amount, o.payment_reference,
-		       o.delivery_notes, o.cancellation_reason,
+		       o.delivery_notes, o.delivery_lat, o.delivery_lng, o.cancellation_reason,
 		       o.confirmed_at, o.shipped_at, o.delivered_at, o.cancelled_at, o.created_at,
 		       u.name, u.phone
 		FROM orders o
@@ -297,7 +320,7 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 		var orderID uuid.UUID
 		if err := rows.Scan(
 			&orderID, &e.Status, &e.TotalAmount, &e.PaymentReference,
-			&e.DeliveryNotes, &e.CancellationReason,
+			&e.DeliveryNotes, &e.DeliveryLat, &e.DeliveryLng, &e.CancellationReason,
 			&e.ConfirmedAt, &e.ShippedAt, &e.DeliveredAt, &e.CancelledAt, &e.CreatedAt,
 			&e.CustomerName, &e.CustomerPhone,
 		); err != nil {
@@ -337,7 +360,7 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 func (r *pgRepo) GetOrdersByCustomer(ctx context.Context, customerID uuid.UUID) ([]*Order, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, cancellation_reason,
+		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
 		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
 		FROM orders
 		WHERE customer_id = $1
@@ -358,7 +381,7 @@ func scanOrders(rows pgx.Rows) ([]*Order, error) {
 		o := &Order{}
 		if err := rows.Scan(
 			&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.PaymentReference,
-			&o.DeliveryNotes, &o.CancellationReason,
+			&o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
 			&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan order: %w", err)
@@ -403,12 +426,51 @@ func (r *pgRepo) UpdateOrderStatus(ctx context.Context, id uuid.UUID, fromStatus
 		timestampColAssignment(timestampCol),
 	)
 
-	result, err := r.db.Exec(ctx, q, toStatus, paymentReference, cancellationReason, id, fromStatus)
+	// Cancelling or returning an order releases the stock it held at
+	// placement time. Done inside the SAME transaction as the status flip -
+	// wrapped in a tx only for these two statuses, since every other
+	// transition doesn't touch products at all - so a restock can never
+	// happen without its matching status change, or vice versa.
+	if toStatus != OrderStatusCancelled && toStatus != OrderStatusReturned {
+		result, err := r.db.Exec(ctx, q, toStatus, paymentReference, cancellationReason, id, fromStatus)
+		if err != nil {
+			return fmt.Errorf("update order status: %w", err)
+		}
+		if result.RowsAffected() == 0 {
+			return ErrInvalidOrderTransition
+		}
+		return nil
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update order status: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	result, err := tx.Exec(ctx, q, toStatus, paymentReference, cancellationReason, id, fromStatus)
 	if err != nil {
 		return fmt.Errorf("update order status: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrInvalidOrderTransition
+	}
+
+	// Only restock products that actually track stock (stock_quantity IS
+	// NOT NULL) - untracked products were never decremented at order time,
+	// so incrementing them here would invent a number, not restore one.
+	if _, err := tx.Exec(ctx, `
+		UPDATE products p
+		SET stock_quantity = p.stock_quantity + oi.quantity, updated_at = NOW()
+		FROM order_items oi
+		WHERE oi.order_id = $1 AND oi.product_id = p.id AND p.stock_quantity IS NOT NULL`,
+		id,
+	); err != nil {
+		return fmt.Errorf("update order status: restock: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update order status: commit: %w", err)
 	}
 	return nil
 }

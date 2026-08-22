@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
 
 // ── Mock repository ───────────────────────────────────────────────────────────
@@ -26,6 +29,15 @@ type mockRepo struct {
 	deleteErr   error
 	setCoverErr error
 	reorderErr  error
+
+	// Product gallery - separate from the artist-portfolio fields above so
+	// a test can give the two paths genuinely different data.
+	productItems      []*MediaItem
+	productCount      int
+	productCountErr   error
+	productSalonID    uuid.UUID
+	productSalonErr   error
+	productReorderErr error
 }
 
 func (m *mockRepo) GetArtistIDByUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
@@ -59,6 +71,22 @@ func (m *mockRepo) SetCover(_ context.Context, _, _ uuid.UUID) error {
 
 func (m *mockRepo) Reorder(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
 	return m.reorderErr
+}
+
+func (m *mockRepo) ListByProduct(_ context.Context, _ uuid.UUID) ([]*MediaItem, error) {
+	return m.productItems, nil
+}
+
+func (m *mockRepo) CountByProduct(_ context.Context, _ uuid.UUID) (int, error) {
+	return m.productCount, m.productCountErr
+}
+
+func (m *mockRepo) ReorderProduct(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
+	return m.productReorderErr
+}
+
+func (m *mockRepo) GetProductSalonID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
+	return m.productSalonID, m.productSalonErr
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -329,4 +357,142 @@ func TestSetCover_OtherArtistsPhoto_Denied(t *testing.T) {
 	err := svc.SetCover(context.Background(), uuid.New(), mediaID)
 
 	assert.Error(t, err, "an artist must not be able to set another artist's photo as a cover")
+}
+
+// ── Product gallery tests ───────────────────────────────────────────────────
+//
+// A product's own image_url is untouched by any of this - only the
+// ADDITIONAL gallery photos. Ownership here is salon-based, not the
+// artist-based OwnerID check above, since one salon owns many products.
+
+func makeProductItem(productID uuid.UUID, order int) *MediaItem {
+	return &MediaItem{
+		ID:           uuid.New(),
+		OwnerType:    OwnerTypeProduct,
+		OwnerID:      productID,
+		URL:          "https://res.cloudinary.com/bedge/image/upload/v1/product.jpg",
+		Type:         MediaTypePhoto,
+		DisplayOrder: order,
+		CreatedAt:    time.Now(),
+	}
+}
+
+func TestGetProductPhotos_ReturnsGallery(t *testing.T) {
+	productID := uuid.New()
+	items := []*MediaItem{makeProductItem(productID, 0), makeProductItem(productID, 1)}
+
+	repo := &mockRepo{productItems: items}
+	svc := NewService(repo)
+
+	result, err := svc.GetProductPhotos(context.Background(), productID)
+	require.NoError(t, err)
+	assert.Equal(t, productID, result.ProductID)
+	assert.Len(t, result.Photos, 2)
+	assert.Equal(t, MaxProductPhotos, result.MaxAllowed)
+}
+
+func TestAddProductPhoto_OwningSalon_Succeeds(t *testing.T) {
+	salonID := uuid.New()
+	productID := uuid.New()
+
+	repo := &mockRepo{productSalonID: salonID, productCount: 2}
+	svc := NewService(repo)
+
+	res, err := svc.AddProductPhoto(context.Background(), productID, salonID,
+		AddMediaRequest{URL: "https://res.cloudinary.com/bedge/image/upload/v1/angle2.jpg"})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.DisplayOrder, "must append at the current count")
+}
+
+func TestAddProductPhoto_OtherSalonsProduct_Denied(t *testing.T) {
+	repo := &mockRepo{productSalonID: uuid.New()} // owned by a DIFFERENT salon
+	svc := NewService(repo)
+
+	_, err := svc.AddProductPhoto(context.Background(), uuid.New(), uuid.New(),
+		AddMediaRequest{URL: "https://res.cloudinary.com/bedge/image/upload/v1/x.jpg"})
+
+	assert.Error(t, err, "an artist must not add photos to another salon's product")
+}
+
+func TestAddProductPhoto_GalleryFull_Returns409(t *testing.T) {
+	salonID := uuid.New()
+	repo := &mockRepo{productSalonID: salonID, productCount: MaxProductPhotos}
+	svc := NewService(repo)
+
+	_, err := svc.AddProductPhoto(context.Background(), uuid.New(), salonID,
+		AddMediaRequest{URL: "https://res.cloudinary.com/bedge/image/upload/v1/one-too-many.jpg"})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, fiber.StatusConflict, appErr.HTTPStatus)
+}
+
+func TestDeleteProductPhoto_OwningSalon_Succeeds(t *testing.T) {
+	salonID := uuid.New()
+	productID := uuid.New()
+	mediaID := uuid.New()
+
+	repo := &mockRepo{
+		getByIDItem:    &MediaItem{ID: mediaID, OwnerType: OwnerTypeProduct, OwnerID: productID},
+		productSalonID: salonID,
+	}
+	svc := NewService(repo)
+
+	err := svc.DeleteProductPhoto(context.Background(), mediaID, salonID)
+	assert.NoError(t, err)
+}
+
+func TestDeleteProductPhoto_OtherSalonsProduct_Denied(t *testing.T) {
+	mediaID := uuid.New()
+	productID := uuid.New()
+
+	repo := &mockRepo{
+		getByIDItem:    &MediaItem{ID: mediaID, OwnerType: OwnerTypeProduct, OwnerID: productID},
+		productSalonID: uuid.New(), // the product's REAL salon
+	}
+	svc := NewService(repo)
+
+	err := svc.DeleteProductPhoto(context.Background(), mediaID, uuid.New()) // a different, attacking salon
+
+	assert.Error(t, err, "an artist must not delete another salon's product photo")
+}
+
+func TestDeleteProductPhoto_ArtistPortfolioPhoto_NotFound(t *testing.T) {
+	// A portfolio photo's ID fed into the PRODUCT delete endpoint must not
+	// be treated as a product photo just because the ID happens to exist.
+	mediaID := uuid.New()
+	repo := &mockRepo{
+		getByIDItem: &MediaItem{ID: mediaID, OwnerType: OwnerTypeArtist, OwnerID: uuid.New()},
+	}
+	svc := NewService(repo)
+
+	err := svc.DeleteProductPhoto(context.Background(), mediaID, uuid.New())
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, fiber.StatusNotFound, appErr.HTTPStatus)
+}
+
+func TestReorderProductPhotos_WrongCount_ReturnsError(t *testing.T) {
+	salonID := uuid.New()
+	repo := &mockRepo{productSalonID: salonID, productCount: 3}
+	svc := NewService(repo)
+
+	err := svc.ReorderProductPhotos(context.Background(), uuid.New(), salonID,
+		ReorderRequest{IDs: []string{uuid.New().String()}}) // only 1, product has 3
+
+	assert.Error(t, err)
+}
+
+func TestReorderProductPhotos_OtherSalonsProduct_Denied(t *testing.T) {
+	repo := &mockRepo{productSalonID: uuid.New()}
+	svc := NewService(repo)
+
+	err := svc.ReorderProductPhotos(context.Background(), uuid.New(), uuid.New(),
+		ReorderRequest{IDs: []string{uuid.New().String()}})
+
+	assert.Error(t, err)
 }

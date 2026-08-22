@@ -18,15 +18,16 @@ type Repository interface {
 	// Returns ErrArtistNotFound if the user has no artist profile.
 	GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
 
-	// ListClients returns the artist's clients (customers with at least one
-	// completed booking), aggregated with booking metrics, the customer's average
+	// ListClients returns the artist's clients (customers with at least one real
+	// booking - see nonMemberStatuses for what doesn't count), aggregated with
+	// booking metrics scoped to COMPLETED bookings only, the customer's average
 	// rating of THIS artist, and the artist's private note. Optional q filters by
 	// customer name or last service (case-insensitive).
 	ListClients(ctx context.Context, artistID uuid.UUID, q string) ([]*ClientRow, error)
 
 	// GetClient returns a single client's aggregated row for the given artist.
-	// Returns ErrClientNotFound if the customer has no completed booking with
-	// this artist.
+	// Returns ErrClientNotFound if the customer has no qualifying booking (see
+	// nonMemberStatuses) with this artist.
 	GetClient(ctx context.Context, artistID, customerID uuid.UUID) (*ClientRow, error)
 
 	// GetClientHistory returns the customer's booking history with this artist,
@@ -55,20 +56,19 @@ func NewRepository(db *pgxpool.Pool) Repository {
 }
 
 // clientAggregateSelect is the shared SELECT + FROM + JOIN body for the client
-// list and single-client queries. It aggregates a customer's COMPLETED bookings
-// with this artist, LEFT JOINs the artist's private note, and computes the
-// customer's average rating of THIS artist from reviews. %s is the extra WHERE
-// predicate (search filter or single-customer filter).
-//
-// last_service / last_visit use DISTINCT ON-style window via a correlated
-// subquery on the most recent completed booking.
+// list and single-client queries. Membership (which customers show up at all)
+// is any booking that was a real commitment, not just a completed one - see
+// nonMemberStatuses. Metrics (bookings_count/total_spent/last_visit) stay
+// scoped to COMPLETED bookings only via FILTER, since those reflect money
+// actually earned and services actually delivered, not merely booked. %s is
+// the extra WHERE predicate (search filter or single-customer filter).
 const clientAggregateSelect = `
 	SELECT
 		b.customer_id,
 		u.name,
 		u.phone,
-		COUNT(b.id)                              AS bookings_count,
-		COALESCE(SUM(b.final_price), 0)          AS total_spent,
+		COUNT(b.id) FILTER (WHERE b.status = '` + completedStatus + `')                    AS bookings_count,
+		COALESCE(SUM(b.final_price) FILTER (WHERE b.status = '` + completedStatus + `'), 0) AS total_spent,
 		(SELECT s2.name
 		   FROM bookings b2
 		   JOIN services s2 ON s2.id = b2.service_id
@@ -77,8 +77,8 @@ const clientAggregateSelect = `
 		    AND b2.status = '` + completedStatus + `'
 		    AND b2.deleted_at IS NULL
 		  ORDER BY b2.start_time DESC
-		  LIMIT 1)                               AS last_service,
-		MAX(b.start_time)                        AS last_visit,
+		  LIMIT 1)                                                                          AS last_service,
+		MAX(b.start_time) FILTER (WHERE b.status = '` + completedStatus + `')               AS last_visit,
 		(SELECT AVG(r.rating)
 		   FROM reviews r
 		  WHERE r.customer_id = b.customer_id
@@ -90,7 +90,7 @@ const clientAggregateSelect = `
 	       ON cn.artist_id   = b.artist_id
 	      AND cn.customer_id  = b.customer_id
 	WHERE b.artist_id = $1
-	  AND b.status = '` + completedStatus + `'
+	  AND b.status NOT IN (` + nonMemberStatuses + `)
 	  AND b.deleted_at IS NULL
 	  AND u.deleted_at IS NULL
 	  %s

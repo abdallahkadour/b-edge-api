@@ -1,8 +1,9 @@
 // Package client implements the artist-facing CRM for B-Edge: the list of an
-// artist's clients (customers who have completed at least one booking), each
-// client's aggregated history and metrics, and the artist's private per-client
-// notes. Client identity and metrics are derived from bookings, users, and
-// reviews; only the private note is stored (in the client_notes table).
+// artist's clients (customers who have ever made a real booking with the
+// artist, not just completed ones), each client's aggregated history and
+// metrics, and the artist's private per-client notes. Client identity and
+// metrics are derived from bookings, users, and reviews; only the private
+// note is stored (in the client_notes table).
 package client
 
 import (
@@ -13,15 +14,27 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// completedStatus is the booking status that counts toward client metrics.
-// Spend and visit history reflect money actually earned, so only completed
-// bookings are aggregated.
+// completedStatus is the booking status that counts toward client metrics
+// (bookings_count/total_spent/last_visit). Spend and visit history reflect
+// money actually earned and services actually delivered, so only completed
+// bookings are aggregated - a customer with only a pending booking still
+// shows up in the client list (see nonMemberStatuses) but with zero spend
+// until that booking completes.
 const completedStatus = "completed"
+
+// nonMemberStatuses are booking statuses that do NOT make a customer count as
+// an artist's "client" - held is a temporary slot lock that auto-expires
+// without ever becoming a real commitment, and expired is one that timed out
+// unpaid. Every other status (pending, approved, deposit_paid, confirmed,
+// completed, cancelled, no_show, refund_due, refunded) reflects an actual
+// booking the customer made, so they belong on the client list even before
+// (or without ever) completing a service.
+const nonMemberStatuses = `'held', 'expired'`
 
 // ── Sentinel errors ───────────────────────────────────────────────────────────
 
 var (
-	// ErrClientNotFound is returned when a customer has no completed bookings
+	// ErrClientNotFound is returned when a customer has no qualifying bookings
 	// with the requesting artist (i.e. is not the artist's client).
 	ErrClientNotFound = errors.New("client not found for this artist")
 

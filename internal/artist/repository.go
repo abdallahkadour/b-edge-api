@@ -26,10 +26,17 @@ type Repository interface {
 	// the caller can't distinguish "handle doesn't exist" from "UUID
 	// doesn't exist" and probe for which handles are taken.
 	GetArtistIDByHandle(ctx context.Context, handle string) (uuid.UUID, error)
+	IsArtistActive(ctx context.Context, artistID uuid.UUID) (bool, error)
 	UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error
 	GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*Store, error)
 	GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*Store, error)
 	GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, error)
+	// CreateStore inserts a new store and assigns artistID to work there, in
+	// a single transaction - a store nobody is assigned to would be
+	// invisible to GetStoresByArtist (which is what the booking funnel and
+	// the availability algorithm both actually query), making it a
+	// dead, unusable row rather than a partial success.
+	CreateStore(ctx context.Context, store *Store, artistID uuid.UUID) error
 	UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error
 	GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error)
 	GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error)
@@ -51,6 +58,46 @@ type pgRepo struct {
 // NewRepository creates an artist repository backed by the given pool.
 func NewRepository(db *pgxpool.Pool) Repository {
 	return &pgRepo{db: db}
+}
+
+// CreateStore inserts a new store row and, in the same transaction, assigns
+// artistID to work there via artist_stores. Everything past salon/name/
+// city/address/phone is left to the stores table's own column defaults
+// (same_day_notice_hours, buffers, timezone) - the RETURNING clause reads
+// them back so the caller gets a complete Store, matching every other
+// create-then-return method in this codebase.
+func (r *pgRepo) CreateStore(ctx context.Context, store *Store, artistID uuid.UUID) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create store: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO stores (salon_id, name, name_ar, address, city, phone)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, country, same_day_notice_hours, early_bird_cutoff, early_bird_fee,
+		          weekday_buffer_min, weekend_buffer_min, timezone, is_active,
+		          created_at, updated_at`,
+		store.SalonID, store.Name, store.NameAr, store.Address, store.City, store.Phone,
+	).Scan(
+		&store.ID, &store.Country, &store.SameDayNoticeHours, &store.EarlyBirdCutoff, &store.EarlyBirdFee,
+		&store.WeekdayBufferMin, &store.WeekendBufferMin, &store.Timezone, &store.IsActive,
+		&store.CreatedAt, &store.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create store: insert store: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO artist_stores (artist_id, store_id)
+		VALUES ($1, $2)`,
+		artistID, store.ID,
+	); err != nil {
+		return fmt.Errorf("create store: assign artist: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // UpdateStore applies a partial update to a store's settings.
@@ -103,6 +150,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 		FROM artists a
 		JOIN users u ON u.id = a.user_id
 		WHERE a.id = $1
+		AND a.status = 'active'
 		AND u.deleted_at IS NULL`,
 		artistID,
 	).Scan(
@@ -124,7 +172,9 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 // GetArtistIDByHandle resolves a public handle to the artist's UUID.
 func (r *pgRepo) GetArtistIDByHandle(ctx context.Context, handle string) (uuid.UUID, error) {
 	var id uuid.UUID
-	err := r.db.QueryRow(ctx, `SELECT id FROM artists WHERE handle = $1`, handle).Scan(&id)
+	err := r.db.QueryRow(ctx,
+		`SELECT id FROM artists WHERE handle = $1 AND status = 'active'`, handle,
+	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrArtistNotFound
@@ -132,6 +182,24 @@ func (r *pgRepo) GetArtistIDByHandle(ctx context.Context, handle string) (uuid.U
 		return uuid.Nil, fmt.Errorf("get artist id by handle: %w", err)
 	}
 	return id, nil
+}
+
+// IsArtistActive reports whether an artist ID resolves to an active,
+// reviewed profile - the check used to close the OTHER half of
+// ResolveArtistID: a caller who already has a pending artist's raw UUID
+// (an old shared link, or simply guessing) bypasses the handle lookup
+// entirely, since a valid UUID needs no database round-trip on its own to
+// parse. Every public, handle-or-UUID entry point must go through this,
+// not just the handle path.
+func (r *pgRepo) IsArtistActive(ctx context.Context, artistID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM artists WHERE id = $1 AND status = 'active')`, artistID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("is artist active: %w", err)
+	}
+	return exists, nil
 }
 
 func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error) {

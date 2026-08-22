@@ -43,9 +43,9 @@ var (
 
 // Artist represents a beauty professional's profile from the artists table.
 type Artist struct {
-	ID          uuid.UUID       `db:"id"           json:"id"`
-	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
-	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
+	ID      uuid.UUID  `db:"id"           json:"id"`
+	UserID  uuid.UUID  `db:"user_id"      json:"user_id"`
+	SalonID *uuid.UUID `db:"salon_id"     json:"salon_id,omitempty"`
 	// Handle is the artist's public booking-link identifier (e.g. "rania" ->
 	// /book/rania). Nullable - an artist has none until they set one.
 	Handle      *string         `db:"handle"       json:"handle,omitempty"`
@@ -184,6 +184,22 @@ type UpdateServiceRequest struct {
 	DepositAmount        *string `json:"deposit_amount"         validate:"omitempty"`
 	DepositDeadlineHours *int    `json:"deposit_deadline_hours" validate:"omitempty,min=1"`
 	IsActive             *bool   `json:"is_active"`
+}
+
+// CreateStoreRequest is the request body for POST /api/v1/artists/salon/stores -
+// a second (or further) physical location for the calling artist's own
+// salon. The artist creating it is assigned to work there immediately
+// (artist_stores) - B-Edge doesn't yet support multi-artist salons with
+// staff, so the creator is always the one working at the new location.
+// Everything else (buffers, notice hours, timezone) starts at the stores
+// table's own defaults and is tuned afterward via PATCH, same as the
+// first store created during onboarding.
+type CreateStoreRequest struct {
+	Name    string  `json:"name"    validate:"required,min=2,max=200"`
+	NameAr  *string `json:"name_ar" validate:"omitempty,max=200"`
+	City    string  `json:"city"    validate:"required,min=2,max=100"`
+	Address *string `json:"address" validate:"omitempty,max=500"`
+	Phone   *string `json:"phone"   validate:"omitempty,max=50"`
 }
 
 // UpdateStoreRequest is the request body for PATCH /api/v1/artists/stores/:store_id.

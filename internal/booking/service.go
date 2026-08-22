@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -23,6 +24,16 @@ const cancellationWindow = 24 * time.Hour
 // depositDeadlineDefault is the default number of hours before the
 // appointment by which the deposit must be paid.
 const depositDeadlineDefault = 48 * time.Hour
+
+// depositGraceWindow is the fallback deposit window used when a service's
+// configured deposit_deadline_hours doesn't fit before the appointment - a
+// pending request that sat unapproved long enough that start_time minus the
+// service's deposit window has already passed by the time the artist
+// approves it. Rather than storing an instantly-expired deadline (and
+// telling the customer they have "24 hours" while the real field already
+// lapsed), the customer gets this much time from the moment of approval,
+// capped so it never extends past the appointment itself.
+const depositGraceWindow = 2 * time.Hour
 
 // defaultPageSize is the number of bookings returned per page.
 const defaultPageSize = 20
@@ -160,6 +171,21 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	}
 
 	serviceDuration := time.Duration(service.DurationMin) * time.Minute
+
+	// ── Step 3.5: Lazily release stale holds before reading blocked ranges ──
+	//
+	// A held booking nobody ever submitted stays in 'held' forever unless
+	// something moves it past its 10-minute window - there is no background
+	// scheduler running ReleaseExpiredHolds (found live while testing this
+	// endpoint: several holds from days earlier were still permanently
+	// blocking their slots). Rather than standing up a real scheduler, this
+	// self-heals opportunistically on the read path every availability
+	// query already takes: best-effort, since a sweep failure here should
+	// never fail the slots request itself - worst case, a stale hold keeps
+	// blocking for one more request, exactly like before this fix.
+	if _, err := s.repo.ReleaseExpiredHolds(ctx); err != nil {
+		s.log.Warn("get available slots: release expired holds failed, continuing", zap.Error(err))
+	}
 
 	// ── Step 4: Build blocked ranges from existing bookings ───────────────
 
@@ -752,6 +778,18 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 		return nil, apperror.Conflict("BOOKING_NOT_PENDING", "Only pending bookings can be approved")
 	}
 
+	// A pending request nobody acted on before its own appointment time
+	// isn't approvable anymore - there's no slot left to honor, and
+	// approving it would compute a deposit deadline that's also already
+	// in the past (see depositDeadline below) and send the customer a
+	// WhatsApp message asking them to pay for an appointment that
+	// already happened. There's currently no background job that
+	// auto-expires stale pending bookings, so this guard is the only
+	// thing standing between "sat too long" and a nonsensical approval.
+	if b.StartTime.Before(time.Now()) {
+		return nil, apperror.Conflict("BOOKING_TIME_PASSED", "This booking's appointment time has already passed and can no longer be approved")
+	}
+
 	// Fetch service to get deposit deadline hours
 	service, err := s.repo.GetService(ctx, b.ServiceID)
 	if err != nil {
@@ -764,6 +802,19 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 	}
 
 	depositDeadline := b.StartTime.Add(-deadlineHours)
+
+	// The configured window doesn't fit before the appointment (the request
+	// sat unapproved too long, or the appointment is simply sooner than the
+	// service's usual deposit window) - fall back to a short grace period
+	// from right now instead of storing a deadline that's already passed,
+	// capped so it never extends past the appointment itself.
+	now := time.Now()
+	if depositDeadline.Before(now) {
+		depositDeadline = now.Add(depositGraceWindow)
+		if depositDeadline.After(b.StartTime) {
+			depositDeadline = b.StartTime
+		}
+	}
 
 	if err := s.repo.ApproveBooking(ctx, bookingID, depositDeadline); err != nil {
 		if errors.Is(err, ErrBookingNotPending) {
@@ -779,10 +830,15 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 	if ctxErr == nil {
 		var message string
 		if service.DepositAmount.IsPositive() {
+			// Report the real time left until depositDeadline, not the
+			// service's nominal window - when the grace-window fallback
+			// above kicked in, deadlineHours would otherwise claim "24
+			// hours" while the customer actually has 2 or less.
+			hoursRemaining := max(int(math.Ceil(depositDeadline.Sub(now).Hours())), 1)
 			message = fmt.Sprintf(
 				"Hi %s! Your %s request for %s has been approved. Please send a $%s deposit within %d hours to confirm your spot.",
 				customerName, serviceName, notificationTimeLabel(b.StartTime),
-				service.DepositAmount.String(), int(deadlineHours.Hours()),
+				service.DepositAmount.String(), hoursRemaining,
 			)
 		} else {
 			// No deposit required, but this booking still isn't
@@ -1163,6 +1219,15 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 		return nil, apperror.Conflict("BOOKING_NOT_CONFIRMED", "Only confirmed bookings can be marked as completed")
 	}
 
+	// Mirrors ApproveBooking's and MarkNoShow's own start_time guard: a
+	// service can't be "completed" before it has even started - without
+	// this, an artist could mark a days-away booking complete and trigger
+	// a review-request WhatsApp message for a service the customer hasn't
+	// received yet.
+	if b.StartTime.After(time.Now()) {
+		return nil, apperror.Conflict("BOOKING_NOT_STARTED", "This booking's appointment time hasn't arrived yet, so it can't be marked as completed")
+	}
+
 	reviewToken, err := s.repo.CompleteBooking(ctx, bookingID)
 	if err != nil {
 		return nil, fmt.Errorf("complete booking: %w", err)
@@ -1209,6 +1274,14 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 
 	if b.Status != StatusConfirmed {
 		return nil, apperror.Conflict("BOOKING_NOT_CONFIRMED", "Only confirmed bookings can be marked as no-show")
+	}
+
+	// Mirrors ApproveBooking's own start_time guard: a customer can't be a
+	// "no-show" for an appointment that hasn't happened yet - without this,
+	// an artist could mark a booking no-show days in advance, before the
+	// customer ever had the chance to show up.
+	if b.StartTime.After(time.Now()) {
+		return nil, apperror.Conflict("BOOKING_NOT_STARTED", "This booking's appointment time hasn't arrived yet, so it can't be marked as no-show")
 	}
 
 	if err := s.repo.MarkNoShow(ctx, bookingID); err != nil {

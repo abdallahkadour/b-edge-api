@@ -13,10 +13,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
 
 // ── Mock repository ──────────────────────────────────────────────────────────
@@ -135,6 +138,12 @@ func (m *mockRepo) FindOrCreateCustomerByPhone(_ context.Context, _, _ string) (
 
 func newTestService(repo Repository) *Service { return NewService(repo) }
 
+// Valid pin-drop coordinates (Beirut) - DeliveryLat/DeliveryLng are
+// required on CreateOrderRequest, so every test placing an order needs a
+// real value here regardless of what else that test is exercising.
+const validLat = 33.8938
+const validLng = 35.5018
+
 // activeProduct is a convenience builder for a sellable product.
 func activeProduct(salonID uuid.UUID, price string) *Product {
 	return &Product{
@@ -162,9 +171,11 @@ func TestPlaceOrder_TotalComputedFromServerSidePrices(t *testing.T) {
 	svc := newTestService(repo)
 
 	res, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(),
-		Name:    "Sarah",
-		Phone:   "70123456",
+		SalonID:     salonID.String(),
+		Name:        "Sarah",
+		Phone:       "70123456",
+		DeliveryLat: validLat,
+		DeliveryLng: validLng,
 		Items: []OrderItemRequest{
 			{ProductID: p1.ID.String(), Quantity: 2}, // 25.00
 			{ProductID: p2.ID.String(), Quantity: 3}, // 12.00
@@ -186,7 +197,7 @@ func TestPlaceOrder_SnapshotsNameAndPriceAtOrderTime(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
 	})
 
@@ -207,7 +218,7 @@ func TestPlaceOrder_ProductFromAnotherSalon_Rejected(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: orderSalonID.String(), Name: "Mallory", Phone: "70123456",
+		SalonID: orderSalonID.String(), Name: "Mallory", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: foreign.ID.String(), Quantity: 1}},
 	})
 
@@ -225,7 +236,7 @@ func TestPlaceOrder_InactiveProduct_Rejected(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
 	})
 
@@ -239,7 +250,7 @@ func TestPlaceOrder_ZeroQuantity_Rejected(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 0}},
 	})
 
@@ -255,18 +266,76 @@ func TestPlaceOrder_NegativeQuantity_Rejected(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: -5}},
 	})
 
 	require.Error(t, err, "a negative quantity must never reach the total calculation")
 }
 
+// ── Delivery location ────────────────────────────────────────────────────────
+//
+// A courier needs somewhere real to go - Lebanese addresses don't reliably
+// geocode from text, so the pin-dropped coordinates are required, not
+// optional, on every order.
+
+func TestPlaceOrder_MissingDeliveryLocation_Rejected(t *testing.T) {
+	salonID := uuid.New()
+	p := activeProduct(salonID, "5.00")
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		// DeliveryLat/DeliveryLng both left at zero - never a real customer
+		// location, so `required` must reject this the same as if omitted.
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
+	})
+
+	require.Error(t, err, "an order with no delivery location must be rejected")
+	assert.Nil(t, repo.createdOrder)
+}
+
+func TestPlaceOrder_OutOfRangeLatitude_Rejected(t *testing.T) {
+	salonID := uuid.New()
+	p := activeProduct(salonID, "5.00")
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		DeliveryLat: 200, // not a real latitude
+		DeliveryLng: validLng,
+		Items:       []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
+	})
+
+	require.Error(t, err)
+}
+
+func TestPlaceOrder_ValidDeliveryLocation_PersistedOnOrder(t *testing.T) {
+	salonID := uuid.New()
+	p := activeProduct(salonID, "5.00")
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		DeliveryLat: validLat, DeliveryLng: validLng,
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.createdOrder.DeliveryLat)
+	require.NotNil(t, repo.createdOrder.DeliveryLng)
+	assert.Equal(t, validLat, *repo.createdOrder.DeliveryLat)
+	assert.Equal(t, validLng, *repo.createdOrder.DeliveryLng)
+}
+
 func TestPlaceOrder_EmptyItems_Rejected(t *testing.T) {
 	svc := newTestService(&mockRepo{})
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: uuid.New().String(), Name: "Sarah", Phone: "70123456",
+		SalonID: uuid.New().String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{},
 	})
 
@@ -277,7 +346,7 @@ func TestPlaceOrder_UnknownProduct_Rejected(t *testing.T) {
 	svc := newTestService(&mockRepo{products: map[uuid.UUID]*Product{}})
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: uuid.New().String(), Name: "Sarah", Phone: "70123456",
+		SalonID: uuid.New().String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: uuid.New().String(), Quantity: 1}},
 	})
 
@@ -291,7 +360,7 @@ func TestPlaceOrder_StartsInPlacedStatus(t *testing.T) {
 	svc := newTestService(repo)
 
 	res, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
 	})
 
@@ -519,6 +588,130 @@ func TestCreateProduct_Success(t *testing.T) {
 	assert.True(t, decimal.RequireFromString("8.50").Equal(res.Price))
 }
 
+// ── Stock / availability ─────────────────────────────────────────────────────
+//
+// Two layers, tested separately: PlaceOrder's own pre-check (fast, friendly,
+// but reads an unlocked snapshot) and the fact that a repository-level
+// rejection (what the real atomic decrement returns under a genuine race)
+// surfaces as the same customer-facing error rather than a raw 500.
+
+// stockedProduct is activeProduct with a tracked stock count.
+func stockedProduct(salonID uuid.UUID, price string, stock int) *Product {
+	p := activeProduct(salonID, price)
+	p.StockQuantity = &stock
+	return p
+}
+
+func TestCreateProduct_WithStockQuantity_Passthrough(t *testing.T) {
+	svc := newTestService(&mockRepo{})
+
+	res, err := svc.CreateProduct(context.Background(), uuid.New(), CreateProductRequest{
+		Name: "Limited Edition Palette", Price: "45.00", StockQuantity: intPtr(10),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, res.StockQuantity, "a supplied stock quantity must reach the response")
+	assert.Equal(t, 10, *res.StockQuantity)
+}
+
+func TestCreateProduct_NoStockQuantity_MeansUnlimited(t *testing.T) {
+	svc := newTestService(&mockRepo{})
+
+	res, err := svc.CreateProduct(context.Background(), uuid.New(), CreateProductRequest{
+		Name: "Everyday Essential", Price: "9.00",
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, res.StockQuantity, "omitting stock_quantity must mean unlimited, not zero")
+}
+
+func TestCreateProduct_NegativeStock_Rejected(t *testing.T) {
+	svc := newTestService(&mockRepo{})
+
+	_, err := svc.CreateProduct(context.Background(), uuid.New(), CreateProductRequest{
+		Name: "Broken", Price: "10.00", StockQuantity: intPtr(-1),
+	})
+
+	require.Error(t, err, "a negative stock quantity must never be accepted")
+}
+
+func TestPlaceOrder_EnoughStock_Succeeds(t *testing.T) {
+	salonID := uuid.New()
+	p := stockedProduct(salonID, "20.00", 5)
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 5}},
+	})
+
+	require.NoError(t, err, "ordering exactly the remaining stock must be allowed")
+}
+
+func TestPlaceOrder_MoreThanStock_RejectedByPreCheck(t *testing.T) {
+	salonID := uuid.New()
+	p := stockedProduct(salonID, "20.00", 3)
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 10}},
+	})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, fiber.StatusConflict, appErr.HTTPStatus,
+		"out-of-stock must be a 409, not a generic 400/500")
+	assert.Nil(t, repo.createdOrder, "no order may be persisted when the pre-check rejects it")
+}
+
+func TestPlaceOrder_UnlimitedStock_NeverBlocksOnQuantity(t *testing.T) {
+	salonID := uuid.New()
+	p := activeProduct(salonID, "20.00") // StockQuantity left nil - unlimited
+	repo := &mockRepo{products: map[uuid.UUID]*Product{p.ID: p}}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
+		// 50 is OrderItemRequest's own validation ceiling (max=50) - the
+		// largest quantity a request can carry at all, chosen specifically
+		// so this exercises the stock check's upper edge, not the
+		// unrelated request-validation ceiling.
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 50}},
+	})
+
+	require.NoError(t, err, "a product with no tracked stock must never be blocked on quantity")
+}
+
+func TestPlaceOrder_RepositoryReportsInsufficientStock_MapsToConflict(t *testing.T) {
+	// Simulates losing the real race: the pre-check's unlocked read still
+	// saw enough stock, but repo.CreateOrder's atomic decrement (the actual
+	// guard) found someone else took the last unit first.
+	salonID := uuid.New()
+	p := stockedProduct(salonID, "20.00", 1)
+	repo := &mockRepo{
+		products:       map[uuid.UUID]*Product{p.ID: p},
+		createOrderErr: ErrInsufficientStock,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
+		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
+	})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, fiber.StatusConflict, appErr.HTTPStatus,
+		"a race lost at the repository layer must still surface as a clean 409, not a raw 500")
+}
+
+func intPtr(n int) *int { return &n }
+
 func TestPlaceOrder_CustomerResolutionFails_NoOrderCreated(t *testing.T) {
 	salonID := uuid.New()
 	p := activeProduct(salonID, "5.00")
@@ -529,7 +722,7 @@ func TestPlaceOrder_CustomerResolutionFails_NoOrderCreated(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.PlaceOrder(context.Background(), CreateOrderRequest{
-		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456",
+		SalonID: salonID.String(), Name: "Sarah", Phone: "70123456", DeliveryLat: validLat, DeliveryLng: validLng,
 		Items: []OrderItemRequest{{ProductID: p.ID.String(), Quantity: 1}},
 	})
 

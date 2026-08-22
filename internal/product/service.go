@@ -40,14 +40,15 @@ func (s *Service) CreateProduct(ctx context.Context, salonID uuid.UUID, req Crea
 	}
 
 	p := &Product{
-		ID:          uuid.New(),
-		SalonID:     salonID,
-		Name:        req.Name,
-		Description: req.Description,
-		Category:    req.Category,
-		Price:       price,
-		ImageURL:    req.ImageURL,
-		IsActive:    true,
+		ID:            uuid.New(),
+		SalonID:       salonID,
+		Name:          req.Name,
+		Description:   req.Description,
+		Category:      req.Category,
+		Price:         price,
+		ImageURL:      req.ImageURL,
+		StockQuantity: req.StockQuantity,
+		IsActive:      true,
 	}
 
 	if err := s.repo.CreateProduct(ctx, p); err != nil {
@@ -151,6 +152,15 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		if !product.IsActive {
 			return nil, apperror.BadRequest("PRODUCT_INACTIVE", ErrProductInactive.Error())
 		}
+		// Advisory only - a fast, friendly rejection for the common case.
+		// This read isn't locked, so two concurrent checkouts for the last
+		// unit could both pass it; the atomic decrement inside
+		// repo.CreateOrder below is what actually prevents overselling,
+		// and its rejection is mapped to the same error after the loop.
+		if product.StockQuantity != nil && *product.StockQuantity < reqItem.Quantity {
+			return nil, apperror.Conflict("PRODUCT_OUT_OF_STOCK",
+				fmt.Sprintf("%s is out of stock in the quantity you requested", product.Name))
+		}
 
 		quantity := decimal.NewFromInt(int64(reqItem.Quantity))
 		subtotal := product.Price.Mul(quantity)
@@ -177,9 +187,15 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		CustomerID:    customerID,
 		TotalAmount:   total,
 		DeliveryNotes: req.DeliveryNotes,
+		DeliveryLat:   &req.DeliveryLat,
+		DeliveryLng:   &req.DeliveryLng,
 	}
 
 	if err := s.repo.CreateOrder(ctx, order, items); err != nil {
+		if errors.Is(err, ErrInsufficientStock) {
+			return nil, apperror.Conflict("PRODUCT_OUT_OF_STOCK",
+				"Sorry, one or more items in your order just sold out. Please update your cart and try again.")
+		}
 		return nil, fmt.Errorf("place order: %w", err)
 	}
 	return toOrderResponse(order, items), nil

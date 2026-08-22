@@ -33,19 +33,30 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	svc := NewService(repo)
 	handler := NewHandler(svc, log)
 
-	r := app.Group("/api/v1/reviews", middleware.RequireAuth())
+	// Auth is applied per-route below, not via app.Group("/api/v1/reviews",
+	// RequireAuth()). A Group's middleware is registered as an app-wide
+	// Use() bound to its prefix, and Fiber freezes each route's middleware
+	// chain against whatever's in that global stack at the moment the route
+	// is registered - a route registered afterward under the SAME prefix,
+	// even directly on `app` and even with a comment saying "deliberately
+	// outside the group," still inherits it. That silently 401'd the guest
+	// review-by-token routes below (they share the /api/v1/reviews prefix)
+	// until this was found and fixed; see CLAUDE-v6.md and the identical
+	// bug this exact pattern caused in product/handler.go.
+	r := app.Group("/api/v1/reviews")
+	auth := middleware.RequireAuth()
 
-	r.Post("/", handler.CreateReview)
-	r.Get("/artist/:artist_id", handler.GetReviewsByArtist)
-	r.Delete("/:id", handler.DeleteReview)
-	r.Patch("/:id/hide", middleware.RequireRole("artist", "admin"), handler.HideReview)
-	r.Patch("/:id/show", middleware.RequireRole("artist", "admin"), handler.ShowReview)
+	r.Post("/", auth, handler.CreateReview)
+	r.Get("/artist/:artist_id", auth, handler.GetReviewsByArtist)
+	r.Delete("/:id", auth, handler.DeleteReview)
+	r.Patch("/:id/hide", auth, middleware.RequireRole("artist", "admin"), handler.HideReview)
+	r.Patch("/:id/show", auth, middleware.RequireRole("artist", "admin"), handler.ShowReview)
 
-	// Guest review-link flow — deliberately OUTSIDE the RequireAuth() group.
-	// A guest who booked never receives a JWT; the token in the URL is the
-	// only credential these two routes accept, in place of a Bearer header.
-	app.Get("/api/v1/reviews/by-token/:token", handler.GetBookingContextByToken)
-	app.Post("/api/v1/reviews/by-token/:token", handler.CreateReviewByToken)
+	// Guest review-link flow — no auth. A guest who booked never receives a
+	// JWT; the token in the URL is the only credential these two routes
+	// accept, in place of a Bearer header.
+	r.Get("/by-token/:token", handler.GetBookingContextByToken)
+	r.Post("/by-token/:token", handler.CreateReviewByToken)
 
 	// Public review list - deliberately a DIFFERENT path
 	// (/public/reviews/... not /reviews/...) rather than moving the

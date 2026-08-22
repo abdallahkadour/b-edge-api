@@ -61,7 +61,7 @@ func NewRepository(db *pgxpool.Pool) Repository {
 func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error) {
 	// Build dynamic WHERE conditions. Arguments are positional and appended in
 	// lockstep with their placeholders.
-	conds := []string{"s.is_active = TRUE", "u.deleted_at IS NULL"}
+	conds := []string{"s.is_active = TRUE", "u.deleted_at IS NULL", "a.status = 'active'"}
 	args := []any{}
 	n := 0
 
@@ -146,6 +146,7 @@ func (r *pgRepo) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Art
 		FROM artists a
 		JOIN users u ON u.id = a.user_id
 		WHERE a.id = $1
+		AND a.status = 'active'
 		AND u.deleted_at IS NULL`,
 		artistID,
 	).Scan(

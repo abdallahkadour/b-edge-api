@@ -82,6 +82,14 @@ type ReviewBookingContext struct {
 	StoreName   string          `json:"store_name"`
 	StartTime   time.Time       `json:"start_time"`
 	FinalPrice  decimal.Decimal `json:"final_price"`
+	// AlreadyReviewed lets the landing screen show its "submitted" state
+	// immediately on load, rather than only after a second submit attempt
+	// bounces off the 409 CreateReviewByToken already returns for a
+	// duplicate. The review link isn't single-use - review_token is never
+	// cleared after a successful review - so without this, reopening or
+	// reloading a link you already used re-shows a blank, fully-editable
+	// form with no indication anything happened.
+	AlreadyReviewed bool `json:"already_reviewed"`
 }
 
 // ── Response structs ──────────────────────────────────────────────────────────
@@ -94,7 +102,12 @@ type ReviewResponse struct {
 	ArtistID   uuid.UUID `json:"artist_id"`
 	Rating     int       `json:"rating"`
 	Comment    *string   `json:"comment,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	// IsVisible: irrelevant on the public endpoint (only visible reviews are
+	// ever returned there), but load-bearing on the artist's own moderation
+	// view (GetReviewsByArtist) - without it, a hide/show toggle in the UI
+	// has no way to know which state a review is actually in.
+	IsVisible bool      `json:"is_visible"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // EnrichedReviewResponse is the PUBLIC-facing shape - it adds a display

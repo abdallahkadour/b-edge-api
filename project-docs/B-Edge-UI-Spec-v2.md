@@ -4,6 +4,18 @@
 
 ---
 
+## Update note (Aug 15, 2026)
+
+This spec predates two shipped features and its customer auth section is stale, cross-checked against the actual code:
+
+1. **C-11 Register / C-12 Login are wrong for the current build.** They spec `POST /api/v1/auth/register` and `POST /api/v1/auth/login` — that's the artist auth API. Customer auth actually uses `internal/customerauth` (`/api/v1/customer-auth/request-otp`, `/verify-otp`, `/refresh`, `/logout`): phone number + WhatsApp OTP, no password, no separate Register screen — a live `customer-login.page.ts` handles both in one screen (two steps: enter phone, enter code).
+2. **No admin approval screen exists in this 40-screen inventory.** Since this spec was written, self-service artist onboarding shipped with an admin-approval gate (`pending → active/rejected`), and both an onboarding flow (`dashboard/onboarding`, closest match to the already-listed A-15/16/17) and a net-new Admin review screen (`dashboard/admin`, not listed here at all) are live in artist-dashboard.
+3. This spec's own "PRE-ANGULAR BUILD CHECKLIST" (migrations 006–010, the endpoint checklist below) is from before the Angular build started and is long superseded — actual schema is at migration 019. Treat Section 1 (screen inventory) as the still-useful part of this document; the checklist at the top and the customer-auth rows in the inventory are the parts that no longer match reality.
+
+Not rewritten line-by-line — see `CLAUDE-v6.md` for current route lists on both frontend apps.
+
+---
+
 ## STATUS: PRE-ANGULAR BUILD CHECKLIST
 
 Before writing a single Angular component, every item in this checklist must be green.
@@ -61,8 +73,8 @@ Before writing a single Angular component, every item in this checklist must be 
 | C-08 | Artist Not Found | `bedge.app/invalid` | None | ✅ |
 | C-09 | Booking Lookup | `bedge.app/booking` | None | ✅ |
 | C-10 | Booking Status (Guest) | `bedge.app/booking/:ref` | None | ✅ |
-| C-11 | Register | `bedge.app/register` | None | ✅ |
-| C-12 | Login | `bedge.app/login` | None | ✅ |
+| C-11 | Register | ~~`bedge.app/register`~~ — no longer a separate screen, see update note | None | ⚠️ Superseded |
+| C-12 | Login | `bedge.app/login` — actually phone + WhatsApp OTP (`customer-login.page.ts`), not email/password | None | ⚠️ Superseded |
 | C-13 | My Bookings | `bedge.app/bookings` | Customer JWT | ✅ |
 | C-14 | Leave a Review | `bedge.app/review/:bookingId` | JWT or magic link | ✅ |
 | C-15 | PWA Install Prompt | Overlay on C-01 | None | ✅ |
@@ -198,21 +210,19 @@ Returns EnrichedBookingResponse. UI adapts to booking status:
 
 ---
 
-### C-11 · Register
-```
-POST /api/v1/auth/register
-Body: { name, email, phone, password, role: "customer" }
-```
-On success: store JWT → navigate to C-13. Errors: `INVALID_EMAIL`, `WEAK_PASSWORD`, `INVALID_PHONE`.
+### C-11 · Register — superseded, see Aug 15, 2026 update note
+No longer exists as a separate screen. The real API (`internal/customerauth`) has no register endpoint at all — verifying an OTP on a phone number that has never logged in before creates the customer implicitly.
 
 ---
 
-### C-12 · Login
+### C-12 · Login — superseded, see Aug 15, 2026 update note
 ```
-POST /api/v1/auth/login
-Body: { email, password, role: "customer" }
+POST /api/v1/customer-auth/request-otp
+Body: { phone }
+POST /api/v1/customer-auth/verify-otp
+Body: { phone, code }
 ```
-`role` field prevents artist JWT from being issued here.
+One screen, two steps (enter phone → enter WhatsApp code), no password field ever shown. `customer-login.page.ts` is the live implementation.
 
 ---
 

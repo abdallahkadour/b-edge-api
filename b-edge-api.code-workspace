@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../go-concepts"
+		},
+		{
+			"path": "../b-edge-web"
+		},
+		{
+			"path": "../go-react-tailwind"
+		}
+	],
+	"settings": {}
+}

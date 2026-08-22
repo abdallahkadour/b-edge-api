@@ -43,6 +43,18 @@ func NewService(repo Repository) *Service {
 // once, at the first request.
 func (s *Service) ResolveArtistID(ctx context.Context, idOrHandle string) (uuid.UUID, error) {
 	if id, err := uuid.Parse(idOrHandle); err == nil {
+		// A syntactically valid UUID still needs a status check - it costs
+		// one query, but skipping it would mean anyone holding a pending
+		// artist's raw ID (an old shared link, or a guess) bypasses the
+		// review gate entirely, since parsing a UUID needs no database
+		// round-trip on its own.
+		active, err := s.repo.IsArtistActive(ctx, id)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("resolve artist id: %w", err)
+		}
+		if !active {
+			return uuid.Nil, ErrArtistNotFound
+		}
 		return id, nil
 	}
 	return s.repo.GetArtistIDByHandle(ctx, idOrHandle)
@@ -339,11 +351,25 @@ func (s *Service) SetBusinessHours(ctx context.Context, storeID, salonID uuid.UU
 	}
 
 	// Validate time format
-	if _, err := time.Parse("15:04:05", req.OpenTime); err != nil {
+	openTime, err := time.Parse("15:04:05", req.OpenTime)
+	if err != nil {
 		return apperror.BadRequest("INVALID_TIME", "open_time must be in HH:MM:SS format")
 	}
-	if _, err := time.Parse("15:04:05", req.CloseTime); err != nil {
+	closeTime, err := time.Parse("15:04:05", req.CloseTime)
+	if err != nil {
 		return apperror.BadRequest("INVALID_TIME", "close_time must be in HH:MM:SS format")
+	}
+
+	// Only meaningful while the day is actually open - a closed day's
+	// open_time/close_time are placeholder values the UI doesn't let a
+	// customer see slots for anyway, so there's nothing to protect there.
+	// Found live: a 19:00-10:00 "day" saved with a 204 and no error at
+	// all, then silently produced a day with zero real availability
+	// (any slot algorithm treating this as open-until-close would compute
+	// a negative or wrapped-midnight window depending on implementation -
+	// neither is what "closes at 10am, opens at 7pm" should mean here).
+	if req.IsOpen && !closeTime.After(openTime) {
+		return apperror.BadRequest("INVALID_HOURS", "close_time must be after open_time")
 	}
 
 	return s.repo.SetBusinessHours(ctx, storeID, req)
@@ -384,6 +410,40 @@ func (s *Service) CreateException(ctx context.Context, storeID, salonID uuid.UUI
 // a surcharge, set at the artist's discretion - a fee larger than a given
 // service's price is the artist's call, not the system's. The only guard is
 // a sanity ceiling to catch a mistyped amount.
+// CreateStore adds a second (or further) physical location to the calling
+// artist's own salon, and assigns that artist to work there in the same
+// transaction. userID (not artistID) is what the caller actually has -
+// resolved to the artist's own ID the same way GetMyProfile does, rather
+// than trusting a client-supplied artist ID for a "create my own resource"
+// operation.
+func (s *Service) CreateStore(ctx context.Context, userID uuid.UUID, salonID uuid.UUID, req CreateStoreRequest) (*Store, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	profile, err := s.repo.GetArtistByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist profile not found")
+		}
+		return nil, fmt.Errorf("create store: resolve artist: %w", err)
+	}
+
+	store := &Store{
+		SalonID: salonID,
+		Name:    req.Name,
+		NameAr:  req.NameAr,
+		Address: req.Address,
+		City:    req.City,
+		Phone:   req.Phone,
+	}
+
+	if err := s.repo.CreateStore(ctx, store, profile.ID); err != nil {
+		return nil, fmt.Errorf("create store: %w", err)
+	}
+	return store, nil
+}
+
 func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uuid.UUID, req UpdateStoreRequest) (*Store, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)

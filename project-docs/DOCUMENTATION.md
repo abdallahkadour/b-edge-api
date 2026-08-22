@@ -1,14 +1,17 @@
 # B-Edge — Documentation Index
 
-> 42 active documents. Read `CLAUDE-v5.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
-> Last updated: August 7, 2026 · Schema v13 · 9 domains live · Gap analysis complete against locked specs.
+> 46 active documents (43 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> Last updated: August 21, 2026 · Schema v19 · 12 backend domains live (11 route-bearing + audit) · CLAUDE-v6 verified directly against code (migrations, routes, git log), not against prior docs.
 
 ---
 
-## ⚠️ Before anything else — two conflicts to resolve
+## ⚠️ Before anything else
 
-1. **`B-Edge-Product-Roadmap.docx` and `B-Edge-PRD-v7-Final.docx` disagree** on Product Store (Phase 3 vs. Phase 1) and Waitlist (Phase 2 vs. Phase 1). See `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the full breakdown. PRD v7 is later and claims to be the reviewed/final version — worth explicitly deciding it wins, and updating the Roadmap doc to match.
-2. **Two files referenced in earlier sessions weren't found in the current upload set:** `B-Edge-Angular-PWA-Architecture-v1.docx` and `B-Edge-Competitor-Analysis-v1.docx`. Worth re-uploading if they still matter.
+1. **The PRD-vs-Roadmap phase conflict is resolved (Aug 15, 2026).** `B-Edge-Product-Roadmap.docx` tagged Product Store as Phase 3 and Waitlist as Phase 2; `B-Edge-PRD-v7-Final.docx` tagged both Phase 1. Both have since shipped in full (migrations 016 and 017, full domains and screens on both frontend apps), so PRD v7's assignment wins — `B-Edge-Product-Roadmap.docx` has been edited to reclassify both as MVP with a note explaining why. That doc otherwise still reflects the original 2025 plan (email/password auth, SendGrid, 7-week timeline) rather than the actual build — not touched in this pass. See `CLAUDE-v6.md`.
+2. **Two new backend features are now cross-checked against the specs (Aug 15, 2026).** Customer OTP auth (`internal/customerauth`) and self-service artist onboarding + admin approval gate (`internal/onboarding`, `internal/admin`) both shipped without a doc pass. `B-Edge-PRD-v7-Final.docx` §3.3 actually said the *opposite* of what got built ("no approval required") — corrected in place with an update note, not silently rewritten. `B-Edge-UI-Spec-v2.md`'s C-11/C-12 (customer Register/Login) specced the artist email/password API for customers — corrected to the real OTP flow. Neither doc was rewritten wholesale; both got targeted update notes plus inline corrections at the specific wrong sections. See `CLAUDE-v6.md`.
+3. **Two files referenced in earlier sessions still aren't on disk:** `B-Edge-Angular-PWA-Architecture-v1.docx` and `B-Edge-Competitor-Analysis-v1.docx`. Worth re-uploading if they still matter.
+4. **Cart persistence: decided.** Earlier chat context assumed server-side cart persistence was done; it isn't, and won't be. `CartStore` persists to `localStorage` with reconcile-against-fresh-data (survives refresh, same device). No `cart` table, no cross-device sync, checkout stays guest-style (name + phone, no login) — decided sufficient for launch on Aug 15 rather than gating Shop behind login or keying a cart off a bare phone number. See `CLAUDE-v6.md`.
+5. **The guest booking funnel was silently broken until Aug 15.** `product/handler.go` scoped an authenticated-orders route group to the bare `/api/v1` prefix instead of `/api/v1/orders`; Fiber applied that auth requirement to every route registered afterward in `cmd/main.go`, which 401'd the public artist-portfolio endpoint and caused customer-pwa's session-expiry interceptor to bounce every guest straight to `/login` mid-funnel. Found via an actual browser walkthrough, not code review — fixed, and a full guest booking was re-verified end-to-end against the live API. See `CLAUDE-v6.md`'s Critical environment facts.
 
 ---
 
@@ -16,9 +19,9 @@
 
 | File | Description |
 |---|---|
-| `B-Edge-PRD-v7-Final.docx` | Product requirements — every business rule, service catalogue, booking flow, deposit policy, notification events, product store, features roadmap. Claims "Final," reviewed against 3 AI models, 34 gaps resolved. **Conflicts with Product-Roadmap.docx on 2 phase assignments — see above.** |
+| `B-Edge-PRD-v7-Final.docx` | Product requirements — every business rule, service catalogue, booking flow, deposit policy, notification events, product store, features roadmap. Claims "Final," reviewed against 3 AI models, 34 gaps resolved. Its Phase 1 assignment for Product Store/Waitlist is what actually shipped — see note above. §3.3 Artist Onboarding corrected Aug 15, 2026 — it previously said the opposite of the real approval-gated flow. Customer OTP auth also now noted (was undocumented). |
 | `B-Edge-BRD.docx` | Business requirements — market context, revenue model, platform overview, customer and artist flows. |
-| `B-Edge-Product-Roadmap.docx` | Phase 1→4 feature roadmap with timeline. **Older than PRD v7 — 2 conflicts, see above.** |
+| `B-Edge-Product-Roadmap.docx` | Phase 1→4 feature roadmap with timeline. Product Store and Waitlist reclassified to MVP on Aug 15, 2026 to match PRD v7's phasing (see note above). Otherwise still the original 2025 plan — auth method, notification channel, and timeline sections don't reflect the actual build; not touched in this pass. |
 | `B-Edge-Booking-Scenarios.docx` | Complex booking edge cases pre-solved: multi-person, cross-city, home visit, outside Lebanon, processing gaps. |
 
 ---
@@ -30,16 +33,16 @@
 | `B-Edge-Technical-Decisions-v1.docx` | 30 validated decisions, 11 bugs pre-solved, 7 migration rules — the engineering bible. |
 | `B-Edge-HLD.docx` | High level design — system architecture, component responsibilities, key flows. |
 | `B-Edge-LLD-v2-Go.docx` | Low level design (Go stack) — folder structure, handler/service/repository pattern. |
-| `B-Edge-Booking-Domain-Spec-v1.docx` | Booking state machine, transitions, two-step hold→submit, deposit deadlines, cancellation policy. **Describes a two-tap deposit-confirm flow that the actual build deliberately collapsed to one tap — see gap analysis.** |
+| `B-Edge-Booking-Domain-Spec-v1.docx` | Booking state machine, transitions, two-step hold→submit, deposit deadlines, cancellation policy. Describes a two-tap deposit-confirm flow that the actual build deliberately collapsed to one tap — see `B-Edge-Targets-vs-Actual-Analysis-v1.md`. |
 | `B-Edge-Booking-Domain-Visual.html` | Booking state diagram — visual flowchart of all transitions. |
-| `B-Edge-Backend-Reality-Check-v1.md` | Schema audit (June 2026) — what the DB actually had vs. what screens needed at that point. Historical, but useful for understanding why certain migrations exist. |
-| `B-Edge-API-Reference-v1.docx` | Endpoint reference as of schema v8 (June 26) — now stale; schema is v13. Useful as a reference pattern, not current truth. |
+| `B-Edge-Backend-Reality-Check-v1.md` | Schema audit (June 2026) — what the DB actually had vs. what screens needed at that point. Historical. |
+| `B-Edge-API-Reference-v1.docx` | Endpoint reference as of schema v8 (June 26) — stale; schema is now v19 (12 domains: auth, customerauth, booking, artist, onboarding, admin, product, review, discovery, client, earnings, media, notification, audit). Useful as a reference pattern, not current truth. |
 | `B-Edge-API-Contract-v1.docx` | Go ↔ Angular contract — response envelope, HTTP status rules, error codes, pagination format. |
-| `B-Edge-Auth-API-Docs.docx` | Auth endpoints — register, login, refresh, logout, forgot-password, reset-password, freeze, delete. |
+| `B-Edge-Auth-API-Docs.docx` | Artist auth endpoints — register, login, refresh, logout, forgot-password, reset-password, freeze, delete. Does not cover the newer `customer-auth` OTP endpoints. |
 | `B-Edge-Diagrams.html` | Architecture diagrams, booking flow, notification flow, database ERD. |
-| `B-Edge-ERD.html` | Database entity-relationship diagram. |
+| `B-Edge-ERD.html` | Database entity-relationship diagram. Predates migrations 014–019 (customer OTP, waitlist, products/orders, artist status) — check against real schema before trusting it. |
 | `B-Edge-INFRA.docx` | Infrastructure design — EC2, Docker, Kubernetes, PostgreSQL, deployment topology. |
-| `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. **Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified.** |
+| `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified. |
 
 ---
 
@@ -47,10 +50,11 @@
 
 | File | Description |
 |---|---|
-| `B-Edge-UI-Spec-v2.md` | Screen inventory (40 screens: 19 customer PWA, 21 artist dashboard) with API dependency map. **Not yet cross-checked screen-by-screen against what's actually built (~15+ screens across both apps as of tonight).** |
-| `b-edge-8-missing-screens.md` | Stitch prompts — customer/artist password reset, booking detail, cancel modal, block dates. Several of these screens are now built (Block Dates still isn't). |
-| `b-edge-12-missing-screens.md` | Stitch prompts — Discover, register/login, my bookings, leave a review, PWA install, Deposit Queue, Refund Queue, client CRM, earnings, portfolio. Most of these are now built; Refund Queue and Onboarding are not. |
+| `B-Edge-UI-Spec-v2.md` | Screen inventory (40 screens: 19 customer PWA, 21 artist dashboard) with API dependency map. C-11/C-12 (customer Register/Login) corrected Aug 15, 2026 to the real OTP flow — the rest not yet cross-checked screen-by-screen. Both frontend apps still have more real routes than this spec accounts for (admin, products, orders, waitlist, shop/cart). |
+| `b-edge-8-missing-screens.md` | Stitch prompts — customer/artist password reset, booking detail, cancel modal, block dates. Block Dates is still the one not built. |
+| `b-edge-12-missing-screens.md` | Stitch prompts — Discover, register/login, my bookings, leave a review, PWA install, Deposit Queue, Refund Queue, client CRM, earnings, portfolio. Onboarding is now built (was listed as not-built as of the last pass); Refund Queue still isn't. |
 | `b-edge-remaining-screens.md` | Stitch prompts — error states, booking lookup, artist booking detail, onboarding step 1. |
+| `style-guide.html` *(in `b-edge-web/project-docs/`, not `b-edge-api`)* | **New, Aug 15/16, 2026.** Self-contained, open-in-browser design guide — every color token, type size, and the 4 shared primitives (`bedge-button`, `bedge-badge`, `bedge-card`, `bedgeInput`) rendered live in their real variants, sourced directly from `tailwind.config.js` and `projects/shared/src/lib/ui/*` (not reinvented). Also documents recurring hand-rolled patterns (error/success banners, empty states, modals, filter pills) and flags the one known drift — raw Tailwind color banners vs. the correct semantic-token banners — with both shown side by side. Check this before adding any new UI element so existing tokens get reused instead of new ones invented. |
 
 ---
 
@@ -58,11 +62,14 @@
 
 | File | Description |
 |---|---|
+| `E2E-TEST-PLAN.md` *(in `b-edge-web/project-docs/`, not `b-edge-api`)* | **Aug 22, 2026 — updated five times; all 7 suites now live-executed at least once.** UI-driven end-to-end test plan for a human tester — every real route in all 12 backend domains (~90 endpoints) mapped to the exact UI element that triggers it, 7 full Given/When/Then journeys, an exhaustive "click everything, try every boundary value" stress pass (the one remaining not-yet-executed piece). Originally found 5 endpoints with no UI path at all; **all 5 are now closed** (sign-up screen, password recovery + freeze/delete account, the two-step deposit edge case, a Reviews management screen, an Add Store modal) — building the real UI surfaced and fixed 3 previously-undetected backend bugs along the way (a registration flow that bypassed onboarding/admin review entirely, an artist review-moderation query that filtered out the very reviews it needed to show, and a freeze/unfreeze/delete-account endpoint that 500'd on every call). The written test suites were then actually **executed live** against the running stack across four more passes, finding **10 real bugs total**: no cancel action anywhere in artist-dashboard; product photo uploads silently discarded on a fast Save click; Clients CRM list wrongly required a completed booking just to appear at all; a pending booking approvable after its own appointment time had passed; `MarkNoShow` and `CompleteBooking` both missing any check on whether the appointment time had actually arrived; approving a near-term request could produce an already-expired deposit deadline when the service's deposit window didn't fit before the appointment; and abandoned booking holds permanently blocked their slots forever since the cleanup job never ran (fixed with self-healing lazy expiry on every availability read, no new background process needed). Suite 4 (product store, guest checkout to delivery) and Suites 5-7 (customer account, Client CRM, Earnings) all passed clean with zero further bugs. Two stale test-plan wording bugs also corrected along the way (Profile never had a store list; rejection reasons are never shown to the artist, only logged). One new, deliberately-not-fixed gap noted: no ownership check on the artist review-list endpoint. Use this instead of writing test cases from scratch. |
 | `B-Edge-Test-Strategy-v1.docx` | Unit vs integration tests, coverage targets, CI config. |
-| **`B-Edge-Targets-vs-Actual-Analysis-v1.md`** | **NEW.** Verified gap analysis comparing PRD v7 / Booking Domain Spec / Technical Decisions against actual current code (not just docs or memory). Confirms exact-match wins (travel buffer, early-bird cutoffs), the deliberate state-machine deviation, and every real Phase-1-per-PRD gap (waitlist, product store, rescheduling, home-visit bookings, real discount system, SMS fallback, admin dashboard, Arabic RTL). **Read this alongside CLAUDE-v5.md when starting new work.** |
-| `CLAUDE-v5.md` | **CURRENT context document.** Supersedes v4. Covers all 9 live domains, both frontend apps, every real bug fixed with root cause, the gap-analysis findings, parked decisions, key live IDs. Read this first in any new chat. |
-| `CLAUDE-v4.md` | Superseded by v5. Kept for reference — was accurate as of June 26 (6 domains, schema v8). |
-| `CLAUDE-v3.md`, `CLAUDE.md`, `CLAUDE__1_.md`, `CLAUDE__4_.md` | Older historical iterations, all superseded. Worth archiving out of the active docs folder at some point — five CLAUDE.md variants in one place is its own source of confusion. |
+| `B-Edge-Targets-vs-Actual-Analysis-v1.md` | Verified gap analysis comparing PRD v7 / Booking Domain Spec / Technical Decisions against actual code as of Aug 7. Confirms exact-match wins (travel buffer, early-bird cutoffs), the deliberate deposit-confirm state-machine deviation, and the Phase-1 gaps that existed then. Two of those gaps (Waitlist, Product Store) have since closed — see `CLAUDE-v6.md` for what changed since this was written. Rescheduling, home-visit bookings, real discount system, SMS fallback, admin dashboard for ops (distinct from the new artist-approval admin), and Arabic RTL are still gaps as of Aug 15. |
+| `CLAUDE-v6.md` | **CURRENT context document.** Supersedes v5. Verified directly against code on Aug 15: schema v19, 12 domains, both frontend apps' real routes, design-system migration status (artist-dashboard complete, customer-pwa partial by deliberate design). Test coverage for admin/audit/notification closed same day; cart-persistence decision made (ship as-is, no server cart); a real backend routing bug that silently broke guest booking was found and fixed. Read this first in any new chat. |
+| `B-Edge-Security-UI-Enterprise-Assessment-v1.md` | **New, Aug 15/16, 2026.** Cross-cutting assessment: security posture (what's hardened, the two Fiber route-group bugs found+fixed, the dev-only OTP bypass and its production risk, what's not yet audited — CSRF, security headers, dependency scanning), UI/design status and fixes, and a preserved **enterprise-grade remediation roadmap** (data tables, bulk actions, toast system, masked time input, keyboard nav, audit-log UI, role/permission UI) explicitly scoped as "not needed now, revisit at the listed trigger conditions" rather than re-argued from scratch later. Companion to `CLAUDE-v6.md`, not a replacement. |
+| `CLAUDE-v5.md` | Superseded by v6. Accurate as of Aug 7 (9 domains, schema v13). Kept for the detailed root-cause writeups of bugs fixed in that session (booking ownership bug, timezone family, handle regression) which v6 doesn't repeat. |
+| `CLAUDE-v4.md` | Superseded. Accurate as of June 26 (6 domains, schema v8). |
+| `CLAUDE-v3.md`, `CLAUDE.md`, `CLAUDE__1_.md`, `CLAUDE__4_.md` | Older historical iterations, all superseded. `CLAUDE.md` in particular predates the Go rewrite even starting (describes a "coming soon" API with zero domains built) — don't read it for current state. Worth archiving out of the active docs folder at some point. |
 
 ---
 
@@ -71,11 +78,11 @@
 | File | Description |
 |---|---|
 | `B-Edge-DevOps-Infrastructure-v1.docx` | Infrastructure gaps + fixes, production checklist, disaster recovery scenarios, backup config, monitoring stack. |
-| **`B-Edge-Command-Reference.md`** | **NEW.** Every command used across the whole project, organized by purpose (auth, migrations, booking lifecycle, services, handles, discovery, reviews, calendar, client CRM, direct DB queries, frontend build/serve, deployment pattern, diagnostics) rather than raw chronological order — built to be searchable when asked for a specific command later. Supersedes the original repo-setup-only `commands.txt` upload (Session 1–3 content preserved at the top) and overlaps with/extends `B-Edge-Session-Commands.md` below. |
-| `B-Edge-WhatsApp-API-Templates-v1.docx` | Twilio vs Meta Cloud API comparison, Lebanon pricing, all 16 notification templates (EN + AR). **Not yet checked whether the 4 messages built tonight match the specced wording — worth a pass.** |
+| `B-Edge-Command-Reference.md` | Every command used across the whole project, organized by purpose (auth, migrations, booking lifecycle, services, handles, discovery, reviews, calendar, client CRM, direct DB queries, frontend build/serve, deployment pattern, diagnostics). Supersedes the original repo-setup-only `commands.txt` upload and overlaps with/extends `B-Edge-Session-Commands.md` below. |
+| `B-Edge-WhatsApp-API-Templates-v1.docx` | Twilio vs Meta Cloud API comparison, Lebanon pricing, all 16 notification templates (EN + AR). Not yet checked whether the built messages match the specced wording. |
 | `B-Edge-Rania-Onboarding-Runbook-v1.docx` | Pre-launch checklist, Rania account setup, go-live day protocol. |
-| `B-Edge-Session-Commands.md` | Terminal command reference from the discovery+client-CRM session (June 2026) — narrower scope, now folded into `B-Edge-Command-Reference.md` above. Kept for historical detail. |
-| `README.md` | Repo-level README — setup instructions, Makefile commands, architecture overview. Describes 27 documents and Go 1.26 — both now stale (41 docs, Go 1.22+ per CLAUDE-v5). |
+| `B-Edge-Session-Commands.md` | Terminal command reference from the discovery+client-CRM session (June 2026) — narrower scope, folded into `B-Edge-Command-Reference.md` above. Kept for historical detail. |
+| `README.md` | Repo-level README — setup instructions, Makefile commands, architecture overview. Stale on doc count and Go version; actual Go version is 1.26.3 per `go.mod` as of Aug 15. |
 
 ---
 
@@ -113,21 +120,23 @@
 ## Summary by use case
 
 **Starting a new chat about B-Edge?**
-1. Read `CLAUDE-v5.md` (current context, all 9 domains, both frontend apps)
-2. Read `B-Edge-Targets-vs-Actual-Analysis-v1.md` (what's deliberately deviated from spec, and what Phase-1 items are genuinely unbuilt)
+1. Read `CLAUDE-v6.md` (current context, 12 domains, both frontend apps, verified against real code Aug 15)
+2. Read `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the deliberate spec deviations and the gaps that are still genuinely open (rescheduling, home-visit, discounts, SMS fallback, ops admin dashboard, Arabic RTL)
 
 **Building a frontend screen?**
 1. Check `B-Edge-UI-Spec-v2.md` and the three Stitch-prompt docs for the design
-2. Cross-check against `CLAUDE-v5.md`'s screen lists — many are already built
+2. Cross-check against `CLAUDE-v6.md`'s route lists and design-system migration status — many screens are already built, and some already use the shared `bedge-*` primitives
 
 **Deciding what to build next?**
-1. `B-Edge-Targets-vs-Actual-Analysis-v1.md` Part 2 has the full verified gap list, all tagged Phase 1 per the PRD
-2. Resolve the PRD-vs-Roadmap conflict first — it changes what "next" even means for Product Store and Waitlist
-
----
+1. `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the still-open Phase 1 gaps
+2. `CLAUDE-v6.md`'s "Immediate next steps" — the Product Roadmap edit and the PRD/UI-Spec doc-sync pass are the most time-sensitive items right now
 
 **Need a specific command?**
 1. `B-Edge-Command-Reference.md` — organized by purpose (auth, booking lifecycle, services, handles, discovery, reviews, calendar, DB queries, frontend build/serve, diagnostics), not raw chronological order
+
+**Running a QA pass or writing test cases?**
+1. `E2E-TEST-PLAN.md` (in `b-edge-web/project-docs/`) — the API→UI coverage map and the 7 end-to-end journeys are the starting point, not a fresh test plan
+2. Check its §4 "Known gaps" first — 5 confirmed endpoints have no UI trigger at all; don't rediscover these mid-test
 
 ---
 
@@ -137,14 +146,14 @@
 |---|---|
 | Core Product | 4 |
 | Technical Design | 12 |
-| Frontend Design | 4 |
-| Testing, Quality & Gap Analysis | 5 |
+| Frontend Design | 5 (style-guide.html added, lives in b-edge-web) |
+| Testing, Quality & Gap Analysis | 8 (E2E-TEST-PLAN.md added, lives in b-edge-web) |
 | Infrastructure & Ops | 6 |
 | Business & Market | 2 |
 | Competitor Intelligence | 6 (7th referenced, not on disk) |
 | Development Reference | 1 |
-| **TOTAL** | **42 (on disk) / 43 (referenced)** |
+| **TOTAL** | **46 (on disk) / 47 (referenced)** |
 
 ---
 
-*B-Edge · Beauty at the Edge · الجمال عند الحافة · August 7, 2026*
+*B-Edge · Beauty at the Edge · الجمال عند الحافة · August 16, 2026*

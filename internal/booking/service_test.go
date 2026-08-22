@@ -76,6 +76,7 @@ type mockRepo struct {
 	listEnrichedByCustomerBookings []*EnrichedBooking
 	listEnrichedByCustomerErr      error
 	approveBookingErr              error
+	approveBookingDepositDeadline  time.Time
 	confirmDepositErr              error
 	cancelBookingErr               error
 	completeBookingErr             error
@@ -87,6 +88,7 @@ type mockRepo struct {
 	markNoShowErr                  error
 	releaseExpiredHoldsCount       int64
 	releaseExpiredHoldsErr         error
+	releaseExpiredHoldsCalled      bool
 	expireDeadlineBookingsCount    int64
 	expireDeadlineBookingsErr      error
 	getArtistIDByUserIDArtistID    uuid.UUID
@@ -175,7 +177,8 @@ func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _
 func (m *mockRepo) ListEnrichedBookingsByCustomer(_ context.Context, _ uuid.UUID, _ time.Time, _ int) ([]*EnrichedBooking, error) {
 	return m.listEnrichedByCustomerBookings, m.listEnrichedByCustomerErr
 }
-func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, _ time.Time) error {
+func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, depositDeadline time.Time) error {
+	m.approveBookingDepositDeadline = depositDeadline
 	return m.approveBookingErr
 }
 func (m *mockRepo) ConfirmDeposit(_ context.Context, _ uuid.UUID) error {
@@ -214,6 +217,7 @@ func (m *mockRepo) MarkNoShow(_ context.Context, _ uuid.UUID) error {
 	return m.markNoShowErr
 }
 func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) (int64, error) {
+	m.releaseExpiredHoldsCalled = true
 	return m.releaseExpiredHoldsCount, m.releaseExpiredHoldsErr
 }
 func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) (int64, error) {
@@ -397,6 +401,47 @@ func TestGetAvailableSlots_ReturnsSlots(t *testing.T) {
 	// Last slot must end at or before store close time (18:00)
 	lastSlot := slots[len(slots)-1]
 	assert.LessOrEqual(t, lastSlot.EndTime.In(bLoc).Format("15:04:05"), "18:00:00")
+}
+
+// TestGetAvailableSlots_SweepsExpiredHolds guards the lazy-expiry fix: found
+// live while executing E2E-TEST-PLAN.md Suite 3 - with no background
+// scheduler ever running ReleaseExpiredHolds, an abandoned hold (a guest who
+// picked a slot and never submitted) blocked its slot forever. Every
+// availability read must now sweep expired holds first, on the same
+// self-healing basis the codebase already uses elsewhere (lazy waitlist
+// expiry, migration 016).
+func TestGetAvailableSlots_SweepsExpiredHolds(t *testing.T) {
+	repo := &mockRepo{
+		getStoreStore:               defaultStore(),
+		getBusinessHoursExceptionEx: nil,
+		getBusinessHoursBH:          defaultBusinessHours(),
+		getServiceSvc:               defaultService(),
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.GetAvailableSlots(context.Background(), validSlotsReq())
+
+	require.NoError(t, err)
+	assert.True(t, repo.releaseExpiredHoldsCalled, "GetAvailableSlots must sweep expired holds before reading blocked ranges")
+}
+
+// TestGetAvailableSlots_ExpiredHoldsSweepFails_StillReturnsSlots - the sweep
+// is best-effort. A failure there must never fail the availability request
+// itself; worst case a stale hold keeps blocking for one more request.
+func TestGetAvailableSlots_ExpiredHoldsSweepFails_StillReturnsSlots(t *testing.T) {
+	repo := &mockRepo{
+		getStoreStore:               defaultStore(),
+		getBusinessHoursExceptionEx: nil,
+		getBusinessHoursBH:          defaultBusinessHours(),
+		getServiceSvc:               defaultService(),
+		releaseExpiredHoldsErr:      errors.New("boom"),
+	}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), validSlotsReq())
+
+	require.NoError(t, err, "a sweep failure must not fail the slots request")
+	assert.NotEmpty(t, slots)
 }
 
 // TestGetAvailableSlots_EarlyBirdFlagged - slots before 09:00 cutoff are
@@ -953,6 +998,78 @@ func TestApproveBooking_WrongArtist_Forbidden(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestApproveBooking_StartTimeInPast_Conflict guards against approving a
+// pending request whose appointment time has already come and gone - there's
+// no background job that auto-expires stale pending bookings (see
+// ExpireDeadlineBookings/ReleaseExpiredHolds, neither wired to a scheduler),
+// so without this check a forgotten request could sit in 'pending' past its
+// own start_time and still be approved, computing a deposit deadline that's
+// also already in the past.
+func TestApproveBooking_StartTimeInPast_Conflict(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusPending,
+		StartTime: time.Now().UTC().Add(-72 * time.Hour),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+		getServiceSvc:               defaultService(),
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.ApproveBooking(context.Background(), booking.ID, userID)
+
+	require.Error(t, err, "a booking whose start_time has already passed must not be approvable")
+}
+
+// TestApproveBooking_SqueezedDepositWindow_UsesGraceFallback covers a request
+// that sat unapproved long enough that start_time minus the service's
+// deposit_deadline_hours has already passed by approval time (e.g. a 24h
+// deposit window on an appointment that's only 10h away). Storing that
+// already-past deadline would leave the booking with no real way to ever
+// receive its deposit in time, and would tell the customer "24 hours" over
+// WhatsApp while the field had already expired. The fallback must land
+// strictly between now and start_time.
+func TestApproveBooking_SqueezedDepositWindow_UsesGraceFallback(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+	now := time.Now().UTC()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusPending,
+		StartTime: now.Add(10 * time.Hour), // sooner than the service's 48h deposit window
+	}
+
+	svc24h := defaultService()
+	svc24h.DepositDeadlineHours = 48
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+		getServiceSvc:               svc24h,
+	}
+	service := newTestService(repo)
+
+	result, err := service.ApproveBooking(context.Background(), booking.ID, userID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.DepositDeadline)
+	assert.True(t, result.DepositDeadline.After(now),
+		"fallback deposit deadline must be in the future, not the already-past start_time-48h")
+	assert.True(t, result.DepositDeadline.Before(booking.StartTime),
+		"fallback deposit deadline must still land before the appointment itself")
+	assert.Equal(t, *result.DepositDeadline, repo.approveBookingDepositDeadline,
+		"the deadline returned to the caller must match what was actually persisted")
+}
+
 // TestConfirmDepositReceived_Success covers the single-action deposit flow:
 // the artist confirms the moment she sees the OMT/Wish transfer land, and the
 // booking moves straight from approved to confirmed in one call.
@@ -1131,6 +1248,82 @@ func TestCompleteBooking_NotificationContextFails_StillSucceeds(t *testing.T) {
 	require.NoError(t, err, "a notification-context failure must not fail the booking completion")
 	assert.Equal(t, StatusCompleted, result.Status)
 	assert.Empty(t, repo.enqueuedNotifications, "no notification should be queued if context resolution failed")
+}
+
+// TestCompleteBooking_FutureAppointment_Conflict guards against marking a
+// booking "completed" - and firing off its review-request WhatsApp message -
+// before the appointment has even happened.
+func TestCompleteBooking_FutureAppointment_Conflict(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusConfirmed,
+		StartTime: time.Now().UTC().Add(48 * time.Hour),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.CompleteBooking(context.Background(), booking.ID, userID)
+
+	require.Error(t, err, "a booking whose appointment hasn't started yet must not be completable")
+}
+
+// TestMarkNoShow_Success_PastAppointment covers the normal case: a confirmed
+// booking whose appointment time has already passed can be marked no-show.
+func TestMarkNoShow_Success_PastAppointment(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusConfirmed,
+		StartTime: time.Now().UTC().Add(-2 * time.Hour),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.MarkNoShow(context.Background(), booking.ID, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusNoShow, result.Status)
+}
+
+// TestMarkNoShow_FutureAppointment_Conflict guards against marking a
+// customer a "no-show" for an appointment that hasn't happened yet - found
+// live while executing E2E-TEST-PLAN.md Suite 3.8: a booking 4 days out
+// could be marked no-show with no server-side objection.
+func TestMarkNoShow_FutureAppointment_Conflict(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusConfirmed,
+		StartTime: time.Now().UTC().Add(48 * time.Hour),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.MarkNoShow(context.Background(), booking.ID, userID)
+
+	require.Error(t, err, "a booking whose appointment hasn't started yet must not be markable as no-show")
 }
 
 func TestConfirmDepositReceived_WrongArtist_Forbidden(t *testing.T) {

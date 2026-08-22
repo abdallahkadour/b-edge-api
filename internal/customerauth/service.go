@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -16,6 +17,23 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
 )
+
+// devBypassOTPCode lets any phone number skip real OTP verification, in
+// development only. Added so customer-auth-gated screens (My Bookings, My
+// Orders) can be reached and tested without a live Twilio account to
+// receive a real WhatsApp code. Works even for a phone number that never
+// called RequestOTP at all - it short-circuits before the OTP lookup.
+//
+// MUST NEVER be reachable in production: gated on APP_ENV, the same
+// variable and same fail-CLOSED convention already used for stack traces
+// in internal/middleware/register.go. If APP_ENV is unset, empty, or
+// misspelled, this path stays closed, not open - the inverse would mean a
+// misconfigured deploy silently ships a universal customer-login bypass.
+const devBypassOTPCode = "326321"
+
+func isDevBypassCode(code string) bool {
+	return os.Getenv("APP_ENV") == "development" && code == devBypassOTPCode
+}
 
 // refreshTokenValidity mirrors internal/domain/auth's refresh token
 // lifetime exactly - customer sessions use the same 7-day window as
@@ -120,6 +138,10 @@ func (s *Service) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyO
 		return nil, mapValidationError(err)
 	}
 
+	if isDevBypassCode(req.Code) {
+		return s.issueSession(ctx, req.Phone)
+	}
+
 	otp, err := s.repo.GetLatestOTP(ctx, req.Phone)
 	if err != nil {
 		if errors.Is(err, ErrOTPNotFound) {
@@ -149,7 +171,15 @@ func (s *Service) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyO
 		return nil, fmt.Errorf("verify otp: mark verified: %w", err)
 	}
 
-	customer, err := s.repo.FindOrCreateCustomerByPhone(ctx, req.Phone)
+	return s.issueSession(ctx, req.Phone)
+}
+
+// issueSession resolves (or creates) the customer by phone and mints a
+// fresh access+refresh pair. Shared by the real OTP path (after
+// MarkVerified) and the dev-only bypass path above, which has no OTP
+// record to mark verified in the first place.
+func (s *Service) issueSession(ctx context.Context, phone string) (*VerifyOTPResult, error) {
+	customer, err := s.repo.FindOrCreateCustomerByPhone(ctx, phone)
 	if err != nil {
 		return nil, fmt.Errorf("verify otp: resolve customer: %w", err)
 	}

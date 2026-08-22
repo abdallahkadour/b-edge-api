@@ -38,6 +38,34 @@ type Repository interface {
 	// Reorder updates the display_order of all media items for an artist.
 	// ids is the desired order: ids[0] gets display_order=0, ids[1] gets 1, etc.
 	Reorder(ctx context.Context, artistID uuid.UUID, ids []uuid.UUID) error
+
+	// ── Products ──────────────────────────────────────────────────────────
+	// Deliberately separate methods rather than generalising the ones above
+	// to take an ownerType parameter - the artist portfolio path (implicit
+	// single owner per caller, 20-photo cap) and the product gallery path
+	// (explicit product ID per call since one salon owns many products,
+	// 8-photo cap, no "cover" concept since image_url already is one) are
+	// different enough shapes that forcing them through one generic method
+	// would obscure both. Small duplication, same trade-off already made
+	// for FindOrCreateCustomerByPhone across domains.
+
+	// ListByProduct returns all gallery photos for a product ordered by
+	// display_order ASC.
+	ListByProduct(ctx context.Context, productID uuid.UUID) ([]*MediaItem, error)
+
+	// CountByProduct returns the number of gallery photos for a product.
+	CountByProduct(ctx context.Context, productID uuid.UUID) (int, error)
+
+	// ReorderProduct updates the display_order of all gallery photos for a
+	// product. ids is the desired order.
+	ReorderProduct(ctx context.Context, productID uuid.UUID, ids []uuid.UUID) error
+
+	// GetProductSalonID resolves a product's owning salon - used to
+	// authorise product-photo mutations without importing the product
+	// package. media and product are independent domains that both need
+	// this one fact; a raw, minimal query here is preferred over a Go
+	// dependency between them.
+	GetProductSalonID(ctx context.Context, productID uuid.UUID) (uuid.UUID, error)
 }
 
 // pgRepo is the PostgreSQL implementation of Repository.
@@ -194,6 +222,78 @@ func (r *pgRepo) Reorder(ctx context.Context, artistID uuid.UUID, ids []uuid.UUI
 	}
 
 	return tx.Commit(ctx)
+}
+
+// ── Products ────────────────────────────────────────────────────────────────
+
+// ListByProduct returns all gallery photos for a product ordered by display_order.
+func (r *pgRepo) ListByProduct(ctx context.Context, productID uuid.UUID) ([]*MediaItem, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, owner_type, owner_id, url, cloudinary_id, type, display_order, created_at
+		FROM media
+		WHERE owner_type = $1
+		  AND owner_id   = $2
+		ORDER BY display_order ASC
+	`, OwnerTypeProduct, productID)
+	if err != nil {
+		return nil, fmt.Errorf("list media by product: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMediaRows(rows)
+}
+
+// CountByProduct returns the count of gallery photos for a product.
+func (r *pgRepo) CountByProduct(ctx context.Context, productID uuid.UUID) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM media
+		WHERE owner_type = $1 AND owner_id = $2
+	`, OwnerTypeProduct, productID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count media by product: %w", err)
+	}
+	return count, nil
+}
+
+// ReorderProduct assigns sequential display_order values based on the
+// provided ID slice, scoped to one product's gallery.
+func (r *pgRepo) ReorderProduct(ctx context.Context, productID uuid.UUID, ids []uuid.UUID) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("reorder product media: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	for i, id := range ids {
+		_, err := tx.Exec(ctx, `
+			UPDATE media
+			SET display_order = $1
+			WHERE id = $2
+			  AND owner_type = $3
+			  AND owner_id   = $4
+		`, i, id, OwnerTypeProduct, productID)
+		if err != nil {
+			return fmt.Errorf("reorder product media: update id %s: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetProductSalonID resolves a product's owning salon directly against the
+// products table - see the Repository interface doc comment for why this
+// is a raw query rather than a cross-package call.
+func (r *pgRepo) GetProductSalonID(ctx context.Context, productID uuid.UUID) (uuid.UUID, error) {
+	var salonID uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT salon_id FROM products WHERE id = $1`, productID).Scan(&salonID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrProductNotFound
+		}
+		return uuid.Nil, fmt.Errorf("get product salon id: %w", err)
+	}
+	return salonID, nil
 }
 
 // ── Scan helpers ──────────────────────────────────────────────────────────────

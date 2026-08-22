@@ -9,11 +9,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/hash"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
@@ -26,6 +28,19 @@ const resetTokenLength = 32
 // resetTokenExpiry is how long a password reset token remains valid.
 const resetTokenExpiry = 60 * time.Minute
 
+// artistDashboardURL is the base URL for the artist-facing app, used to
+// build the reset-password link sent over WhatsApp. Same pattern as
+// booking's customerPWAURL: read once at package init, falls back to
+// localhost in development, and a wrong-but-obvious value in production
+// if ARTIST_DASHBOARD_URL is ever forgotten rather than a silent empty
+// string producing a broken link with no indication why.
+var artistDashboardURL = func() string {
+	if v := os.Getenv("ARTIST_DASHBOARD_URL"); v != "" {
+		return v
+	}
+	return "http://localhost:4300"
+}()
+
 // refreshTokenExpiry is how long a refresh token remains valid.
 const refreshTokenExpiry = 7 * 24 * time.Hour
 
@@ -35,13 +50,26 @@ const refreshTokenExpiry = 7 * 24 * time.Hour
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
+	audit    audit.Repository
 }
 
 // NewService creates a new auth Service with the given repository.
-func NewService(repo Repository) *Service {
+//
+// audit is variadic - see the same pattern used for loggers elsewhere in
+// this codebase (booking, customerauth). It avoids churning every existing
+// caller (including every test's newTestService) for what is, from most
+// callers' perspective, an unrelated capability. Omitting it means every
+// existing test keeps compiling and passing unchanged; the real audit
+// wiring happens once, in RegisterRoutes.
+func NewService(repo Repository, auditRepo ...audit.Repository) *Service {
+	a := audit.Repository(audit.NopRepository{})
+	if len(auditRepo) > 0 && auditRepo[0] != nil {
+		a = auditRepo[0]
+	}
 	return &Service{
 		repo:     repo,
 		validate: validator.New(),
+		audit:    a,
 	}
 }
 
@@ -117,7 +145,18 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 
 // Login authenticates a user with email and password.
 // Steps: find user → check status → verify password → generate tokens.
-func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, error) {
+// Login authenticates a user. ipAddress is variadic for the same reason
+// audit is variadic on NewService - so every existing call site (four in
+// this package's own tests) keeps compiling without changes. Only
+// admin-role events are audited here; logging every customer and artist
+// login would be noise, not a control. A small, deliberately powerful set
+// of accounts is what actually needs every login recorded.
+func (s *Service) Login(ctx context.Context, req LoginRequest, ipAddress ...string) (*LoginResult, error) {
+	ip := ""
+	if len(ipAddress) > 0 {
+		ip = ipAddress[0]
+	}
+
 	// Step 1: Validate request fields
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
@@ -127,7 +166,10 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, er
 	user, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
-			// Return same error as wrong password - never reveal if email exists
+			// No audit entry here - there is no real admin identity to
+			// attach the attempt to (the email matched nobody), and
+			// inventing one would make the log misleading rather than
+			// merely incomplete.
 			return nil, apperror.Unauthorized("INVALID_CREDENTIALS", "Email or password is incorrect")
 		}
 		return nil, fmt.Errorf("login: get user: %w", err)
@@ -146,6 +188,9 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, er
 
 	// Step 4: Verify password
 	if err := hash.VerifyPassword(req.Password, user.PasswordHash); err != nil {
+		if user.Role == RoleAdmin {
+			s.logAdminLogin(ctx, user.ID, ip, "login_failed")
+		}
 		// Same message as user not found - never leak which one failed
 		return nil, apperror.Unauthorized("INVALID_CREDENTIALS", "Email or password is incorrect")
 	}
@@ -156,11 +201,32 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResult, er
 		return nil, fmt.Errorf("login: generate tokens: %w", err)
 	}
 
+	if user.Role == RoleAdmin {
+		s.logAdminLogin(ctx, user.ID, ip, "login_success")
+	}
+
 	return &LoginResult{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
 		User:         toUserInfo(user),
 	}, nil
+}
+
+// logAdminLogin writes to audit_events and swallows its own error - a
+// failure to WRITE the audit log must never block the admin from actually
+// logging in (or from correctly being denied for a wrong password). The
+// error is silently dropped rather than logged further here because this
+// is already the audit trail; there is nowhere more authoritative to
+// record its own failure.
+func (s *Service) logAdminLogin(ctx context.Context, adminID uuid.UUID, ip, action string) {
+	_ = s.audit.Log(ctx, audit.Event{
+		ActorID:    &adminID,
+		ActorRole:  RoleAdmin,
+		EntityType: "admin_session",
+		EntityID:   adminID,
+		Action:     action,
+		IPAddress:  ip,
+	})
 }
 
 // Refresh issues a new access token using a valid refresh token.
@@ -257,8 +323,23 @@ func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest)
 		return fmt.Errorf("forgot password: store token: %w", err)
 	}
 
-	// TODO: send WhatsApp message with reset token when notification domain is built
-	// notification.SendPasswordReset(ctx, user.Phone, token)
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", artistDashboardURL, token)
+	message := fmt.Sprintf(
+		"Hi %s! You asked to reset your B-Edge password. Tap here to choose a new one: %s. "+
+			"This link expires in %d minutes. Didn't request this? You can ignore it.",
+		user.Name, resetURL, int(resetTokenExpiry.Minutes()),
+	)
+	// Best-effort, matching the pattern established across every other
+	// domain that queues a WhatsApp notification (customerauth's OTP,
+	// booking's review-request): a queuing failure must never fail the
+	// request that already succeeded (the token exists and IS valid,
+	// even if this specific delivery attempt failed), but it's still
+	// worth its own error path rather than a silently swallowed one -
+	// see EnqueuePasswordResetNotification's own doc comment for the
+	// bug this replaces.
+	if err := s.repo.EnqueuePasswordResetNotification(ctx, user.ID, message); err != nil {
+		return fmt.Errorf("forgot password: enqueue notification: %w", err)
+	}
 
 	return nil
 }

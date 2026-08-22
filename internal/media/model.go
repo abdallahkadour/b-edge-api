@@ -14,8 +14,18 @@ import (
 // MaxPortfolioPhotos is the maximum number of photos an artist can have.
 const MaxPortfolioPhotos = 20
 
+// MaxProductPhotos caps the ADDITIONAL gallery photos per product,
+// independent of products.image_url (which is untouched by this domain and
+// stays the first/primary photo shown everywhere it already is). These are
+// extra angles/views on top of it - a product doesn't need a 20-photo
+// portfolio, so this is deliberately a much smaller ceiling.
+const MaxProductPhotos = 8
+
 // OwnerTypeArtist is the owner_type value for artist media.
 const OwnerTypeArtist = "artist"
+
+// OwnerTypeProduct is the owner_type value for product gallery media.
+const OwnerTypeProduct = "product"
 
 // MediaTypePhoto is the type value for photo media.
 const MediaTypePhoto = "photo"
@@ -34,6 +44,12 @@ var (
 
 	// ErrArtistNotFound is returned when no artist profile matches the given user ID.
 	ErrArtistNotFound = errors.New("artist not found")
+
+	// ErrProductNotFound is returned when no product matches the given ID -
+	// media-package-scoped (the product domain has its own, separate
+	// ErrProductNotFound; this package deliberately doesn't import that
+	// domain, see GetProductSalonID in repository.go).
+	ErrProductNotFound = errors.New("product not found")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
@@ -70,6 +86,14 @@ type ReorderRequest struct {
 // (No body needed - the ID is in the path. Struct kept for Swagger docs.)
 type SetCoverRequest struct{}
 
+// UploadImageResponse is what POST /api/v1/media/upload returns - just
+// enough for the caller to then attach the photo somewhere (AddMediaRequest
+// shares this exact URL/CloudinaryID shape deliberately).
+type UploadImageResponse struct {
+	URL          string `json:"url"`
+	CloudinaryID string `json:"cloudinary_id"`
+}
+
 // ── Response structs ──────────────────────────────────────────────────────────
 
 // MediaResponse is the safe representation of a media item returned to clients.
@@ -92,6 +116,15 @@ type PortfolioResponse struct {
 	TotalCount int `json:"total_count"`
 	// MaxAllowed is the platform limit (always 20).
 	MaxAllowed int `json:"max_allowed"`
+}
+
+// ProductGalleryResponse is the response for a product's photo gallery -
+// both the public GET and the artist-facing mutations return this shape.
+type ProductGalleryResponse struct {
+	ProductID  uuid.UUID       `json:"product_id"`
+	Photos     []MediaResponse `json:"photos"`
+	TotalCount int             `json:"total_count"`
+	MaxAllowed int             `json:"max_allowed"`
 }
 
 // ── Converters ────────────────────────────────────────────────────────────────

@@ -186,12 +186,18 @@ func (r *pgRepo) GetReviewByID(ctx context.Context, reviewID uuid.UUID) (*Review
 }
 
 // GetReviewsByArtist returns all visible reviews for an artist, newest first.
+// GetReviewsByArtist is the artist's OWN moderation view - deliberately
+// includes hidden reviews (unlike GetEnrichedReviewsByArtist below, which is
+// the public, customer-facing list and correctly filters to visible-only).
+// This used to carry the same `is_visible = TRUE` filter as the public
+// query, which meant a review disappeared from this list the moment an
+// artist hid it - with no UI able to show it, HideReview/ShowReview's own
+// "show" half was unreachable in practice for any review actually hidden.
 func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*Review, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at
 		FROM reviews
 		WHERE artist_id = $1
-		AND is_visible = TRUE
 		ORDER BY created_at DESC`,
 		artistID,
 	)
@@ -348,7 +354,8 @@ func (r *pgRepo) GetBookingIDByReviewToken(ctx context.Context, token string) (u
 func (r *pgRepo) GetBookingContextByToken(ctx context.Context, token string) (*ReviewBookingContext, error) {
 	ctxRow := &ReviewBookingContext{}
 	err := r.db.QueryRow(ctx, `
-		SELECT s.name, u.name, st.name, b.start_time, b.final_price
+		SELECT s.name, u.name, st.name, b.start_time, b.final_price,
+			EXISTS(SELECT 1 FROM reviews r WHERE r.booking_id = b.id)
 		FROM bookings b
 		JOIN services s ON s.id = b.service_id
 		JOIN artists  a ON a.id = b.artist_id
@@ -357,7 +364,7 @@ func (r *pgRepo) GetBookingContextByToken(ctx context.Context, token string) (*R
 		WHERE b.review_token = $1
 		AND b.deleted_at IS NULL`,
 		token,
-	).Scan(&ctxRow.ServiceName, &ctxRow.ArtistName, &ctxRow.StoreName, &ctxRow.StartTime, &ctxRow.FinalPrice)
+	).Scan(&ctxRow.ServiceName, &ctxRow.ArtistName, &ctxRow.StoreName, &ctxRow.StartTime, &ctxRow.FinalPrice, &ctxRow.AlreadyReviewed)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrInvalidReviewToken

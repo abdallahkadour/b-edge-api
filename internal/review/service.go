@@ -229,6 +229,7 @@ func toResponse(r *Review) *ReviewResponse {
 		ArtistID:   r.ArtistID,
 		Rating:     r.Rating,
 		Comment:    r.Comment,
+		IsVisible:  r.IsVisible,
 		CreatedAt:  r.CreatedAt,
 	}
 }

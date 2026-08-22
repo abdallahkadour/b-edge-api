@@ -326,6 +326,84 @@ func TestVerifyOTP_InvalidCodeFormat_ValidationError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// ── dev bypass code ──────────────────────────────────────────────────────
+//
+// The most important thing to prove here isn't that the bypass works in
+// development - it's that it is IMPOSSIBLE to trigger when APP_ENV isn't
+// exactly "development". A universal customer-login bypass reachable in
+// production would be a severe vulnerability, so the fail-closed case gets
+// equal billing with the happy path, not an afterthought.
+
+func TestVerifyOTP_DevBypassCode_InDevelopment_IssuesSessionWithNoOTPRecord(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+
+	customerID := uuid.New()
+	repo := &mockRepo{
+		// Deliberately no latestOTP set, and latestOTPErr left nil rather
+		// than ErrOTPNotFound - if the bypass ever fell through to the real
+		// lookup, GetLatestOTP would be called and this test's mock would
+		// return a zero-value CustomerOTP instead of erroring, masking the
+		// bug. Asserting findOrCreateCalled below is the real proof.
+		customer: &CustomerInfo{ID: customerID, Name: "Bypass Test", Phone: "+96170123456"},
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.VerifyOTP(context.Background(), VerifyOTPRequest{
+		Phone: "+96170123456",
+		Code:  devBypassOTPCode,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, repo.findOrCreateCalled, "bypass must still issue a real session via the normal customer-resolution path")
+	assert.NotEmpty(t, result.AccessToken)
+	assert.NotEmpty(t, result.RefreshToken)
+	assert.Equal(t, customerID, result.Customer.ID)
+}
+
+func TestVerifyOTP_DevBypassCode_OutsideDevelopment_TreatedAsAnOrdinaryWrongCode(t *testing.T) {
+	cases := []string{"production", "staging", ""}
+	for _, env := range cases {
+		t.Setenv("APP_ENV", env)
+
+		repo := &mockRepo{latestOTPErr: ErrOTPNotFound}
+		svc := newTestService(repo)
+
+		_, err := svc.VerifyOTP(context.Background(), VerifyOTPRequest{
+			Phone: "+96170199999", // never requested a real code
+			Code:  devBypassOTPCode,
+		})
+
+		require.Error(t, err, "APP_ENV=%q must not activate the bypass", env)
+		assert.False(t, repo.findOrCreateCalled, "APP_ENV=%q must not reach customer resolution", env)
+	}
+}
+
+func TestVerifyOTP_DevBypassCode_DoesNotWeakenRealCodeChecking(t *testing.T) {
+	// Even in development, a WRONG code that happens to differ from the
+	// bypass must still fail normally - the bypass is one specific extra
+	// value accepted, not a general relaxation of verification.
+	t.Setenv("APP_ENV", "development")
+
+	otpID := uuid.New()
+	repo := &mockRepo{
+		latestOTP: &CustomerOTP{
+			ID:        otpID,
+			Phone:     "+96170123456",
+			OTPHash:   hashOTP("654321"),
+			ExpiresAt: time.Now().Add(2 * time.Minute),
+		},
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.VerifyOTP(context.Background(), VerifyOTPRequest{
+		Phone: "+96170123456",
+		Code:  "111111", // neither the real code nor the bypass code
+	})
+
+	require.Error(t, err)
+	assert.True(t, repo.incrementCalled, "a genuinely wrong code must still count against the attempt limit")
+}
+
 // ── generateOTPCode tests ────────────────────────────────────────────────
 
 func TestGenerateOTPCode_AlwaysSixDigits(t *testing.T) {

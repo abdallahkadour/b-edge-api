@@ -23,3 +23,6 @@ build-errors.log
 
 frontend/
 full_project.txt
+
+# Graphify (VS Code knowledge-graph tool) output
+/graphify-out/

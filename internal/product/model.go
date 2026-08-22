@@ -45,6 +45,13 @@ var (
 
 	// ErrEmptyOrder is returned when an order has no line items at all.
 	ErrEmptyOrder = errors.New("an order must contain at least one item")
+
+	// ErrInsufficientStock is returned when an order requests more of a
+	// product than is currently in stock - either from PlaceOrder's
+	// advisory pre-check, or authoritatively from the atomic decrement
+	// inside CreateOrder's transaction, which is what actually prevents
+	// overselling under concurrent orders.
+	ErrInsufficientStock = errors.New("one or more products in this order do not have enough stock available")
 )
 
 // Order status constants - the state machine from PRD §13.2, as actually
@@ -79,8 +86,13 @@ type Product struct {
 	Price       decimal.Decimal
 	ImageURL    *string
 	IsActive    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// StockQuantity is nil when stock isn't tracked for this product
+	// (unlimited availability). Decremented atomically on order placement,
+	// restored on cancellation/return - see migration 020 and CreateOrder /
+	// UpdateOrderStatus in repository.go.
+	StockQuantity *int
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // ProductResponse is the public/artist-facing product representation.
@@ -92,17 +104,23 @@ type ProductResponse struct {
 	Price       decimal.Decimal `json:"price"`
 	ImageURL    *string         `json:"image_url,omitempty"`
 	IsActive    bool            `json:"is_active"`
+	// StockQuantity is omitted entirely when nil (unlimited/not tracked) -
+	// a PRESENT 0 means genuinely sold out, so this must never default to
+	// a number. The frontend treats "field absent" and "field is 0" as two
+	// different states.
+	StockQuantity *int `json:"stock_quantity,omitempty"`
 }
 
 func toProductResponse(p *Product) *ProductResponse {
 	return &ProductResponse{
-		ID:          p.ID,
-		Name:        p.Name,
-		Description: p.Description,
-		Category:    p.Category,
-		Price:       p.Price,
-		ImageURL:    p.ImageURL,
-		IsActive:    p.IsActive,
+		ID:            p.ID,
+		Name:          p.Name,
+		Description:   p.Description,
+		Category:      p.Category,
+		Price:         p.Price,
+		ImageURL:      p.ImageURL,
+		IsActive:      p.IsActive,
+		StockQuantity: p.StockQuantity,
 	}
 }
 
@@ -127,6 +145,8 @@ func toOrderResponse(o *Order, items []*OrderItem) *OrderResponse {
 		TotalAmount:        o.TotalAmount,
 		PaymentReference:   o.PaymentReference,
 		DeliveryNotes:      o.DeliveryNotes,
+		DeliveryLat:        o.DeliveryLat,
+		DeliveryLng:        o.DeliveryLng,
 		CancellationReason: o.CancellationReason,
 		Items:              itemResponses,
 		ConfirmedAt:        o.ConfirmedAt,
@@ -144,6 +164,10 @@ type CreateProductRequest struct {
 	Category    *string `json:"category"    validate:"omitempty,oneof=makeup hair nails lashes skincare"`
 	Price       string  `json:"price"       validate:"required"`
 	ImageURL    *string `json:"image_url"   validate:"omitempty,max=500"`
+	// StockQuantity is optional - omit it (or send null) for unlimited
+	// availability, not tracked against orders at all. When present, it
+	// must be zero or more.
+	StockQuantity *int `json:"stock_quantity" validate:"omitempty,min=0"`
 }
 
 // UpdateProductRequest is the body for PATCH /products/:id (artist-only).
@@ -156,6 +180,11 @@ type UpdateProductRequest struct {
 	Price       *string `json:"price"`
 	ImageURL    *string `json:"image_url"   validate:"omitempty,max=500"`
 	IsActive    *bool   `json:"is_active"`
+	// StockQuantity: same COALESCE-only-when-supplied convention as every
+	// other field here - there is no way to explicitly clear it back to
+	// NULL (unlimited) through this endpoint, matching the same existing
+	// limitation on Description/Category/ImageURL.
+	StockQuantity *int `json:"stock_quantity" validate:"omitempty,min=0"`
 }
 
 // EnrichedOrderResponse adds customer display fields an artist actually
@@ -173,20 +202,25 @@ type EnrichedOrderResponse struct {
 
 // Order mirrors a row in the orders table.
 type Order struct {
-	ID                  uuid.UUID
-	SalonID             uuid.UUID
-	CustomerID          uuid.UUID
-	Status              string
-	TotalAmount         decimal.Decimal
-	PaymentReference    *string
-	DeliveryNotes       *string
-	CancellationReason  *string
-	ConfirmedAt         *time.Time
-	ShippedAt           *time.Time
-	DeliveredAt         *time.Time
-	CancelledAt         *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID               uuid.UUID
+	SalonID          uuid.UUID
+	CustomerID       uuid.UUID
+	Status           string
+	TotalAmount      decimal.Decimal
+	PaymentReference *string
+	DeliveryNotes    *string
+	// DeliveryLat/DeliveryLng are the customer's pin-dropped location, nil
+	// for orders placed before migration 022. See CreateOrderRequest for
+	// why this exists instead of a text address.
+	DeliveryLat        *float64
+	DeliveryLng        *float64
+	CancellationReason *string
+	ConfirmedAt        *time.Time
+	ShippedAt          *time.Time
+	DeliveredAt        *time.Time
+	CancelledAt        *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // OrderItem mirrors a row in order_items. ProductName/UnitPrice are
@@ -214,11 +248,16 @@ type OrderItemResponse struct {
 // order is meaningless without its line items, so callers always get both
 // together rather than needing a second request.
 type OrderResponse struct {
-	ID                 uuid.UUID           `json:"id"`
-	Status             string              `json:"status"`
-	TotalAmount        decimal.Decimal     `json:"total_amount"`
-	PaymentReference   *string             `json:"payment_reference,omitempty"`
-	DeliveryNotes      *string             `json:"delivery_notes,omitempty"`
+	ID               uuid.UUID           `json:"id"`
+	Status           string              `json:"status"`
+	TotalAmount      decimal.Decimal     `json:"total_amount"`
+	PaymentReference *string             `json:"payment_reference,omitempty"`
+	DeliveryNotes    *string             `json:"delivery_notes,omitempty"`
+	// DeliveryLat/DeliveryLng: omitted entirely for orders placed before
+	// this existed - the frontend falls back to "no location on file"
+	// rather than a misleading (0,0).
+	DeliveryLat        *float64            `json:"delivery_lat,omitempty"`
+	DeliveryLng        *float64            `json:"delivery_lng,omitempty"`
 	CancellationReason *string             `json:"cancellation_reason,omitempty"`
 	Items              []OrderItemResponse `json:"items"`
 	ConfirmedAt        *time.Time          `json:"confirmed_at,omitempty"`
@@ -238,9 +277,18 @@ type OrderItemRequest struct {
 // matching the rest of B-Edge - identity resolved by phone, no account
 // required, same as a guest booking.
 type CreateOrderRequest struct {
-	SalonID       string             `json:"salon_id"       validate:"required,uuid"`
-	Name          string             `json:"name"           validate:"required,min=2,max=100"`
-	Phone         string             `json:"phone"          validate:"required,min=7,max=20"`
+	SalonID string `json:"salon_id" validate:"required,uuid"`
+	Name    string `json:"name"     validate:"required,min=2,max=100"`
+	Phone   string `json:"phone"    validate:"required,min=7,max=20"`
+	// DeliveryLat/DeliveryLng: required. A courier needs somewhere to
+	// actually go - a text address doesn't reliably resolve to a real
+	// place in Lebanon (informal, landmark-based addressing is the norm),
+	// so the customer drops a pin at checkout instead. Bounds match valid
+	// real-world coordinates, not Lebanon specifically - B-Edge's own
+	// roadmap includes MENA expansion, so this shouldn't hard-code one
+	// country's borders.
+	DeliveryLat   float64            `json:"delivery_lat"   validate:"required,min=-90,max=90"`
+	DeliveryLng   float64            `json:"delivery_lng"   validate:"required,min=-180,max=180"`
 	DeliveryNotes *string            `json:"delivery_notes" validate:"omitempty,max=500"`
 	Items         []OrderItemRequest `json:"items"          validate:"required,min=1,dive"`
 }

@@ -16,20 +16,14 @@ import (
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
 const uniqueViolationCode = "23505"
 
-// roleArtist is the "artist" role value stored in users.role. When a user
-// registers with this role, CreateUser also provisions their artists profile
-// row in the same transaction - every artist account has exactly one artists
-// row from the moment it exists, with salon_id starting NULL until the artist
-// is assigned to a salon.
-const roleArtist = "artist"
-
 // Repository defines all database operations for the auth domain.
 // Implementations return sentinel errors (e.g. ErrUserNotFound), never apperror types.
 type Repository interface {
-	// CreateUser inserts a new user row and populates CreatedAt and UpdatedAt on success.
-	// If the user's role is "artist", an empty artists profile row is also created
-	// in the same transaction - either both rows are created or neither is.
-	// Returns ErrEmailConflict if the email is already registered.
+	// CreateUser inserts a new user row and populates CreatedAt and UpdatedAt
+	// on success. Deliberately does not touch the artists table, even for
+	// role "artist" - see this method's own doc comment on the concrete
+	// implementation for why. Returns ErrEmailConflict if the email is
+	// already registered.
 	CreateUser(ctx context.Context, user *User) error
 
 	// GetUserByEmail returns the non-deleted user with the given email.
@@ -72,6 +66,13 @@ type Repository interface {
 
 	// MarkPasswordResetUsed stamps used_at on the token row to make it one-use.
 	MarkPasswordResetUsed(ctx context.Context, token string) error
+
+	// EnqueuePasswordResetNotification queues the reset link for delivery.
+	// Own method on this domain's own Repository, not a call into
+	// customerauth or booking's enqueue helpers - see this method's
+	// implementation for why that's the deliberate, established pattern
+	// here, not an oversight.
+	EnqueuePasswordResetNotification(ctx context.Context, userID uuid.UUID, message string) error
 }
 
 // repo is the concrete PostgreSQL implementation of Repository.
@@ -92,26 +93,29 @@ func isUniqueViolation(err error) bool {
 
 // CreateUser inserts a new user row and populates CreatedAt and UpdatedAt from the DB.
 //
-// If user.Role is "artist", an empty artists profile row (just user_id - rating,
-// review_count, is_verified, salon_id all take their column defaults) is created
-// in the same transaction. This guarantees every artist account has a matching
-// artists row from the moment it exists, in every environment, with no manual
-// seeding step.
+// Deliberately does NOT create an artists row here, even for role "artist" -
+// it used to (an earlier version of this function auto-provisioned one, from
+// before the self-service onboarding flow existed), and that turned out to
+// be a real, live bug once a UI path to /auth/register finally existed to
+// exercise it: artists.status defaults to 'active' at the DB level, so a
+// freshly registered artist skipped onboarding and admin review entirely,
+// landing straight in the full dashboard. It also broke onboarding itself -
+// internal/onboarding's own Complete() expects NO artists row to exist yet
+// (its idempotency check treats a pre-existing row as ErrAlreadyOnboarded),
+// so the very first onboarding submission for any newly registered artist
+// would have failed outright. onboarding.Complete() is now the ONLY place
+// an artists row gets created, always with status='pending', which is what
+// GetStatus's ErrNotOnboarded (no row found) → 404 → "show the onboarding
+// form" logic in the frontend actually depends on.
 //
 // Returns ErrEmailConflict if the email is already taken.
 func (r *repo) CreateUser(ctx context.Context, user *User) error {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("create user: begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
 	const insertUser = `
 		INSERT INTO users (id, name, email, password_hash, role, phone, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING created_at, updated_at`
 
-	err = tx.QueryRow(ctx, insertUser,
+	err := r.db.QueryRow(ctx, insertUser,
 		user.ID, user.Name, user.Email, user.PasswordHash,
 		user.Role, user.Phone, user.Status,
 	).Scan(&user.CreatedAt, &user.UpdatedAt)
@@ -120,19 +124,6 @@ func (r *repo) CreateUser(ctx context.Context, user *User) error {
 			return ErrEmailConflict
 		}
 		return fmt.Errorf("create user: %w", err)
-	}
-
-	// Provision the matching artists profile row for artist accounts.
-	if user.Role == roleArtist {
-		const insertArtist = `INSERT INTO artists (user_id) VALUES ($1)`
-
-		if _, err := tx.Exec(ctx, insertArtist, user.ID); err != nil {
-			return fmt.Errorf("create artist profile: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("create user: commit transaction: %w", err)
 	}
 	return nil
 }
@@ -217,15 +208,27 @@ func (r *repo) UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHas
 
 // UpdateUserStatus changes the status for the given user.
 // When status is StatusDeleted, deleted_at is also stamped to soft-delete the row.
+// UpdateUserStatus was, until this fix, unusable for every caller
+// (FreezeAccount, UnfreezeAccount, DeleteAccount alike) - reusing $1 both
+// as a direct assignment (`status = $1`) and inside a comparison
+// (`CASE WHEN $1 = 'deleted'`) left Postgres unable to deduce a single
+// consistent type for that parameter across the two different syntactic
+// contexts, failing every call with SQLSTATE 42P08 ("inconsistent types
+// deduced for parameter $1"), regardless of which status was passed. This
+// had no test coverage that actually executed the real SQL against a real
+// database (the mock-based service tests all pass a fake repository), so
+// it shipped and stayed broken until a live UI call to /auth/freeze-account
+// finally exercised the real query. Fixed by giving the CASE its own
+// placeholder for the same value instead of reusing $1.
 func (r *repo) UpdateUserStatus(ctx context.Context, userID uuid.UUID, status string) error {
 	const q = `
 		UPDATE users
 		SET status     = $1,
-		    deleted_at = CASE WHEN $1 = 'deleted' THEN NOW() ELSE deleted_at END,
+		    deleted_at = CASE WHEN $3 = 'deleted' THEN NOW() ELSE deleted_at END,
 		    updated_at = NOW()
 		WHERE id = $2 AND deleted_at IS NULL`
 
-	_, err := r.db.Exec(ctx, q, status, userID)
+	_, err := r.db.Exec(ctx, q, status, userID, status)
 	if err != nil {
 		return fmt.Errorf("update user status: %w", err)
 	}
@@ -346,6 +349,34 @@ func (r *repo) MarkPasswordResetUsed(ctx context.Context, token string) error {
 	_, err := r.db.Exec(ctx, q, token)
 	if err != nil {
 		return fmt.Errorf("mark password reset used: %w", err)
+	}
+	return nil
+}
+
+// EnqueuePasswordResetNotification queues the reset-link message onto the
+// same notifications table internal/notification's worker already polls
+// and delivers via WhatsApp (or logs/skips if unconfigured).
+//
+// This does NOT call into customerauth's EnqueueOTPNotification or
+// booking's enqueueNotification - both exist, and it would build, but it
+// would be the wrong move architecturally. customerauth's variant is
+// phone-keyed specifically for pre-verification users with no `users` row
+// yet (see its own comment in customerauth/repository.go); booking's
+// enqueueNotification is unexported and can't be called from outside that
+// package at all. Every domain in this codebase owns its own enqueue
+// method on its own Repository - this one does too, following that
+// pattern rather than reaching across packages for it. Before this
+// existed, ForgotPassword created and stored a real reset token, then a
+// bare `// TODO: send WhatsApp message` comment did nothing - the token
+// was created but never reached the person who requested it, in every
+// environment, always.
+func (r *repo) EnqueuePasswordResetNotification(ctx context.Context, userID uuid.UUID, message string) error {
+	const q = `
+		INSERT INTO notifications (user_id, template_name, channel, payload)
+		VALUES ($1, 'password_reset', 'whatsapp', jsonb_build_object('message', $2::text))`
+
+	if _, err := r.db.Exec(ctx, q, userID, message); err != nil {
+		return fmt.Errorf("enqueue password reset notification: %w", err)
 	}
 	return nil
 }

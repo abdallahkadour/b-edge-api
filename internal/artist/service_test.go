@@ -28,34 +28,39 @@ func TestMain(m *testing.M) {
 // ── Mock repository ───────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	getArtistByIDProfile     *ArtistProfile
-	getArtistByIDErr         error
-	getArtistByUserIDProfile *ArtistProfile
-	getArtistByUserIDErr     error
-	updateArtistProfileErr   error
-	getStoresByArtistStores  []*Store
-	getStoresByArtistErr     error
-	getStoresBySalonStores   []*Store
-	getStoresBySalonErr      error
-	getServicesBySalonSvcs   []*SalonServiceRecord
-	getServicesBySalonErr    error
-	getServiceByIDSvc        *SalonServiceRecord
-	getServiceByIDErr        error
-	createServiceErr         error
-	updateServiceErr         error
-	deleteServiceErr         error
-	getBusinessHoursBH       []*BusinessHours
-	getBusinessHoursErr      error
-	setBusinessHoursErr      error
-	getExceptionsEx          []*BusinessHoursException
-	getExceptionsErr         error
-	createExceptionErr       error
-	deleteExceptionErr       error
-	getStoreByIDStore        *Store
-	getStoreByIDErr          error
-	updateStoreErr           error
-	getArtistIDByHandleID    uuid.UUID
-	getArtistIDByHandleErr   error
+	getArtistByIDProfile          *ArtistProfile
+	getArtistByIDErr              error
+	getArtistByUserIDProfile      *ArtistProfile
+	getArtistByUserIDErr          error
+	updateArtistProfileErr        error
+	getStoresByArtistStores       []*Store
+	getStoresByArtistErr          error
+	getStoresBySalonStores        []*Store
+	getStoresBySalonErr           error
+	getServicesBySalonSvcs        []*SalonServiceRecord
+	getServicesBySalonErr         error
+	getServiceByIDSvc             *SalonServiceRecord
+	getServiceByIDErr             error
+	createServiceErr              error
+	updateServiceErr              error
+	deleteServiceErr              error
+	getBusinessHoursBH            []*BusinessHours
+	getBusinessHoursErr           error
+	setBusinessHoursErr           error
+	getExceptionsEx               []*BusinessHoursException
+	getExceptionsErr              error
+	createExceptionErr            error
+	deleteExceptionErr            error
+	getStoreByIDStore             *Store
+	getStoreByIDErr               error
+	updateStoreErr                error
+	createStoreErr                error
+	createStoreCalledWithArtistID uuid.UUID
+	getArtistIDByHandleID         uuid.UUID
+	isArtistActiveValue           bool
+	isArtistActiveSet             bool
+	isArtistActiveErr             error
+	getArtistIDByHandleErr        error
 }
 
 func (m *mockRepo) GetArtistByID(_ context.Context, _ uuid.UUID) (*ArtistProfile, error) {
@@ -63,6 +68,18 @@ func (m *mockRepo) GetArtistByID(_ context.Context, _ uuid.UUID) (*ArtistProfile
 }
 func (m *mockRepo) GetArtistIDByHandle(_ context.Context, _ string) (uuid.UUID, error) {
 	return m.getArtistIDByHandleID, m.getArtistIDByHandleErr
+}
+func (m *mockRepo) IsArtistActive(_ context.Context, _ uuid.UUID) (bool, error) {
+	if m.isArtistActiveErr != nil {
+		return false, m.isArtistActiveErr
+	}
+	// Defaults true so every EXISTING test (written before this method
+	// existed) keeps passing without needing to know about it - only
+	// tests specifically about the pending/active gate set this field.
+	if !m.isArtistActiveSet {
+		return true, nil
+	}
+	return m.isArtistActiveValue, nil
 }
 func (m *mockRepo) GetArtistByUserID(_ context.Context, _ uuid.UUID) (*ArtistProfile, error) {
 	return m.getArtistByUserIDProfile, m.getArtistByUserIDErr
@@ -81,6 +98,14 @@ func (m *mockRepo) GetStoreByID(_ context.Context, _ uuid.UUID) (*Store, error) 
 }
 func (m *mockRepo) UpdateStore(_ context.Context, _ uuid.UUID, _ UpdateStoreRequest) error {
 	return m.updateStoreErr
+}
+func (m *mockRepo) CreateStore(_ context.Context, store *Store, artistID uuid.UUID) error {
+	if m.createStoreErr != nil {
+		return m.createStoreErr
+	}
+	store.ID = uuid.New()
+	m.createStoreCalledWithArtistID = artistID
+	return nil
 }
 
 func (m *mockRepo) GetServicesBySalon(_ context.Context, _ uuid.UUID) ([]*SalonServiceRecord, error) {
@@ -243,6 +268,39 @@ func TestResolveArtistID_UnknownHandle_ReturnsArtistNotFound(t *testing.T) {
 	_, err := svc.ResolveArtistID(context.Background(), "nonexistent-handle")
 
 	assert.ErrorIs(t, err, ErrArtistNotFound)
+}
+
+// TestResolveArtistID_PendingArtistUUID_ReturnsNotFound guards the second
+// half of the review-gate fix: a caller holding a PENDING artist's raw
+// UUID directly (an old shared link, or simply guessing one) must not
+// bypass the review gate just because a UUID needs no handle lookup to
+// parse. Before this test existed, an artist who was never approved
+// could still be reached by anyone who had - or guessed - their ID.
+func TestResolveArtistID_PendingArtistUUID_ReturnsNotFound(t *testing.T) {
+	pendingID := uuid.New()
+	repo := &mockRepo{
+		isArtistActiveSet:   true,
+		isArtistActiveValue: false,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.ResolveArtistID(context.Background(), pendingID.String())
+
+	assert.ErrorIs(t, err, ErrArtistNotFound)
+}
+
+func TestResolveArtistID_ActiveArtistUUID_Succeeds(t *testing.T) {
+	activeID := uuid.New()
+	repo := &mockRepo{
+		isArtistActiveSet:   true,
+		isArtistActiveValue: true,
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.ResolveArtistID(context.Background(), activeID.String())
+
+	require.NoError(t, err)
+	assert.Equal(t, activeID, result)
 }
 
 // ── UpdateProfile handle tests ───────────────────────────────────────────────
@@ -750,6 +808,81 @@ func TestUpdateStore_OtherSalonsStore_Denied(t *testing.T) {
 	svc := newTestService(repo)
 
 	_, err := svc.UpdateStore(context.Background(), storeID, attackerSalonID, UpdateStoreRequest{})
+
+	require.Error(t, err)
+}
+
+// ── CreateStore tests ────────────────────────────────────────────────────────
+//
+// The fix for a real gap: the data model and the availability algorithm
+// both already supported an artist working at more than one store
+// (artist_stores, cross-store travel buffer), but nothing let an artist
+// actually create a second store and get assigned to it. These tests lock
+// in that the new endpoint does both halves atomically, from the caller's
+// own user ID rather than a trusted request field.
+
+func TestCreateStore_Success_AssignsCallingArtist(t *testing.T) {
+	profile := defaultArtistProfile()
+	salonID := uuid.New()
+	repo := &mockRepo{getArtistByUserIDProfile: profile}
+	svc := newTestService(repo)
+
+	store, err := svc.CreateStore(context.Background(), profile.UserID, salonID, CreateStoreRequest{
+		Name: "Branch B", City: "Sour",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, salonID, store.SalonID, "the new store must belong to the caller's own salon")
+	assert.Equal(t, profile.ID, repo.createStoreCalledWithArtistID,
+		"the artist assigned to the new store must be resolved from the caller's own session, not trusted from the request")
+}
+
+func TestCreateStore_NoArtistProfile_Rejected(t *testing.T) {
+	repo := &mockRepo{getArtistByUserIDErr: ErrArtistNotFound}
+	svc := newTestService(repo)
+
+	_, err := svc.CreateStore(context.Background(), uuid.New(), uuid.New(), CreateStoreRequest{
+		Name: "Branch B", City: "Sour",
+	})
+
+	require.Error(t, err)
+}
+
+func TestCreateStore_MissingName_Rejected(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{getArtistByUserIDProfile: profile}
+	svc := newTestService(repo)
+
+	_, err := svc.CreateStore(context.Background(), profile.UserID, uuid.New(), CreateStoreRequest{
+		City: "Sour", // Name omitted
+	})
+
+	require.Error(t, err, "a store with no name must be rejected before it reaches the database")
+}
+
+func TestCreateStore_MissingCity_Rejected(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{getArtistByUserIDProfile: profile}
+	svc := newTestService(repo)
+
+	_, err := svc.CreateStore(context.Background(), profile.UserID, uuid.New(), CreateStoreRequest{
+		Name: "Branch B", // City omitted
+	})
+
+	require.Error(t, err)
+}
+
+func TestCreateStore_RepositoryFailure_Surfaces(t *testing.T) {
+	profile := defaultArtistProfile()
+	repo := &mockRepo{
+		getArtistByUserIDProfile: profile,
+		createStoreErr:           assert.AnError,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.CreateStore(context.Background(), profile.UserID, uuid.New(), CreateStoreRequest{
+		Name: "Branch B", City: "Sour",
+	})
 
 	require.Error(t, err)
 }

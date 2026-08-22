@@ -31,10 +31,20 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	pub.Post("/orders", handler.PlaceOrder)
 
 	// ── Bearer - either party on an order (customer or artist) ──────────────
-	authed := app.Group("/api/v1", auth)
-	authed.Get("/orders/me", handler.ListMyOrders)
-	authed.Get("/orders/:id", handler.GetOrder)
-	authed.Patch("/orders/:id/cancel", handler.CancelOrder)
+	//
+	// Prefix MUST be scoped to /api/v1/orders, not the bare /api/v1 this used
+	// to be. A Group's middleware is registered as an app-wide Use() bound to
+	// its prefix, and Fiber freezes each route's middleware chain against
+	// whatever is in that global stack AT REGISTRATION TIME - so a Group
+	// prefixed at the API root applies auth to every route registered in any
+	// domain's RegisterRoutes() called afterward in main.go, not just this
+	// domain's own routes. That silently 401'd media's public portfolio
+	// endpoint (registered right after this one) until this was scoped down;
+	// see CLAUDE-v6.md for the specific bug this caused and how it was found.
+	authed := app.Group("/api/v1/orders", auth)
+	authed.Get("/me", handler.ListMyOrders)
+	authed.Get("/:id", handler.GetOrder)
+	authed.Patch("/:id/cancel", handler.CancelOrder)
 
 	// ── Bearer, artist-only - catalog + order management ─────────────────────
 	// NOTE the "/salon" segment - it is load-bearing, not decoration.

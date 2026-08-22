@@ -86,7 +86,7 @@ func (s *Service) GetClient(ctx context.Context, requesterUserID, customerID uui
 }
 
 // UpsertNote creates or updates the artist's private note for a customer. The
-// customer must already be the artist's client (have a completed booking),
+// customer must already be the artist's client (have a qualifying booking),
 // preventing notes on arbitrary users.
 func (s *Service) UpsertNote(ctx context.Context, requesterUserID, customerID uuid.UUID, req UpsertNoteRequest) (*NoteResponse, error) {
 	if err := s.validate.Struct(req); err != nil {

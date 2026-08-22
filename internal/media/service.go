@@ -188,6 +188,149 @@ func (s *Service) Reorder(ctx context.Context, userID uuid.UUID, req ReorderRequ
 	return s.repo.Reorder(ctx, artistID, ids)
 }
 
+// ── Products ────────────────────────────────────────────────────────────────
+//
+// A product's own image_url is untouched by any of this - it stays the
+// first/primary photo shown everywhere it already is (shop grid, artist
+// products table). These methods manage the ADDITIONAL gallery photos shown
+// on the customer product-detail page. There is no "set cover" concept
+// here, deliberately: image_url already is the cover.
+
+// GetProductPhotos returns a product's gallery. Public - no authentication
+// required, mirrors GetPortfolio's own public/no-auth shape.
+func (s *Service) GetProductPhotos(ctx context.Context, productID uuid.UUID) (*ProductGalleryResponse, error) {
+	items, err := s.repo.ListByProduct(ctx, productID)
+	if err != nil {
+		return nil, fmt.Errorf("get product photos: %w", err)
+	}
+
+	photos := make([]MediaResponse, 0, len(items))
+	for _, item := range items {
+		photos = append(photos, toMediaResponse(item))
+	}
+
+	return &ProductGalleryResponse{
+		ProductID:  productID,
+		Photos:     photos,
+		TotalCount: len(photos),
+		MaxAllowed: MaxProductPhotos,
+	}, nil
+}
+
+// AddProductPhoto appends a photo to a product's gallery, verifying the
+// calling artist's salon actually owns this product first.
+func (s *Service) AddProductPhoto(ctx context.Context, productID, salonID uuid.UUID, req AddMediaRequest) (*MediaResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	if err := s.verifyProductOwnership(ctx, productID, salonID); err != nil {
+		return nil, err
+	}
+
+	count, err := s.repo.CountByProduct(ctx, productID)
+	if err != nil {
+		return nil, fmt.Errorf("add product photo: count: %w", err)
+	}
+	if count >= MaxProductPhotos {
+		return nil, apperror.Conflict("PRODUCT_GALLERY_FULL",
+			fmt.Sprintf("A product can have at most %d additional photos", MaxProductPhotos))
+	}
+
+	item := &MediaItem{
+		ID:           uuid.New(),
+		OwnerType:    OwnerTypeProduct,
+		OwnerID:      productID,
+		URL:          req.URL,
+		CloudinaryID: req.CloudinaryID,
+		Type:         MediaTypePhoto,
+		DisplayOrder: count, // append at the end
+	}
+
+	if err := s.repo.Create(ctx, item); err != nil {
+		return nil, fmt.Errorf("add product photo: create: %w", err)
+	}
+
+	res := toMediaResponse(item)
+	return &res, nil
+}
+
+// DeleteProductPhoto removes a photo from a product's gallery. Ownership is
+// resolved via the media item's own product, not a caller-supplied product
+// ID, so a request can't claim to be deleting "its own" photo from a
+// product it doesn't actually own.
+func (s *Service) DeleteProductPhoto(ctx context.Context, mediaID, salonID uuid.UUID) error {
+	item, err := s.repo.GetByID(ctx, mediaID)
+	if err != nil {
+		if errors.Is(err, ErrMediaNotFound) {
+			return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+		}
+		return fmt.Errorf("delete product photo: get item: %w", err)
+	}
+	if item.OwnerType != OwnerTypeProduct {
+		return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+	}
+
+	if err := s.verifyProductOwnership(ctx, item.OwnerID, salonID); err != nil {
+		return err
+	}
+
+	if err := s.repo.Delete(ctx, mediaID); err != nil {
+		return fmt.Errorf("delete product photo: %w", err)
+	}
+	return nil
+}
+
+// ReorderProductPhotos updates the display_order of all photos in a
+// product's gallery. The IDs slice must contain all of the gallery's photo
+// IDs in the desired order.
+func (s *Service) ReorderProductPhotos(ctx context.Context, productID, salonID uuid.UUID, req ReorderRequest) error {
+	if err := s.validate.Struct(req); err != nil {
+		return mapValidationError(err)
+	}
+
+	if err := s.verifyProductOwnership(ctx, productID, salonID); err != nil {
+		return err
+	}
+
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, rawID := range req.IDs {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			return apperror.BadRequest("INVALID_ID", "One or more media IDs are invalid")
+		}
+		ids = append(ids, id)
+	}
+
+	count, err := s.repo.CountByProduct(ctx, productID)
+	if err != nil {
+		return fmt.Errorf("reorder product photos: count: %w", err)
+	}
+	if len(ids) != count {
+		return apperror.BadRequest("INVALID_REORDER", "IDs list must contain all of this product's photos")
+	}
+
+	return s.repo.ReorderProduct(ctx, productID, ids)
+}
+
+// verifyProductOwnership confirms the given salon actually owns productID -
+// the same cross-tenant guard already established throughout this codebase
+// (never trust that "authenticated as an artist" implies "owns this
+// specific resource").
+func (s *Service) verifyProductOwnership(ctx context.Context, productID, salonID uuid.UUID) error {
+	actualSalonID, err := s.repo.GetProductSalonID(ctx, productID)
+	if err != nil {
+		if errors.Is(err, ErrProductNotFound) {
+			return apperror.NotFound("PRODUCT_NOT_FOUND", "Product not found")
+		}
+		return fmt.Errorf("verify product ownership: %w", err)
+	}
+	if actualSalonID != salonID {
+		return apperror.Forbidden("FORBIDDEN", "You do not have permission to modify this product's photos")
+	}
+	return nil
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 // resolveArtist resolves a users.id to an artists.id.

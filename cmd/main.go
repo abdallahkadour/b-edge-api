@@ -33,6 +33,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/abdallahkadour/b-edge-api/internal/media"
+	"github.com/abdallahkadour/b-edge-api/internal/admin"
+	"github.com/abdallahkadour/b-edge-api/internal/onboarding"
 
 	"github.com/abdallahkadour/b-edge-api/internal/earnings"
 
@@ -86,6 +88,13 @@ func main() {
 	app := fiber.New(fiber.Config{
 		AppName:      "B-Edge API",
 		ErrorHandler: apperror.ErrorHandler,
+		// Fiber defaults to 4MB, which would reject an image upload
+		// before it even reaches the handler - media.MaxUploadBytes is
+		// 15MB, plus multipart overhead (boundaries, headers, the other
+		// form fields) needs some headroom above that. Every other
+		// request body in this API is small JSON, so raising this
+		// globally rather than per-route costs nothing elsewhere.
+		BodyLimit: 20 * 1024 * 1024,
 	})
 
 	// app.Use(func(c *fiber.Ctx) error {
@@ -124,6 +133,8 @@ func main() {
 	earnings.RegisterRoutes(app, pool, logger)
 	product.RegisterRoutes(app, pool, logger)
 	media.RegisterRoutes(app, pool, logger)
+	onboarding.RegisterRoutes(app, pool, logger)
+	admin.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

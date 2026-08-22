@@ -20,6 +20,13 @@ Launch Partner: Rania  ·  Beirut Downtown & Tripoli
 
 *Configurable defaults: Every number in this document is a confirmed default value from Rania. All values are stored in the database and configurable by any salon owner at any time without code changes. Nothing is hardcoded in the application. Currency is USD at launch.*
 
+**Update note (Aug 15, 2026):** Two things shipped since this doc was written, cross-checked against the actual code, that this "Final" version does not reflect:
+
+1. **§3.3 Artist Onboarding directly contradicts the build.** This doc says "No approval required from B-Edge platform. Artists go live after completing onboarding." What's actually live: self-service onboarding lands an artist in `pending` status, and they only go live after an admin explicitly approves them (`internal/admin` domain, `POST /admin/artists/:id/approve`, artist-dashboard's Admin page). This is not a missing feature, it's the opposite of what's specced. See §3.3 note below for the corrected model.
+2. **Customer authentication is undocumented here.** The `users` schema entry later in this doc (§13, `password_hash` column) implies password-based auth for everyone, and there's no mention anywhere of OTP. Actual customer auth is phone number + WhatsApp OTP only (`internal/customerauth`, `/api/v1/customer-auth/*`), fully separate from artist auth, no password, no email required. There is also no customer "Register" step: verifying an OTP on a new phone number creates the account implicitly.
+
+Neither correction has been threaded through the rest of this document — flagged here rather than silently patched in twelve places. See `CLAUDE-v6.md` for full current state.
+
 # 1. Platform Vision
 
 B-Edge is a beauty booking platform built for Lebanon and the MENA region. It is an open platform where any salon, studio, or independent artist can register, onboard their team, define their services and pricing, and accept bookings online.
@@ -72,11 +79,13 @@ Based on Fresha 5-level permission model and GlossGenius role-based access contr
 
 ## 3.3 Artist Onboarding
 
-- Any artist can register and create a profile. Linked to a salon or standalone.
+**⚠️ Superseded by the actual build as of Aug 15, 2026 — see update note at the top of this document.** The two bullets below describing "no approval required" were the original plan; the live system requires admin approval before an artist goes live. Corrected model:
 
-- No approval required from B-Edge platform. Artists go live after completing onboarding.
+- Any artist can self-register and complete onboarding. Linked to a salon or standalone.
 
-- Salon owner invites staff. Staff creates their own account linked to the salon.
+- **Approval IS required.** Completing onboarding sets the artist to `pending` status, visible on the platform admin's review queue. An admin (hard-capped at 2 accounts, seeded via `cmd/seedadmin`, never self-registerable) explicitly approves or rejects. Only `active` artists appear on Discover or are bookable. `rejected` is currently a terminal status with no resubmit path.
+
+- Salon owner invites staff. Staff creates their own account linked to the salon. *(Still unbuilt — only a single artist role exists today, no staff invite flow.)*
 
 - During onboarding the artist sets: services, pricing, availability, deposit amounts, travel buffers.
 
@@ -636,7 +645,7 @@ Technical implementation details — indexes, constraints, migration rules — a
 
 | **Table** | **Key fields** | **Purpose** |
 | --- | --- | --- |
-| users | id UUID, name, email, password_hash, role, phone, status, created_at, deleted_at TIMESTAMPTZ | Every person on the platform. |
+| users | id UUID, name, email, password_hash, role, phone, status, created_at, deleted_at TIMESTAMPTZ | Every person on the platform. `password_hash` applies to artists/admins only — see update note at top of document: customers authenticate via a separate `customer_otps` table (migration 015), no password. |
 | salons | id UUID, name, owner_id FK users, created_at | A beauty business. One owner, many stores and staff. |
 | stores | id UUID, salon_id, name, city, country, open_time, close_time, same_day_booking_enabled, min_advance_hours | A physical location. Operating hours and booking rules per store. |
 | business_hours_exceptions | id UUID, store_id, date DATE, is_closed BOOLEAN, open_time, close_time, reason, created_at | Holiday closures and exceptional hours overrides per store. |

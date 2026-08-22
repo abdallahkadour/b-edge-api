@@ -51,6 +51,7 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //	PATCH  /api/v1/artists/:id                         - update own profile
 //	GET    /api/v1/artists/:id/stores                  - stores for an artist
 //	GET    /api/v1/artists/salon/stores                - stores for own salon
+//	POST   /api/v1/artists/salon/stores                - add a second location, self-assigned
 //	GET    /api/v1/artists/salon/services              - services for own salon
 //	POST   /api/v1/artists/salon/services              - add service
 //	PATCH  /api/v1/artists/salon/services/:service_id  - update service
@@ -73,6 +74,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	// Stores (own salon)
 	app.Get(base+"/salon/stores", auth, artistOnly, handler.GetStoresBySalon)
+	app.Post(base+"/salon/stores", auth, artistOnly, handler.CreateStore)
 
 	// Services (artist dashboard - own salon)
 	app.Get(base+"/salon/services", auth, artistOnly, handler.GetServicesBySalon)
@@ -101,6 +103,40 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// customer-role token minted by the OTP flow. Requiring the artist role
 	// as well means a customer session can never reach this route at all.
 	app.Patch(base+"/:id", auth, artistOnly, handler.UpdateProfile)
+}
+
+// CreateStore godoc
+// @Summary      Add a second physical location to the artist's own salon
+// @Description  Creates a new store under the caller's salon and assigns
+// @Description  the caller to work there immediately. There is no separate
+// @Description  staff-assignment flow yet - the artist creating a location
+// @Description  is always the one working at it.
+// @Tags         artists
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        body body CreateStoreRequest true "New store"
+// @Success      201 {object} response.Body{data=Store}
+// @Failure      403 {object} response.ErrorBody "NO_SALON"
+// @Router       /artists/salon/stores [post]
+func (h *Handler) CreateStore(c *fiber.Ctx) error {
+	var req CreateStoreRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+	}
+
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+	userID := middleware.UserIDFromContext(c)
+
+	store, err := h.svc.CreateStore(c.Context(), userID, *salonID, req)
+	if err != nil {
+		return err
+	}
+
+	return response.Created(c, store)
 }
 
 // UpdateStore godoc

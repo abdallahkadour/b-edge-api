@@ -1,6 +1,6 @@
 # B-Edge — Documentation Index
 
-> 46 active documents (43 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> 48 active documents (45 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
 > Last updated: August 21, 2026 · Schema v19 · 12 backend domains live (11 route-bearing + audit) · CLAUDE-v6 verified directly against code (migrations, routes, git log), not against prior docs.
 
 ---
@@ -62,6 +62,7 @@
 
 | File | Description |
 |---|---|
+| `RELEASE-CHECKLIST.md` | **New, Aug 22, 2026.** The durable "what's remaining for first release" answer — three sections: what's done and verified live this session (with pointers into `E2E-TEST-PLAN.md`), what's deliberate design rather than a gap (payment model, one-salon-per-artist, VIP badge deferred, no scheduler), and what's genuinely unassessed by any engineering work so far (hosting, SSL, prod secrets, backups, monitoring, load testing, legal) — stated plainly as unassessed rather than implied fine. The one near-term blocker it flags: WhatsApp delivery, see `WHATSAPP-SETUP.md` under Infrastructure and Operations. |
 | `E2E-TEST-PLAN.md` *(in `b-edge-web/project-docs/`, not `b-edge-api`)* | **Aug 22, 2026 — closing session; all 7 suites live-executed, 12 real bugs found and fixed total.** UI-driven end-to-end test plan for a human tester — every real route in all 12 backend domains (~90 endpoints) mapped to the exact UI element that triggers it, 7 full Given/When/Then journeys, an exhaustive "click everything, try every boundary value" stress pass (the one deliberately-unexecuted piece, given its lower bug-yield against real journeys). Originally found 5 endpoints with no UI path at all; **all 5 are now closed**. Live execution across six passes found and fixed 12 real bugs: a registration flow bypassing admin review; a dead password-reset delivery path; a freeze/unfreeze endpoint 500ing on every call; an unreachable review "show" toggle; no cancel action anywhere in artist-dashboard; a product-photo-upload race; an over-restrictive Clients CRM filter; three related "nonsensical timing" bugs (approving/completing/no-showing a booking whose appointment time didn't make sense for that action); abandoned booking holds permanently blocking real availability (fixed with self-healing lazy expiry, no scheduler needed) — and, in the closing session, **the self-service onboarding flow never linking a new artist to their own store** (every self-onboarded artist was invisible and unbookable) and **`special_requests` never rendered anywhere in artist-dashboard** despite being fully present in the API (a customer's allergy/access note was invisible to the artist). The closing session also built a **permanent 14-account multi-persona test roster** (`user1`-`user10`, `mkup1`-`mkup4` — not cleaned up, meant to stay) spanning 5 regions including Bekaa and Akkar, verified the cross-region travel buffer and its interaction with cancellation, and proved the concurrency model (atomic guarded `UPDATE`, no `FOR UPDATE` needed) safe under 6 real concurrent approve-vs-cancel races. Two stale test-plan wording bugs also corrected. One deliberately-not-fixed gap noted: no ownership check on the artist review-list endpoint. Use this instead of writing test cases from scratch. |
 | `B-Edge-Test-Strategy-v1.docx` | Unit vs integration tests, coverage targets, CI config. |
 | `B-Edge-Targets-vs-Actual-Analysis-v1.md` | Verified gap analysis comparing PRD v7 / Booking Domain Spec / Technical Decisions against actual code as of Aug 7. Confirms exact-match wins (travel buffer, early-bird cutoffs), the deliberate deposit-confirm state-machine deviation, and the Phase-1 gaps that existed then. Two of those gaps (Waitlist, Product Store) have since closed — see `CLAUDE-v6.md` for what changed since this was written. Rescheduling, home-visit bookings, real discount system, SMS fallback, admin dashboard for ops (distinct from the new artist-approval admin), and Arabic RTL are still gaps as of Aug 15. |
@@ -77,6 +78,7 @@
 
 | File | Description |
 |---|---|
+| `WHATSAPP-SETUP.md` | **New, Aug 22, 2026.** Runbook for the one concrete release blocker found this session: the WhatsApp delivery pipeline (`internal/notification/worker.go`) is fully built and already running as a background worker, but has no real Twilio account behind it — every OTP/booking/review notification queues and silently never sends. Covers getting Twilio + WhatsApp Business API access (has its own external approval timeline via Meta), where the 3 required env vars come from, and how to verify delivery is actually working via the real `notifications` table columns (`status`/`attempts`/`error_message`), not just a 200 response. Companion to `RELEASE-CHECKLIST.md`. |
 | `B-Edge-DevOps-Infrastructure-v1.docx` | Infrastructure gaps + fixes, production checklist, disaster recovery scenarios, backup config, monitoring stack. |
 | `B-Edge-Command-Reference.md` | Every command used across the whole project, organized by purpose (auth, migrations, booking lifecycle, services, handles, discovery, reviews, calendar, client CRM, direct DB queries, frontend build/serve, deployment pattern, diagnostics). Supersedes the original repo-setup-only `commands.txt` upload and overlaps with/extends `B-Edge-Session-Commands.md` below. |
 | `B-Edge-WhatsApp-API-Templates-v1.docx` | Twilio vs Meta Cloud API comparison, Lebanon pricing, all 16 notification templates (EN + AR). Not yet checked whether the built messages match the specced wording. |
@@ -136,7 +138,11 @@
 
 **Running a QA pass or writing test cases?**
 1. `E2E-TEST-PLAN.md` (in `b-edge-web/project-docs/`) — the API→UI coverage map and the 7 end-to-end journeys are the starting point, not a fresh test plan
-2. Check its §4 "Known gaps" first — 5 confirmed endpoints have no UI trigger at all; don't rediscover these mid-test
+2. All 7 suites have been live-executed at least once as of Aug 22, 2026, and its original 5 "no UI trigger" gaps are all closed — check its top update notes for current status, not §4, before assuming something's untested
+
+**Checking what's left before first release?**
+1. `RELEASE-CHECKLIST.md` — done-and-verified vs. deliberate-not-a-gap vs. genuinely-unassessed, in one place
+2. If it's the WhatsApp item: `WHATSAPP-SETUP.md` has the exact runbook
 
 ---
 
@@ -147,12 +153,12 @@
 | Core Product | 4 |
 | Technical Design | 12 |
 | Frontend Design | 5 (style-guide.html added, lives in b-edge-web) |
-| Testing, Quality & Gap Analysis | 8 (E2E-TEST-PLAN.md added, lives in b-edge-web) |
-| Infrastructure & Ops | 6 |
+| Testing, Quality & Gap Analysis | 9 (RELEASE-CHECKLIST.md added; E2E-TEST-PLAN.md lives in b-edge-web) |
+| Infrastructure & Ops | 7 (WHATSAPP-SETUP.md added) |
 | Business & Market | 2 |
 | Competitor Intelligence | 6 (7th referenced, not on disk) |
 | Development Reference | 1 |
-| **TOTAL** | **46 (on disk) / 47 (referenced)** |
+| **TOTAL** | **48 (on disk) / 49 (referenced)** |
 
 ---
 

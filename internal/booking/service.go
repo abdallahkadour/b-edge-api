@@ -680,6 +680,13 @@ func (s *Service) ListEnrichedBookingsByArtist(ctx context.Context, artistID uui
 		return nil, false, apperror.BadRequest("INVALID_STATUS", "Unknown booking status filter")
 	}
 
+	// Lazily expire this artist's own stale pending requests before reading -
+	// same self-healing shape as GetAvailableSlots' ReleaseExpiredHolds call
+	// above, best-effort so a sweep failure never fails the list itself.
+	if _, err := s.repo.ExpireStalePendingBookings(ctx, artistID); err != nil {
+		s.log.Warn("list bookings by artist: expire stale pending failed, continuing", zap.Error(err))
+	}
+
 	rows, err := s.repo.ListEnrichedBookingsByArtist(ctx, artistID, status, cursor, limit)
 	if err != nil {
 		return nil, false, fmt.Errorf("list enriched bookings by artist: %w", err)

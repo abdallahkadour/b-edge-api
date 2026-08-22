@@ -201,6 +201,12 @@ type Repository interface {
 	// ExpireDeadlineBookings expires approved bookings whose deposit_deadline
 	// has passed without payment. Called by background job every minute.
 	ExpireDeadlineBookings(ctx context.Context) (int64, error)
+
+	// ExpireStalePendingBookings expires this artist's pending requests whose
+	// own start_time has already passed. Called lazily from the artist
+	// bookings-list read path, not a background job - see the doc comment on
+	// the implementation for why.
+	ExpireStalePendingBookings(ctx context.Context, artistID uuid.UUID) (int64, error)
 }
 
 // pgRepo is the PostgreSQL implementation of Repository.
@@ -1084,6 +1090,30 @@ func (r *pgRepo) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("expire deadline bookings: %w", err)
+	}
+	return result.RowsAffected(), nil
+}
+
+// ExpireStalePendingBookings expires pending requests whose own appointment
+// time has already passed - a request nobody acted on before its own
+// start_time is no longer approvable (ApproveBooking's own start_time guard
+// already rejects it), so leaving it sitting in 'pending' forever is stale
+// bookkeeping, not a live state. Scoped to a single artist and called
+// lazily from the read path that would otherwise show it (see
+// ListEnrichedBookingsByArtist), the same self-healing shape as
+// ReleaseExpiredHolds above.
+func (r *pgRepo) ExpireStalePendingBookings(ctx context.Context, artistID uuid.UUID) (int64, error) {
+	result, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		SET status = $1, updated_at = NOW()
+		WHERE artist_id = $2
+		AND status = $3
+		AND start_time < NOW()
+		AND deleted_at IS NULL`,
+		StatusExpired, artistID, StatusPending,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("expire stale pending bookings: %w", err)
 	}
 	return result.RowsAffected(), nil
 }

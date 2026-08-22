@@ -91,6 +91,10 @@ type mockRepo struct {
 	releaseExpiredHoldsCalled      bool
 	expireDeadlineBookingsCount    int64
 	expireDeadlineBookingsErr      error
+	expireStalePendingCount        int64
+	expireStalePendingErr          error
+	expireStalePendingCalled       bool
+	expireStalePendingArtistID     uuid.UUID
 	getArtistIDByUserIDArtistID    uuid.UUID
 	getArtistIDByUserIDErr         error
 	confirmDepositReceivedErr      error
@@ -222,6 +226,11 @@ func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) (int64, error) {
 }
 func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) (int64, error) {
 	return m.expireDeadlineBookingsCount, m.expireDeadlineBookingsErr
+}
+func (m *mockRepo) ExpireStalePendingBookings(_ context.Context, artistID uuid.UUID) (int64, error) {
+	m.expireStalePendingCalled = true
+	m.expireStalePendingArtistID = artistID
+	return m.expireStalePendingCount, m.expireStalePendingErr
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -1028,6 +1037,36 @@ func TestApproveBooking_StartTimeInPast_Conflict(t *testing.T) {
 	require.Error(t, err, "a booking whose start_time has already passed must not be approvable")
 }
 
+// TestApproveBooking_StartTimeSecondsInFuture_Allowed is the boundary tick
+// just before the guard triggers - a booking starting a few seconds from now
+// is still legitimately approvable. Pairs with the _InPast test above to
+// pin the exact boundary (StartTime.Before(time.Now())), not an approximate
+// one, since off-by-one boundary bugs are exactly what this class of guard
+// is prone to.
+func TestApproveBooking_StartTimeSecondsInFuture_Allowed(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusPending,
+		StartTime: time.Now().UTC().Add(5 * time.Second),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+		getServiceSvc:               defaultService(),
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.ApproveBooking(context.Background(), booking.ID, userID)
+
+	require.NoError(t, err, "a booking that hasn't started yet, even by a few seconds, must remain approvable")
+	assert.Equal(t, StatusApproved, result.Status)
+}
+
 // TestApproveBooking_SqueezedDepositWindow_UsesGraceFallback covers a request
 // that sat unapproved long enough that start_time minus the service's
 // deposit_deadline_hours has already passed by approval time (e.g. a 24h
@@ -1324,6 +1363,56 @@ func TestMarkNoShow_FutureAppointment_Conflict(t *testing.T) {
 	_, err := svc.MarkNoShow(context.Background(), booking.ID, userID)
 
 	require.Error(t, err, "a booking whose appointment hasn't started yet must not be markable as no-show")
+}
+
+// TestMarkNoShow_StartTimeSecondsAgo_Allowed and
+// TestCompleteBooking_StartTimeSecondsAgo_Allowed pin the exact boundary
+// (StartTime.After(time.Now())) from the other side: an appointment that
+// just started a few seconds ago is already actionable, not blocked.
+func TestMarkNoShow_StartTimeSecondsAgo_Allowed(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusConfirmed,
+		StartTime: time.Now().UTC().Add(-5 * time.Second),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.MarkNoShow(context.Background(), booking.ID, userID)
+
+	require.NoError(t, err, "an appointment that started moments ago must already be markable as no-show")
+	assert.Equal(t, StatusNoShow, result.Status)
+}
+
+func TestCompleteBooking_StartTimeSecondsAgo_Allowed(t *testing.T) {
+	userID := uuid.New()
+	artistID := uuid.New()
+
+	booking := &Booking{
+		ID:        uuid.New(),
+		ArtistID:  artistID,
+		Status:    StatusConfirmed,
+		StartTime: time.Now().UTC().Add(-5 * time.Second),
+	}
+
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: artistID,
+	}
+	svc := newTestService(repo)
+
+	result, err := svc.CompleteBooking(context.Background(), booking.ID, userID)
+
+	require.NoError(t, err, "an appointment that started moments ago must already be completable")
+	assert.Equal(t, StatusCompleted, result.Status)
 }
 
 func TestConfirmDepositReceived_WrongArtist_Forbidden(t *testing.T) {
@@ -1703,6 +1792,47 @@ func TestListEnrichedBookingsByArtist_ValidStatus(t *testing.T) {
 	assert.False(t, hasMore)
 	require.Len(t, res, 1)
 	assert.Equal(t, "Maya", res[0].CustomerName)
+}
+
+// TestListEnrichedBookingsByArtist_SweepsStalePendingForThisArtist guards the
+// lazy-expiry fix for stale pending requests: a pending booking whose own
+// start_time has passed can no longer be approved (ApproveBooking's own
+// guard), but was otherwise left sitting in 'pending' forever with nothing
+// to ever move it out of the artist's Pending tab. Every list read now
+// sweeps this specific artist's stale pending rows first, the same
+// self-healing shape already used for expired holds in GetAvailableSlots.
+func TestListEnrichedBookingsByArtist_SweepsStalePendingForThisArtist(t *testing.T) {
+	artistID := uuid.New()
+	repo := &mockRepo{listEnrichedByArtistBookings: nil}
+	svc := newTestService(repo)
+
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), artistID, uuid.New(), RoleAdmin, "", time.Now().UTC(), 20,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, repo.expireStalePendingCalled, "ListEnrichedBookingsByArtist must sweep stale pending bookings before reading")
+	assert.Equal(t, artistID, repo.expireStalePendingArtistID, "the sweep must be scoped to the artist actually being read, not a stray/empty ID")
+}
+
+// TestListEnrichedBookingsByArtist_StalePendingSweepFails_StillReturnsList -
+// the sweep is best-effort, mirroring GetAvailableSlots' equivalent
+// guarantee: a failure there must never fail the list request itself.
+func TestListEnrichedBookingsByArtist_StalePendingSweepFails_StillReturnsList(t *testing.T) {
+	repo := &mockRepo{
+		listEnrichedByArtistBookings: []*EnrichedBooking{
+			{Booking: Booking{ID: uuid.New(), Status: StatusPending}, CustomerName: "Maya"},
+		},
+		expireStalePendingErr: errors.New("boom"),
+	}
+	svc := newTestService(repo)
+
+	res, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), uuid.New(), RoleAdmin, "", time.Now().UTC(), 20,
+	)
+
+	require.NoError(t, err, "a sweep failure must not fail the list request")
+	require.Len(t, res, 1)
 }
 
 // TestListEnrichedBookingsByArtist_EmptyStatusAllowed - empty status ("all") is

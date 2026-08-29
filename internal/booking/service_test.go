@@ -14,6 +14,9 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
 
 // ── TestMain ──────────────────────────────────────────────────────────────────
@@ -237,8 +240,26 @@ func (m *mockRepo) ExpireStalePendingBookings(_ context.Context, artistID uuid.U
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
+// activeSubReader is a SubscriptionStatusReader that always reports the
+// target artist as active (PlanCode="comped" → DeriveStatus returns Active
+// regardless of dates). Used as the default in newTestService so all
+// existing booking tests continue to pass without modification.
+type activeSubReader struct{}
+
+func (activeSubReader) GetSubscriptionByArtistID(_ context.Context, artistID uuid.UUID) (*billing.Subscription, error) {
+	return &billing.Subscription{ArtistID: artistID, PlanCode: "comped"}, nil
+}
+
+// suspendedSubReader returns a past-due subscription so checkArtistAcceptsNewBookings blocks.
+type suspendedSubReader struct{}
+
+func (suspendedSubReader) GetSubscriptionByArtistID(_ context.Context, artistID uuid.UUID) (*billing.Subscription, error) {
+	past := time.Now().Add(-30 * 24 * time.Hour)
+	return &billing.Subscription{ArtistID: artistID, CurrentPeriodEnd: &past}, nil
+}
+
 func newTestService(repo Repository) *Service {
-	return NewService(repo)
+	return NewService(repo, activeSubReader{})
 }
 
 // defaultStore returns a standard open store for testing.
@@ -2044,4 +2065,44 @@ func TestGetEnrichedBookingByID_OtherArtist_Forbidden(t *testing.T) {
 	_, err := svc.GetEnrichedBookingByID(context.Background(), uuid.New(), uuid.New(), RoleArtist)
 
 	require.Error(t, err, "an artist must not view a booking on another artist's profile")
+}
+
+// ── Subscription gate tests ───────────────────────────────────────────────────
+
+// TestCreateBooking_SuspendedArtist_Blocked - artist whose subscription has
+// lapsed past the grace/past_due window must not receive new bookings.
+func TestCreateBooking_SuspendedArtist_Blocked(t *testing.T) {
+	svc := NewService(&mockRepo{}, suspendedSubReader{})
+
+	req := CreateBookingRequest{
+		ArtistID:  uuid.New().String(),
+		StoreID:   uuid.New().String(),
+		ServiceID: uuid.New().String(),
+		StartTime: time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+		Channel:   "customer_pwa",
+	}
+	_, err := svc.CreateBooking(context.Background(), req, uuid.New())
+
+	require.Error(t, err, "suspended artist must not receive new bookings")
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "ARTIST_NOT_ACCEPTING_BOOKINGS", appErr.Code)
+}
+
+// TestHoldGuestSlot_SuspendedArtist_Blocked - same gate on the guest path.
+func TestHoldGuestSlot_SuspendedArtist_Blocked(t *testing.T) {
+	svc := NewService(&mockRepo{}, suspendedSubReader{})
+
+	req := HoldGuestSlotRequest{
+		ArtistID:  uuid.New().String(),
+		StoreID:   uuid.New().String(),
+		ServiceID: uuid.New().String(),
+		StartTime: time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+	}
+	_, err := svc.HoldGuestSlot(context.Background(), req)
+
+	require.Error(t, err, "suspended artist must not receive new guest holds")
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "ARTIST_NOT_ACCEPTING_BOOKINGS", appErr.Code)
 }

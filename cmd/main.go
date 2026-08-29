@@ -19,6 +19,7 @@ import (
 	_ "time/tzdata"
 
 	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/booking"
 	"github.com/abdallahkadour/b-edge-api/internal/client"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
@@ -135,6 +136,7 @@ func main() {
 	media.RegisterRoutes(app, pool, logger)
 	onboarding.RegisterRoutes(app, pool, logger)
 	admin.RegisterRoutes(app, pool, logger)
+	billing.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

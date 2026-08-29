@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +19,20 @@ type Repository interface {
 	// Mirrors the same guarded-UPDATE pattern already used for booking
 	// and order status transitions elsewhere in this codebase.
 	UpdateStatus(ctx context.Context, artistID uuid.UUID, newStatus string) (rowsAffected int64, err error)
+
+	// ApproveWithTrialSubscription approves a pending artist AND creates
+	// their initial trial subscription in one transaction - see
+	// Service.Approve's doc comment for why this exists (before this,
+	// artists approved after Aug 29, 2026 got no subscriptions row at
+	// all, which billing.DeriveStatus silently reads as permanently
+	// past_due). Guarded exactly like UpdateStatus: the WHERE clause only
+	// matches a currently-pending artist, so this can never re-approve an
+	// already-decided artist or create a duplicate subscription for one.
+	// Reads the given plan's CURRENT price inside the same transaction and
+	// snapshots it onto the new subscription - matches Plan's own doc
+	// comment that a price edit must only affect signups from that point
+	// forward, and approval is exactly such a signup event.
+	ApproveWithTrialSubscription(ctx context.Context, artistID uuid.UUID, trialPlanCode string, trialEndsAt time.Time) (rowsAffected int64, err error)
 }
 
 type pgRepo struct {
@@ -77,4 +92,51 @@ func (r *pgRepo) UpdateStatus(ctx context.Context, artistID uuid.UUID, newStatus
 		return 0, fmt.Errorf("update artist status: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+func (r *pgRepo) ApproveWithTrialSubscription(ctx context.Context, artistID uuid.UUID, trialPlanCode string, trialEndsAt time.Time) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("approve with trial subscription: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE artists SET status = 'active', updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+		artistID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("approve with trial subscription: update status: %w", err)
+	}
+	rows := tag.RowsAffected()
+	if rows == 0 {
+		// Not currently pending - nothing to approve. Returning here
+		// leaves the transaction to the deferred Rollback; there is
+		// nothing else in it to undo.
+		return 0, nil
+	}
+
+	// Snapshot the plan's price AT THIS MOMENT, inside the same
+	// transaction as the approval - never joined later, matching every
+	// other subscription's monthly_price/currency (see Subscription's
+	// doc comment).
+	var monthlyPrice, currency string
+	if err := tx.QueryRow(ctx,
+		`SELECT monthly_price, currency FROM plans WHERE code = $1`, trialPlanCode,
+	).Scan(&monthlyPrice, &currency); err != nil {
+		return 0, fmt.Errorf("approve with trial subscription: read plan: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO subscriptions (artist_id, plan_code, seats, monthly_price, currency, trial_ends_at)
+		 VALUES ($1, $2, 1, $3, $4, $5)`,
+		artistID, trialPlanCode, monthlyPrice, currency, trialEndsAt,
+	); err != nil {
+		return 0, fmt.Errorf("approve with trial subscription: create subscription: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("approve with trial subscription: commit: %w", err)
+	}
+	return rows, nil
 }

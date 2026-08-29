@@ -9,9 +9,39 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
 )
 
 // (no time import needed here; the New-badge computation lives in the service.)
+
+// subscriptionVisibleCond is a SQL EXISTS clause mirroring
+// billing.DeriveStatus's Active/Grace/Trialing/Comped/Cancelled branches -
+// deliberately NOT PastDue or Suspended, which is exactly what this excludes
+// from Discover per B-Edge-Monetization-Implementation-Spec-v1.md section
+// 6.1's enforcement table. An artist with no subscriptions row at all (should
+// not happen after admin.Service.Approve creates one on approval, but this
+// stays correct even so) fails every branch below and is correctly hidden -
+// matching DeriveStatus's own CurrentPeriodEnd==nil => PastDue case.
+//
+// cancelled_at IS NOT NULL is treated as visible here, NOT hidden - the
+// spec's own enforcement table only names past_due/suspended as hidden and
+// says nothing about cancelled, so this does not invent scope beyond what
+// was actually specified. Revisit if that gap gets an explicit answer.
+//
+// Uses billing.GraceDays (not a locally duplicated literal) so this can
+// never silently drift from the exact boundary DeriveStatus itself uses for
+// Active/Grace vs PastDue.
+var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
+	SELECT 1 FROM subscriptions sub
+	WHERE sub.artist_id = a.id
+	AND (
+		sub.cancelled_at IS NOT NULL
+		OR sub.plan_code = 'comped'
+		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
+		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
+	)
+)`, billing.GraceDays)
 
 // Repository defines all database operations for the discovery domain.
 type Repository interface {
@@ -61,7 +91,7 @@ func NewRepository(db *pgxpool.Pool) Repository {
 func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error) {
 	// Build dynamic WHERE conditions. Arguments are positional and appended in
 	// lockstep with their placeholders.
-	conds := []string{"s.is_active = TRUE", "u.deleted_at IS NULL", "a.status = 'active'"}
+	conds := []string{"s.is_active = TRUE", "u.deleted_at IS NULL", "a.status = 'active'", subscriptionVisibleCond}
 	args := []any{}
 	n := 0
 
@@ -147,7 +177,8 @@ func (r *pgRepo) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Art
 		JOIN users u ON u.id = a.user_id
 		WHERE a.id = $1
 		AND a.status = 'active'
-		AND u.deleted_at IS NULL`,
+		AND u.deleted_at IS NULL
+		AND `+subscriptionVisibleCond,
 		artistID,
 	).Scan(
 		&p.ID, &p.Name, &p.Bio, &p.Instagram, &p.Category,

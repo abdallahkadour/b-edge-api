@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -23,8 +24,10 @@ type mockRepo struct {
 	updateStatusRows int64
 	updateStatusErr  error
 
-	lastArtistID uuid.UUID
-	lastStatus   string
+	lastArtistID    uuid.UUID
+	lastStatus      string
+	lastTrialPlan   string
+	lastTrialEndsAt time.Time
 }
 
 func (m *mockRepo) ListPending(_ context.Context) ([]*PendingArtist, error) {
@@ -34,6 +37,14 @@ func (m *mockRepo) ListPending(_ context.Context) ([]*PendingArtist, error) {
 func (m *mockRepo) UpdateStatus(_ context.Context, artistID uuid.UUID, newStatus string) (int64, error) {
 	m.lastArtistID = artistID
 	m.lastStatus = newStatus
+	return m.updateStatusRows, m.updateStatusErr
+}
+
+func (m *mockRepo) ApproveWithTrialSubscription(_ context.Context, artistID uuid.UUID, trialPlanCode string, trialEndsAt time.Time) (int64, error) {
+	m.lastArtistID = artistID
+	m.lastStatus = "active"
+	m.lastTrialPlan = trialPlanCode
+	m.lastTrialEndsAt = trialEndsAt
 	return m.updateStatusRows, m.updateStatusErr
 }
 
@@ -101,6 +112,27 @@ func TestApprove_Pending_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, artistID, repo.lastArtistID)
 	assert.Equal(t, "active", repo.lastStatus, "approve must transition the artist to active")
+}
+
+func TestApprove_Pending_CreatesTrialSubscription(t *testing.T) {
+	// Regression guard for the gap this closes: before
+	// ApproveWithTrialSubscription existed, Approve called plain
+	// UpdateStatus and no subscription was ever created, so every artist
+	// approved after Aug 29, 2026 read as permanently past_due under
+	// billing.DeriveStatus with no subscriptions row at all.
+	artistID := uuid.New()
+	repo := &mockRepo{updateStatusRows: 1}
+	svc := newTestService(repo, &mockAudit{})
+
+	before := time.Now()
+	err := svc.Approve(context.Background(), artistID, uuid.New(), "1.2.3.4")
+	after := time.Now()
+
+	require.NoError(t, err)
+	assert.Equal(t, artistID, repo.lastArtistID)
+	assert.NotEmpty(t, repo.lastTrialPlan, "approval must create a subscription with a real plan code")
+	assert.True(t, repo.lastTrialEndsAt.After(before), "trial end must be in the future")
+	assert.True(t, repo.lastTrialEndsAt.Before(after.AddDate(0, 0, 31)), "trial must not exceed ~30 days")
 }
 
 func TestApprove_NotPending_ReturnsConflict(t *testing.T) {

@@ -1,7 +1,9 @@
 # B-Edge — Documentation Index
 
-> 48 active documents (45 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
-> Last updated: August 21, 2026 · Schema v19 · 12 backend domains live (11 route-bearing + audit) · CLAUDE-v6 verified directly against code (migrations, routes, git log), not against prior docs.
+> 49 active documents (46 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> Last updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
+>
+> **Schema version corrected Aug 29, 2026:** this header said v19 through the Aug 21/22 passes, but `db/migrations/` actually ends at `022_order_delivery_location`. Migrations 020 (`product_stock_quantity`), 021 (`product_photo_gallery`), and 022 (`order_delivery_location`) all landed without a doc pass. Only the version number here is corrected — the three migrations' contents have **not** been cross-checked against `B-Edge-PRD-v7-Final.docx`, `B-Edge-ERD.html`, or the UI spec, so treat product/order docs as potentially behind by those three changes.
 
 ---
 
@@ -92,7 +94,8 @@
 
 | File | Description |
 |---|---|
-| `B-Edge-Pricing-Strategy-v1.docx` | Competitor pricing analysis, B-Edge pricing model. |
+| `B-Edge-Monetization-Implementation-Spec-v1.md` | **New, Aug 29, 2026 — backend fully built same day.** The full "what do we need to actually charge money" spec, frontend and backend. As of Aug 29 the **entire `internal/billing` backend is real and live**: migrations `023_plans`/`024_subscriptions`/`025_invoices`, every artist endpoint (my subscription, my invoices, submit payment) and every admin endpoint (overview, confirmation queue, confirm, void, edit subscription), plus the public `/pricing` page in artist-dashboard. Verified two ways: a live browser screenshot of `/pricing` (Playwright, all 4 tiers + Growth's "Recommended" badge + `comped` correctly hidden), and a full backend walkthrough against the real dev DB — a backdated test subscription taken through trialing-equivalent→invoice generation→submit→admin confirm→period extension→status back to active, plus the edge cases (resubmitting, cross-artist ownership, re-confirming an already-paid invoice) all correctly rejected. **What's NOT built: all three UI screens** (artist `/dashboard/billing`, admin Billing/Plans/Artists tabs) **and enforcement** (nothing reads subscription status yet — Discover doesn't hide anyone, nothing blocks writes). See the doc's top status banner and §12 for the exact built-vs-not split, phase by phase. Findings worth reading regardless of build status: (1) **`artists.status` must not be reused for billing** — migration 019 defines it as a terminal editorial/trust gate, so cycling it for payment state would make a late payer indistinguishable from a declined application and would let a payment silently bypass admin review; (2) **there is no marketing site** — `/pricing` was added to artist-dashboard rather than a new build target; (3) subscription status is **never stored, only derived from dates at read time** (`DeriveStatus`), matching this codebase's existing no-scheduler pattern — verified this actually works: a subscription's status flips from grace back to active immediately on payment confirmation with no job or delay involved; (4) `confirm` on an already-paid invoice returns a 409, not the silent no-op this doc originally described — a deliberate deviation, since a double-click is more likely than a real second payment and should be visible, not swallowed. §6.4 is the one to read before touching plan editing: grandfathering existing subscribers is the *default* and falls out of prices being snapshotted on `subscriptions`/`invoices` rather than joined from `plans`. |
+| `B-Edge-Pricing-Strategy-v1.docx` | Competitor pricing analysis, B-Edge pricing model. Predates the Aug 2026 subscription decision — the proposed tiers now live in `B-Edge-Monetization-Implementation-Spec-v1.md` §1 (still unfinalized in both). |
 | `B-Edge-Lebanese-Market-GTM-v1.docx` | Market sizing, GTM phases. |
 
 ---
@@ -144,6 +147,12 @@
 1. `RELEASE-CHECKLIST.md` — done-and-verified vs. deliberate-not-a-gap vs. genuinely-unassessed, in one place
 2. If it's the WhatsApp item: `WHATSAPP-SETUP.md` has the exact runbook
 
+**Working on monetization / charging artists?**
+1. `B-Edge-Monetization-Implementation-Spec-v1.md` — the whole thing in one place (data model, API, enforcement, screens, payment flow, legal, build order). Check its top status banner first: as of Aug 29, 2026 the **entire backend** (plans, subscriptions, invoices, every artist and admin endpoint) is live and verified against the real dev DB; only the UI screens and enforcement are not.
+2. Read its §3 before touching anything — reusing `artists.status` for billing state is the trap it exists to prevent
+3. §12 has the exact phase-by-phase built-vs-not split if you're picking up where this left off — the next real step is the UI screens (`/dashboard/billing`, admin Billing/Plans/Artists tabs), not more backend
+4. `WHATSAPP-SETUP.md` is a hard dependency for billing reminders, and Meta's approval has an external timeline — start it before the code is ready
+
 ---
 
 ## File statistics
@@ -155,10 +164,10 @@
 | Frontend Design | 5 (style-guide.html added, lives in b-edge-web) |
 | Testing, Quality & Gap Analysis | 9 (RELEASE-CHECKLIST.md added; E2E-TEST-PLAN.md lives in b-edge-web) |
 | Infrastructure & Ops | 7 (WHATSAPP-SETUP.md added) |
-| Business & Market | 2 |
+| Business & Market | 3 (B-Edge-Monetization-Implementation-Spec-v1.md added) |
 | Competitor Intelligence | 6 (7th referenced, not on disk) |
 | Development Reference | 1 |
-| **TOTAL** | **48 (on disk) / 49 (referenced)** |
+| **TOTAL** | **49 (on disk) / 50 (referenced)** |
 
 ---
 

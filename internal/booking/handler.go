@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
@@ -44,7 +45,10 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //	... (artist-only lifecycle routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
-	svc := NewService(repo, log)
+	// billing.NewRepository is used here purely as a SubscriptionStatusReader
+	// (see that interface's doc comment) - this domain's own Repository
+	// stays entirely separate from billing's.
+	svc := NewService(repo, billing.NewRepository(pool), log)
 	handler := NewHandler(svc, log)
 
 	// ── Public routes - no authentication required ────────────────────────────

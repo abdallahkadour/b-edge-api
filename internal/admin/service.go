@@ -3,12 +3,29 @@ package admin
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
+
+// defaultTrialPlanCode is the plan a newly-approved artist's trial
+// subscription starts on. 'starter' - the entry paid tier - matching how
+// competitor booking platforms (Fresha, Vagaro, Booksy) default a new
+// trial to their lowest paid tier rather than their top one.
+const defaultTrialPlanCode = "starter"
+
+// defaultTrialDays is the length of a new artist's trial, starting at
+// admin approval rather than at signup - see
+// B-Edge-Monetization-Implementation-Spec-v1.md section 7.3 ("Starting the
+// trial at approval is the recommendation") and section 8's worked example,
+// which uses 30 days throughout. Section 11 still lists exact trial length
+// as an open founder decision for launch - this is a provisional default
+// closing a real gap (artists approved with no subscription row at all
+// read as permanently past_due), not a final answer to that question.
+const defaultTrialDays = 30
 
 type service struct {
 	repo  Repository
@@ -31,8 +48,16 @@ func (s *service) ListPending(ctx context.Context) ([]*PendingArtist, error) {
 	return artists, nil
 }
 
+// Approve activates a pending artist AND creates their initial trial
+// subscription in the same transaction - see ApproveWithTrialSubscription's
+// doc comment on the Repository interface for why: without this, an artist
+// approved after Aug 29, 2026 got no subscriptions row at all, which
+// billing.DeriveStatus reads as permanently past_due with no way to
+// recover short of an admin manually creating one via the Artists tab.
 func (s *service) Approve(ctx context.Context, artistID, adminID uuid.UUID, ip string) error {
-	rows, err := s.repo.UpdateStatus(ctx, artistID, "active")
+	trialEndsAt := time.Now().AddDate(0, 0, defaultTrialDays)
+
+	rows, err := s.repo.ApproveWithTrialSubscription(ctx, artistID, defaultTrialPlanCode, trialEndsAt)
 	if err != nil {
 		return fmt.Errorf("approve artist: %w", err)
 	}

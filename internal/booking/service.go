@@ -14,8 +14,21 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
+
+// SubscriptionStatusReader is the one capability this domain needs from the
+// billing domain: given an artist, what is their subscription (if any)?
+// Defined here rather than depending on billing.Repository's entire
+// interface - this domain reads exactly one thing about billing and has no
+// business depending on billing's whole persistence surface (plans,
+// invoices, admin overview) just to satisfy a type. *billing.pgRepo (via
+// billing.NewRepository) satisfies this structurally with no changes on
+// that side.
+type SubscriptionStatusReader interface {
+	GetSubscriptionByArtistID(ctx context.Context, artistID uuid.UUID) (*billing.Subscription, error)
+}
 
 // cancellationWindow is how far before the appointment a customer
 // can cancel and receive a full refund.
@@ -51,27 +64,63 @@ var weekdays = map[time.Weekday]bool{
 // It knows nothing about HTTP - no fiber.Ctx, no status codes.
 // It knows nothing about SQL - all DB access goes through Repository.
 type Service struct {
-	repo     Repository
-	validate *validator.Validate
-	log      *zap.Logger
+	repo      Repository
+	subReader SubscriptionStatusReader
+	validate  *validator.Validate
+	log       *zap.Logger
 }
 
 // NewService creates a new booking Service.
+//
+// subReader is required, unlike the variadic logger below - it gates
+// whether a new booking is even allowed to be created (see
+// checkArtistAcceptsNewBookings), so a nil default here would mean a
+// wiring mistake silently disables Phase 4 enforcement rather than failing
+// loudly. See B-Edge-Monetization-Implementation-Spec-v1.md section 6.1.
 //
 // The logger is variadic rather than a required parameter purely to avoid
 // churning every existing call site (including every test's
 // newTestService) for what is an observability addition. Omitting it
 // yields a no-op logger, so behaviour is unchanged for callers that don't
 // pass one - but the production wiring in RegisterRoutes does.
-func NewService(repo Repository, log ...*zap.Logger) *Service {
+func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap.Logger) *Service {
 	l := zap.NewNop()
 	if len(log) > 0 && log[0] != nil {
 		l = log[0]
 	}
 	return &Service{
-		repo:     repo,
-		validate: validator.New(),
-		log:      l,
+		repo:      repo,
+		subReader: subReader,
+		validate:  validator.New(),
+		log:       l,
+	}
+}
+
+// checkArtistAcceptsNewBookings enforces
+// B-Edge-Monetization-Implementation-Spec-v1.md section 6.1's graduated
+// enforcement: an artist whose subscription has derived status past_due or
+// suspended stops receiving NEW bookings, while every existing booking is
+// still honored untouched (nothing here ever reads or touches the bookings
+// table). An artist with no subscriptions row at all is treated the same
+// as past_due, exactly matching billing.DeriveStatus's own
+// CurrentPeriodEnd==nil case - this should not happen for any artist
+// approved after Aug 29, 2026 (see admin.Service.Approve), but stays
+// correct even if it does.
+func (s *Service) checkArtistAcceptsNewBookings(ctx context.Context, artistID uuid.UUID) error {
+	sub, err := s.subReader.GetSubscriptionByArtistID(ctx, artistID)
+	if err != nil && !errors.Is(err, billing.ErrSubscriptionNotFound) {
+		return fmt.Errorf("check artist subscription status: %w", err)
+	}
+	if sub == nil {
+		sub = &billing.Subscription{}
+	}
+
+	switch billing.DeriveStatus(sub, time.Now()) {
+	case billing.StatusPastDue, billing.StatusSuspended:
+		return apperror.Forbidden("ARTIST_NOT_ACCEPTING_BOOKINGS",
+			"This artist isn't accepting new bookings right now")
+	default:
+		return nil
 	}
 }
 
@@ -325,6 +374,10 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, apperror.BadRequest("INVALID_SERVICE_ID", "Invalid service ID")
 	}
 
+	if err := s.checkArtistAcceptsNewBookings(ctx, artistID); err != nil {
+		return nil, err
+	}
+
 	startTime, err := time.Parse(time.RFC3339, req.StartTime)
 	if err != nil {
 		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-01T10:00:00Z")
@@ -413,6 +466,10 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 	serviceID, err := uuid.Parse(req.ServiceID)
 	if err != nil {
 		return nil, apperror.BadRequest("INVALID_SERVICE_ID", "Invalid service ID")
+	}
+
+	if err := s.checkArtistAcceptsNewBookings(ctx, artistID); err != nil {
+		return nil, err
 	}
 
 	startTime, err := time.Parse(time.RFC3339, req.StartTime)

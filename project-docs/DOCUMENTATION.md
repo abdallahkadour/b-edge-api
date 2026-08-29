@@ -1,7 +1,7 @@
 # B-Edge — Documentation Index
 
 > 49 active documents (46 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
-> Last updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
+> Last updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue. All three billing UI screens are now also built and committed: `/pricing` (public), `/dashboard/billing` (artist), and the admin Billing/Plans/Artists tabs — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
 >
 > **Schema version corrected Aug 29, 2026:** this header said v19 through the Aug 21/22 passes, but `db/migrations/` actually ends at `022_order_delivery_location`. Migrations 020 (`product_stock_quantity`), 021 (`product_photo_gallery`), and 022 (`order_delivery_location`) all landed without a doc pass. Only the version number here is corrected — the three migrations' contents have **not** been cross-checked against `B-Edge-PRD-v7-Final.docx`, `B-Edge-ERD.html`, or the UI spec, so treat product/order docs as potentially behind by those three changes.
 

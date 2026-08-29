@@ -1,22 +1,18 @@
 # B-Edge — Monetization Implementation Spec v1
 
-> **Status: the entire backend is live (Aug 29, 2026); only the artist and
-> admin UI screens remain.** Migrations 023–025 (`plans`, `subscriptions`,
-> `invoices`) are applied to the local dev DB, and the full `internal/billing`
-> domain is built and running: plan catalogue (public + admin), an artist's
-> own subscription and invoice history, submit-payment, and every admin
-> action (overview, confirmation queue, confirm, void, edit subscription).
-> Verified two ways: a live browser screenshot of the public `/pricing` page
-> at `http://localhost:4300/pricing`, and a full backend walkthrough against
-> the real dev DB exercising lazy invoice generation, derived status
-> (trialing→active→grace→past_due→suspended), submit→confirm, ownership
-> checks, and idempotency — all passed, including the subtle ones (no
-> duplicate invoice for an already-current period, re-confirming an
-> already-paid invoice correctly rejected). **What's NOT built: any of the
-> three UI screens** (`/dashboard/billing` for artists, the admin Billing/
-> Plans/Artists tabs), enforcement (nothing reads subscription status yet -
-> Discover doesn't hide past_due artists, nothing blocks writes), and
-> notifications. Section 12 tracks phase-by-phase status in detail.
+> **Status: backend and all three UI screens are live (Aug 29, 2026).** Migrations
+> 023–025 (`plans`, `subscriptions`, `invoices`) are applied to the local dev DB,
+> and the full `internal/billing` domain is built and running: plan catalogue
+> (public + admin), an artist's own subscription and invoice history,
+> submit-payment, and every admin action (overview, confirmation queue, confirm,
+> void, edit subscription). All three UI screens are also committed: `/pricing`
+> (public tier cards, FAQ, CTA), `/dashboard/billing` (artist — plan status, outstanding
+> invoice, "I've paid" submit modal, invoice history), and the admin Billing/Plans/Artists
+> tabs (confirmation queue, full artist roster, plan create/edit, per-artist
+> subscription edit/cancel/reinstate). **What's NOT built: enforcement** (nothing
+> reads subscription status yet — Discover doesn't hide past_due artists, nothing
+> blocks writes) and notifications (Phase 4/5). Section 12 tracks phase-by-phase
+> status in detail.
 >
 > Scope: everything needed to charge artists money and know who has paid —
 > backend data model, API, enforcement, the artist-facing screens, the admin
@@ -759,7 +755,7 @@ the original UI-before-backend assumption: every API and data model exists
 before a single artist-facing or admin screen does. That is a reordering, not
 a scope change — the screens below still need to be built.
 
-**Phase 1 — See the money. ✅ Backend fully built.**
+**Phase 1 — See the money. ✅ Fully built (backend + UI).**
 - Migrations 023/024/025 (`plans`, `subscriptions`, `invoices`), the full
   `internal/billing` domain, derived status (`DeriveStatus` - trialing→
   active→grace→past_due→suspended→cancelled, computed from dates, never
@@ -778,27 +774,27 @@ a scope change — the screens below still need to be built.
   (not just tested once): an unpaid subscription never accumulates more than
   one outstanding invoice, because `current_period_end` only advances on
   confirmed payment.
-- **Not built:** admin **Billing** tab UI, MRR/outstanding summary strip.
-  The data these would render (`GET /admin/billing/overview`) already works -
-  this is purely a missing screen, not missing logic.
+- ✅ **Built Aug 29:** admin Billing tab with confirmation queue + full artist
+  roster sorted by outstanding amount (MRR strip is the overview row data -
+  rendered as a per-row outstanding amount badge rather than a summary number).
 
-**Phase 2 — Let artists pay. ✅ Backend fully built, UI not started.**
+**Phase 2 — Let artists pay. ✅ Fully built (backend + UI).**
 - `GET /billing/subscription`, `GET /billing/invoices`,
   `POST /billing/invoices/:id/submit` (artist); `GET /admin/billing/invoices`,
   `POST .../confirm`, `POST .../void` (admin) - all live, all auth-checked,
   `confirm`/`void` audited via `internal/audit`.
-- **Not built:** `/dashboard/billing` (the artist-facing screen from §7.2)
-  and the admin confirmation-queue UI. Money can already be tracked
-  end-to-end via the API; nobody has a screen to do it from yet.
+- ✅ **Built Aug 29:** `/dashboard/billing` (artist - plan status, outstanding invoice,
+  "I've paid" submit modal, invoice history) and admin confirmation-queue UI
+  (Billing tab - confirm/void with required void reason).
 
-**Phase 3 — Sell and self-manage. Partially built.**
+**Phase 3 — Sell and self-manage. Backend + UI fully built; onboarding integration deferred.**
 - ✅ Admin plan create/edit (`POST`/`PATCH /admin/plans`) and
-  `PATCH /admin/billing/subscriptions/:id` (change plan/seats/comp/cancel) -
-  both delivered ahead of schedule in this session.
-- **Not built:** plan selection in onboarding, trial-starts-on-approval,
-  admin **Plans** and **Artists** tab UI, and `apply-to-existing` (§6.4's
-  audited bulk re-price) - the last one still correctly deferred, since
-  there are no real paying subscribers yet to apply it to.
+  `PATCH /admin/billing/subscriptions/:id` (change plan/seats/comp/cancel).
+- ✅ **Built Aug 29:** admin Plans tab (create/edit tiers, inline "affects new signups
+  only" note) and Artists tab (search, edit plan/seats/dates, cancel/reinstate).
+- **Not built:** plan selection during onboarding, trial-starts-on-approval,
+  and `apply-to-existing` (§6.4's audited bulk re-price) - the last one still
+  correctly deferred, no paying subscribers to re-price yet.
 
 **Phase 4 — Enforce. Not started.** The two `discovery/repository.go`
 filters, `RequireActiveSubscription()` middleware, status banners. Genuinely

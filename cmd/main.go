@@ -113,6 +113,19 @@ func main() {
 	// Register global middleware
 	middleware.Register(app, logger)
 
+	// Subscription enforcement: block mutating requests from Suspended artists
+	// (21+ days past period_end with no confirmed payment) on routes that affect
+	// new business activity. Booking lifecycle (/api/v1/bookings) is excluded
+	// because existing confirmed bookings are honored for suspended artists per
+	// the monetization spec section 6.1. Billing (/api/v1/billing) is excluded
+	// so a suspended artist can still submit a payment reference to unblock.
+	// Discovery enforcement (hiding past_due/suspended from Discover) is handled
+	// separately in discovery/repository.go via subscriptionVisibleCond.
+	suspendedGuard := middleware.RequireActiveSubscription(pool)
+	app.Use("/api/v1/artists", suspendedGuard)
+	app.Use("/api/v1/products", suspendedGuard)
+	app.Use("/api/v1/media", suspendedGuard)
+
 	// Health check - unauthenticated, used by Kubernetes probes and Uptime Kuma
 	app.Get("/api/v1/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{

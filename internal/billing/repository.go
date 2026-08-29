@@ -534,7 +534,7 @@ func scanInvoice(row rowScanner) (*Invoice, error) {
 }
 
 func scanInvoices(rows pgx.Rows) ([]*Invoice, error) {
-	var result []*Invoice
+	result := make([]*Invoice, 0)
 	for rows.Next() {
 		inv, err := scanInvoice(rows)
 		if err != nil {
@@ -587,7 +587,7 @@ func scanPlan(row rowScanner) (*Plan, error) {
 }
 
 func scanPlans(rows pgx.Rows) ([]*Plan, error) {
-	var result []*Plan
+	result := make([]*Plan, 0)
 	for rows.Next() {
 		p, err := scanPlan(rows)
 		if err != nil {

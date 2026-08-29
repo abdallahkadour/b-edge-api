@@ -11,7 +11,34 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/abdallahkadour/b-edge-api/internal/billing"
 )
+
+// subscriptionVisibleCond mirrors discovery.subscriptionVisibleCond exactly —
+// an artist is publicly reachable only when their subscription is in a visible
+// state (comped, trialing, active, or grace). past_due and suspended artists
+// are hidden from Discover AND unreachable via direct artist-domain lookups,
+// so there is no gap between search and direct-URL navigation.
+//
+// Uses billing.GraceDays (not a locally duplicated literal) so this can never
+// drift from DeriveStatus's own grace/past_due boundary, for the same reason
+// discovery.subscriptionVisibleCond does the same. If either the grace window
+// or this condition changes, both usages update from one constant.
+//
+// The alias used in the EXISTS subquery must match the alias used in whatever
+// outer query this is embedded in — both GetArtistByID and the handle/UUID
+// queries below alias artists as 'a', so this works without modification.
+var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
+	SELECT 1 FROM subscriptions sub
+	WHERE sub.artist_id = a.id
+	AND (
+		sub.cancelled_at IS NOT NULL
+		OR sub.plan_code = 'comped'
+		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
+		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
+	)
+)`, billing.GraceDays)
 
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
 const uniqueViolationCode = "23505"
@@ -151,7 +178,8 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 		JOIN users u ON u.id = a.user_id
 		WHERE a.id = $1
 		AND a.status = 'active'
-		AND u.deleted_at IS NULL`,
+		AND u.deleted_at IS NULL
+		AND `+subscriptionVisibleCond,
 		artistID,
 	).Scan(
 		&p.ID, &p.UserID, &p.SalonID, &p.Handle,
@@ -173,7 +201,8 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 func (r *pgRepo) GetArtistIDByHandle(ctx context.Context, handle string) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := r.db.QueryRow(ctx,
-		`SELECT id FROM artists WHERE handle = $1 AND status = 'active'`, handle,
+		`SELECT a.id FROM artists a WHERE a.handle = $1 AND a.status = 'active' AND `+subscriptionVisibleCond,
+		handle,
 	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -194,7 +223,8 @@ func (r *pgRepo) GetArtistIDByHandle(ctx context.Context, handle string) (uuid.U
 func (r *pgRepo) IsArtistActive(ctx context.Context, artistID uuid.UUID) (bool, error) {
 	var exists bool
 	err := r.db.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM artists WHERE id = $1 AND status = 'active')`, artistID,
+		`SELECT EXISTS(SELECT 1 FROM artists a WHERE a.id = $1 AND a.status = 'active' AND `+subscriptionVisibleCond+`)`,
+		artistID,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("is artist active: %w", err)

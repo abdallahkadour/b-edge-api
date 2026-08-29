@@ -86,7 +86,15 @@ fine:
   this list that's a genuine near-term blocker: without it, no OTP,
   booking confirmation, or review request actually reaches anyone.
 - Production hosting/deployment (where the app actually runs, how it gets
-  there — CI/CD, containers, whatever the real target is)
+  there — CI/CD, containers, whatever the real target is). **Critical
+  deploy-time note verified by live testing (Aug 29, 2026):** after any code
+  change the running binary must be replaced — pushing to git without
+  restarting the Go process leaves the old binary active. Found during E2E
+  billing testing: new middleware was compiled and committed but the running
+  process was a prior build; the middleware silently did nothing until the
+  server was restarted. A deploy checklist or Docker image rebuild+restart
+  (ArgoCD rolling update, `kubectl rollout restart deployment/b-edge-api`)
+  closes this completely — not a code problem, a process one.
 - Domain + SSL/TLS
 - Production secrets management (this session's `.env` is a local dev
   file; production JWT secrets, DB credentials, Cloudinary keys, and the

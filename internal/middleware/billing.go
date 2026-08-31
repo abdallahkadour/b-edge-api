@@ -123,21 +123,16 @@ func RequireActiveSubscription(reader SubscriptionReader) fiber.Handler {
 			return c.Next() // no subscription row yet — fail open
 		}
 
-		// One shared derivation with internal/billing — see
-		// internal/pkg/subscription. This previously re-implemented
-		// DeriveStatus inline against a hand-copied 21-day constant, with
-		// nothing enforcing that the two stayed in step.
-		//
-		// Only Suspended is blocked here. Every other state (comped,
-		// trialing, active, grace, past_due, cancelled) passes through.
-		// Note this is a NARROWER rule than the two other enforcement
-		// points in this codebase: booking blocks past_due as well, and
-		// discovery hides anyone past grace. Unifying those three is a
-		// pending decision, not an oversight.
+		// The ladder is declared once in internal/pkg/subscription and read
+		// here, rather than each enforcement point deciding for itself.
+		// This previously re-implemented DeriveStatus inline against a
+		// hand-copied 21-day constant, and separately decided that only
+		// Suspended should be blocked - a rule nothing stated and nothing
+		// tested.
 		status := subscription.Derive(
 			snap.PlanCode, snap.TrialEndsAt, snap.CurrentPeriodEnd, snap.CancelledAt, time.Now(),
 		)
-		if status != subscription.StatusSuspended {
+		if subscription.Enforce(status).CanModifyAccount {
 			return c.Next()
 		}
 

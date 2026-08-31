@@ -51,17 +51,19 @@ func TestDerive_WithinPaidPeriod_ReturnsActive(t *testing.T) {
 
 func TestDerive_WithinGraceWindow_ReturnsGrace(t *testing.T) {
 	assert.Equal(t, StatusGrace,
-		Derive("starter", nil, ptr(now.AddDate(0, 0, -3)), nil, now))
+		Derive("starter", nil, ptr(now.AddDate(0, 0, -(GraceDays-1))), nil, now))
 }
 
+// Expressed relative to the windows rather than as a fixed day count, so
+// retuning GraceDays/PastDueDays does not silently invalidate this case.
 func TestDerive_PastGraceWithinPastDue_ReturnsPastDue(t *testing.T) {
 	assert.Equal(t, StatusPastDue,
-		Derive("starter", nil, ptr(now.AddDate(0, 0, -10)), nil, now))
+		Derive("starter", nil, ptr(now.AddDate(0, 0, -(GraceDays+1))), nil, now))
 }
 
 func TestDerive_PastAllWindows_ReturnsSuspended(t *testing.T) {
 	assert.Equal(t, StatusSuspended,
-		Derive("starter", nil, ptr(now.AddDate(0, 0, -30)), nil, now))
+		Derive("starter", nil, ptr(now.AddDate(0, 0, -(PastDueDays+1))), nil, now))
 }
 
 // ── Exclusive-Before boundaries ───────────────────────────────────────────────
@@ -105,13 +107,13 @@ func TestDerive_CancelledComped_CancelledWins(t *testing.T) {
 // period on it.
 func TestDerive_CompedWithExpiredPeriod_StillActive(t *testing.T) {
 	assert.Equal(t, StatusActive,
-		Derive(CompedPlanCode, nil, ptr(now.AddDate(0, -6, 0)), nil, now),
+		Derive(CompedPlanCode, nil, ptr(now.AddDate(0, -12, 0)), nil, now),
 		"comped is checked before any period arithmetic")
 }
 
 func TestDerive_TrialingWithLapsedPeriod_TrialingWins(t *testing.T) {
 	assert.Equal(t, StatusTrialing,
-		Derive("starter", ptr(now.AddDate(0, 0, 3)), ptr(now.AddDate(0, 0, -30)), nil, now),
+		Derive("starter", ptr(now.AddDate(0, 0, 3)), ptr(now.AddDate(0, 0, -(PastDueDays+1))), nil, now),
 		"a live trial is checked before the period windows")
 }
 
@@ -140,4 +142,99 @@ func TestDerive_AcrossDSTTransition_UsesCalendarDays(t *testing.T) {
 
 	assert.Equal(t, StatusGrace, Derive("starter", nil, &periodEnd, nil, justInsideGrace))
 	assert.Equal(t, StatusPastDue, Derive("starter", nil, &periodEnd, nil, justPastGrace))
+}
+
+// ── Enforcement policy ────────────────────────────────────────────────────────
+//
+// The ladder these assert is the D2 decision (2026-08-31). Changing any of
+// them is changing what a missed payment costs an artist, so each one is
+// stated explicitly rather than derived in a loop.
+
+func TestEnforce_HealthyStates_FullAccess(t *testing.T) {
+	for _, s := range []Status{StatusTrialing, StatusActive, StatusGrace} {
+		e := Enforce(s)
+		assert.True(t, e.VisibleInDiscovery, "%s must stay on Discover", s)
+		assert.True(t, e.AcceptsNewBookings, "%s must keep taking bookings", s)
+		assert.True(t, e.CanModifyAccount, "%s must keep account access", s)
+	}
+}
+
+// past_due is the real pressure point: invisible and unable to take new
+// work, but still able to fix their listing and pay.
+func TestEnforce_PastDue_HiddenAndUnbookableButStillEditable(t *testing.T) {
+	e := Enforce(StatusPastDue)
+	assert.False(t, e.VisibleInDiscovery)
+	assert.False(t, e.AcceptsNewBookings)
+	assert.True(t, e.CanModifyAccount,
+		"an overdue artist must still be able to correct their listing and pay")
+}
+
+func TestEnforce_Suspended_FullyBlocked(t *testing.T) {
+	e := Enforce(StatusSuspended)
+	assert.False(t, e.VisibleInDiscovery)
+	assert.False(t, e.AcceptsNewBookings)
+	assert.False(t, e.CanModifyAccount)
+}
+
+// Cancelling is a deliberate exit, not a debt - so it is deliberately MORE
+// permissive than suspended on account access.
+func TestEnforce_Cancelled_KeepsAccountAccess(t *testing.T) {
+	e := Enforce(StatusCancelled)
+	assert.False(t, e.VisibleInDiscovery, "a cancelled artist is no longer sold")
+	assert.False(t, e.AcceptsNewBookings)
+	assert.True(t, e.CanModifyAccount,
+		"choosing to leave must not lock someone out of their own data")
+}
+
+// An unrecognised status must never silently grant visibility, but must not
+// lock an artist out either.
+func TestEnforce_UnknownStatus_FailsClosedOnSellingOpenOnSelfService(t *testing.T) {
+	e := Enforce(Status("something-new"))
+	assert.False(t, e.VisibleInDiscovery)
+	assert.False(t, e.AcceptsNewBookings)
+	assert.True(t, e.CanModifyAccount)
+}
+
+// Every state that is hidden must also be unbookable. A state that is
+// invisible but still takes bookings would be reachable only by direct
+// link - a silent, hard-to-notice inconsistency.
+func TestEnforce_HiddenImpliesUnbookable(t *testing.T) {
+	all := []Status{
+		StatusTrialing, StatusActive, StatusGrace,
+		StatusPastDue, StatusSuspended, StatusCancelled,
+	}
+	for _, s := range all {
+		e := Enforce(s)
+		if !e.VisibleInDiscovery {
+			assert.False(t, e.AcceptsNewBookings,
+				"%s is hidden, so it must not accept new bookings either", s)
+		}
+	}
+}
+
+// ── The D2 windows ────────────────────────────────────────────────────────────
+
+// Pins the decided timings. These are deliberately less aggressive than the
+// original 7/21 because B-Edge cannot auto-charge and sends no dunning
+// reminders yet - see the GraceDays doc comment for the full reasoning.
+func TestEnforcementWindows_MatchTheD2Decision(t *testing.T) {
+	assert.Equal(t, 21, GraceDays,
+		"an artist keeps full access for three weeks after a missed payment")
+	assert.Equal(t, 45, PastDueDays,
+		"the 30-day industry delinquency threshold sits inside past_due, not at its edge")
+}
+
+// A payment two weeks late must not cost the artist anything yet.
+func TestDerive_TwoWeeksLate_StillGrace(t *testing.T) {
+	s := Derive("starter", nil, ptr(now.AddDate(0, 0, -14)), nil, now)
+	assert.Equal(t, StatusGrace, s)
+	assert.True(t, Enforce(s).VisibleInDiscovery,
+		"a fortnight late, with no reminder ever sent, must not hide an artist")
+}
+
+// One month late: hidden and unbookable, but still able to recover.
+func TestDerive_OneMonthLate_PastDueButRecoverable(t *testing.T) {
+	s := Derive("starter", nil, ptr(now.AddDate(0, 0, -30)), nil, now)
+	assert.Equal(t, StatusPastDue, s)
+	assert.True(t, Enforce(s).CanModifyAccount)
 }

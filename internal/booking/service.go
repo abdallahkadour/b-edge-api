@@ -17,6 +17,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
 // toDayHours adapts this domain's BusinessHours row onto the shared
@@ -144,13 +145,15 @@ func (s *Service) checkArtistAcceptsNewBookings(ctx context.Context, artistID uu
 		sub = &billing.Subscription{}
 	}
 
-	switch billing.DeriveStatus(sub, time.Now()) {
-	case billing.StatusPastDue, billing.StatusSuspended:
+	// Reads the shared enforcement ladder rather than naming statuses here.
+	// Which states stop new bookings is a policy decision declared once in
+	// internal/pkg/subscription; this call site enforces it but does not
+	// get to define it.
+	if !subscription.Enforce(billing.DeriveStatus(sub, time.Now())).AcceptsNewBookings {
 		return apperror.Forbidden("ARTIST_NOT_ACCEPTING_BOOKINGS",
 			"This artist isn't accepting new bookings right now")
-	default:
-		return nil
 	}
+	return nil
 }
 
 // ── Slot availability ─────────────────────────────────────────────────────────

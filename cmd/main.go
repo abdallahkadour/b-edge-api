@@ -174,20 +174,7 @@ func main() {
 	// Supervised with a restart rather than a bare recover: a worker that
 	// panicked once and silently stopped would leave notifications queuing
 	// forever with nothing to indicate why.
-	notifWorker := notification.NewWorker(pool, logger)
-	go func() {
-		for {
-			if ctx.Err() != nil {
-				return // shutting down - don't restart
-			}
-			runWorkerOnce(ctx, notifWorker, logger)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(workerRestartDelay):
-			}
-		}
-	}()
+	superviseWorker(ctx, "notification", notification.NewWorker(pool, logger), logger)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -207,13 +194,53 @@ func main() {
 // doesn't spin the CPU, short enough that recovery is prompt.
 const workerRestartDelay = 5 * time.Second
 
-// runWorkerOnce runs the notification worker until it returns or panics,
-// converting a panic into a logged error instead of a process exit. Returns
-// normally in both cases so the supervising loop can decide what to do.
-func runWorkerOnce(ctx context.Context, w *notification.Worker, logger *zap.Logger) {
+// backgroundWorker is anything that runs until its context is cancelled.
+//
+// An interface rather than *notification.Worker so the supervision below is
+// shared: the notification worker is no longer the only long-running loop
+// this process will own (waitlist auto-fill is the next), and each one
+// needs the same panic-recover-and-restart guarantee. Duplicating that per
+// worker is how one of them eventually ends up without it.
+type backgroundWorker interface {
+	Start(ctx context.Context)
+}
+
+// superviseWorker runs w in its own goroutine, restarting it after a panic
+// until ctx is cancelled.
+//
+// The worker runs in its own goroutine, so it MUST recover its own panics.
+// Go terminates the entire process on an unrecovered panic in any
+// goroutine - Fiber's recover middleware only wraps HTTP request goroutines
+// and cannot reach this one. Without this, a single malformed row would
+// take the whole API down.
+//
+// Supervised with a restart rather than a bare recover: a worker that
+// panicked once and silently stopped would leave its queue growing forever
+// with nothing to indicate why.
+func superviseWorker(ctx context.Context, name string, w backgroundWorker, logger *zap.Logger) {
+	go func() {
+		for {
+			if ctx.Err() != nil {
+				return // shutting down - don't restart
+			}
+			runWorkerOnce(ctx, name, w, logger)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(workerRestartDelay):
+			}
+		}
+	}()
+}
+
+// runWorkerOnce runs a worker until it returns or panics, converting a
+// panic into a logged error instead of a process exit. Returns normally in
+// both cases so the supervising loop can decide what to do.
+func runWorkerOnce(ctx context.Context, name string, w backgroundWorker, logger *zap.Logger) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error("notification worker panicked - will restart",
+			logger.Error("background worker panicked - will restart",
+				zap.String("worker", name),
 				zap.Any("panic", r),
 				zap.ByteString("stack", debug.Stack()),
 			)

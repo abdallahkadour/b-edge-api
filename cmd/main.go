@@ -29,12 +29,13 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
 	review "github.com/abdallahkadour/b-edge-api/internal/review"
+	"github.com/abdallahkadour/b-edge-api/internal/share"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
-	"github.com/abdallahkadour/b-edge-api/internal/media"
 	"github.com/abdallahkadour/b-edge-api/internal/admin"
+	"github.com/abdallahkadour/b-edge-api/internal/media"
 	"github.com/abdallahkadour/b-edge-api/internal/onboarding"
 
 	"github.com/abdallahkadour/b-edge-api/internal/earnings"
@@ -144,6 +145,10 @@ func main() {
 	review.RegisterRoutes(app, pool, logger)
 	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)
+	// Crawlable link previews at /a/:handle - deliberately outside
+	// /api/v1, since this serves HTML to social crawlers rather than JSON
+	// to a client. See project-docs/B-Edge-Share-Previews-Decision-v1.md.
+	share.RegisterRoutes(app, pool, logger)
 	earnings.RegisterRoutes(app, pool, logger)
 	product.RegisterRoutes(app, pool, logger)
 	media.RegisterRoutes(app, pool, logger)
@@ -187,7 +192,6 @@ func main() {
 	}
 	logger.Info("Server stopped")
 }
-
 
 // workerRestartDelay is how long to wait before restarting the notification
 // worker after a panic - long enough that a consistently panicking worker

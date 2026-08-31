@@ -1,6 +1,6 @@
 # B-Edge — Documentation Index
 
-> 54 documents on disk (52 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> 55 documents on disk (53 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
 >
 > **Last updated: August 31, 2026 — four sprints of the feasibility plan shipped.** Schema is now **v28** (migrations 026 USD-only, 027 store location, 028 media↔service tags). Two new leaf packages under `internal/pkg/`, one new domain (`internal/share`), and `internal/billing` is no longer untested — it was the only substantial domain with zero coverage and now has 59 service-layer tests. See "What shipped Aug 30–31" below before assuming anything in an older doc is current.
 >
@@ -105,6 +105,7 @@ product decisions, both live in `internal/billing`:
 | `B-Edge-Test-Strategy-v1.docx` | Unit vs integration tests, coverage targets, CI config. |
 | `B-Edge-Targets-vs-Actual-Analysis-v1.md` | Verified gap analysis comparing PRD v7 / Booking Domain Spec / Technical Decisions against actual code as of Aug 7. Confirms exact-match wins (travel buffer, early-bird cutoffs), the deliberate deposit-confirm state-machine deviation, and the Phase-1 gaps that existed then. Two of those gaps (Waitlist, Product Store) have since closed — see `CLAUDE-v6.md` for what changed since this was written. Rescheduling, home-visit bookings, real discount system, SMS fallback, admin dashboard for ops (distinct from the new artist-approval admin), and Arabic RTL are still gaps as of Aug 15. |
 | `CLAUDE-v6.md` | **CURRENT context document.** Supersedes v5. Verified directly against code on Aug 15: schema v19, 12 domains, both frontend apps' real routes, design-system migration status (artist-dashboard complete, customer-pwa partial by deliberate design). Test coverage for admin/audit/notification closed same day; cart-persistence decision made (ship as-is, no server cart); a real backend routing bug that silently broke guest booking was found and fixed. Read this first in any new chat. |
+| `B-Edge-Security-Test-Plan-v1.md` | **New, Aug 31, 2026.** Threat matrix and executable penetration-test plan for the API border, auth boundaries and transaction workflows: 4 threat categories, 21 fraud/spam/abuse vectors, and **44 numbered test cases** (`AUTH-*`, `INJ-*`, `CLIENT-*`, `EDGE-*`, `FRAUD-*`, `SPAM-*`) with procedure, expected behaviour and remediation for each, plus severity SLAs and release-gate rules. **No test in it has been executed** — every row is a hypothesis for a human tester, and nothing in it asserts the system passes. Three things make it B-Edge-specific rather than a generic checklist: (1) **there is no edge layer** — no CDN, gateway or WAF, just one Go binary — so cache poisoning, request smuggling, TLS downgrade and subdomain takeover are marked ANTICIPATORY and would produce false passes if tested today; (2) **there is no payment gateway**, so card fraud and chargeback abuse are genuinely N/A and the real financial vector is fraud against the *human* who confirms an OMT transfer (`FRAUD-06`); (3) it names four things expected to fail before testing starts, so they are not double-counted as discoveries — chiefly that **no security-header middleware exists at all** (verified by grep: no CSP, HSTS, X-Frame-Options or nosniff anywhere). Flags `AUTH-08` as the single highest-value case: the dev OTP bypass (`326321`, accepts any phone) is separated from total customer-account compromise by one environment variable. Companion to the assessment below, which covers what is already hardened. |
 | `B-Edge-Security-UI-Enterprise-Assessment-v1.md` | **New, Aug 15/16, 2026.** Cross-cutting assessment: security posture (what's hardened, the two Fiber route-group bugs found+fixed, the dev-only OTP bypass and its production risk, what's not yet audited — CSRF, security headers, dependency scanning), UI/design status and fixes, and a preserved **enterprise-grade remediation roadmap** (data tables, bulk actions, toast system, masked time input, keyboard nav, audit-log UI, role/permission UI) explicitly scoped as "not needed now, revisit at the listed trigger conditions" rather than re-argued from scratch later. Companion to `CLAUDE-v6.md`, not a replacement. |
 | `CLAUDE-v5.md` | Superseded by v6. Accurate as of Aug 7 (9 domains, schema v13). Kept for the detailed root-cause writeups of bugs fixed in that session (booking ownership bug, timezone family, handle regression) which v6 doesn't repeat. |
 | `CLAUDE-v4.md` | Superseded. Accurate as of June 26 (6 domains, schema v8). |
@@ -179,6 +180,11 @@ product decisions, both live in `internal/billing`:
 2. The `GraceDays` doc comment carries the **D2 reasoning** for why the windows are 21/45 rather than the 7/21 they started at — chiefly that B-Edge cannot auto-charge, so card-dunning timings punish latency in our own manual collection loop, and that no dunning reminder is sent yet.
 3. **Revisit the numbers once Twilio is live.** 21 days is generous precisely because nobody is currently being told they owe anything.
 
+**Doing a security pass, or asked "is this safe"?**
+1. `B-Edge-Security-Test-Plan-v1.md` — the 44 test cases, ordered by yield. Start with the AUTH-* pass: that is where both prior security passes found real bugs, and four domains have shipped since the last one.
+2. `B-Edge-Security-UI-Enterprise-Assessment-v1.md` — what is already hardened, and the two bug *classes* (Fiber route-group leakage, cross-tenant IDOR) that recur with every new domain. Read §1.2 before testing; a regression is likelier than a novel finding.
+3. Note §3.6 of the test plan: four cases are **expected to fail** before anyone starts, chiefly the total absence of security headers. Fixing those first makes the pass more informative.
+
 **Benchmarking against competitors, or asked "why don't we have X"?**
 1. `B-Edge-Competitor-Analysis-v1.docx` — the feature inventory (Fresha/DINGG/Zenoti, with their strengths and their weaknesses vs B-Edge)
 2. `B-Edge-Feature-Feasibility-Assessment-v1.md` — what closing any given gap would actually cost, and which gaps are *not worth closing*. Read its §0 first: discounts genuinely don't exist, and the payments gaps are blocked by Lebanon's lack of card rails rather than by engineering capacity, so they belong outside the roadmap rather than at the bottom of it.
@@ -215,12 +221,12 @@ product decisions, both live in `internal/billing`:
 | Core Product | 4 |
 | Technical Design | 14 (B-Edge-Share-Previews-Decision-v1.md added) |
 | Frontend Design | 5 (style-guide.html lives in b-edge-web) |
-| Testing, Quality & Gap Analysis | 9 (E2E-TEST-PLAN.md lives in b-edge-web; the CLAUDE-v* history is one row covering 7 files) |
+| Testing, Quality & Gap Analysis | 10 (B-Edge-Security-Test-Plan-v1.md added; E2E-TEST-PLAN.md lives in b-edge-web; the CLAUDE-v* history is one row covering 7 files) |
 | Infrastructure & Ops | 7 |
 | Business & Market | 4 |
 | Competitor Intelligence | 7 |
 | Development Reference | 1 |
-| **TOTAL ON DISK** | **54 files — 52 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
+| **TOTAL ON DISK** | **55 files — 53 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
 
 *Category counts are by index row, not by file: the CLAUDE-v* row covers 7 historical
 files (`CLAUDE.md`, `CLAUDE (1).md`, `CLAUDE (5).md`, `CLAUDE-v3` through `-v6`), which

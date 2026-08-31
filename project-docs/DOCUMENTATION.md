@@ -1,7 +1,8 @@
 # B-Edge — Documentation Index
 
-> 49 active documents (46 in `b-edge-api/project-docs/` + 2 in `b-edge-web/project-docs/` + this index). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
-> Last updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue. All three billing UI screens are now also built and committed: `/pricing` (public), `/dashboard/billing` (artist), and the admin Billing/Plans/Artists tabs — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
+> 53 documents on disk (51 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`) — recounted directly from disk on Aug 30, 2026 after the previous figure was found to have drifted. Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> Last updated: August 30, 2026 · **Billing UI and enforcement both shipped** (`401db07`, `06e5e9b`, `0cd82f8`, `73c3cd8`) — the index previously said neither was built. `internal/billing` remains the only substantial domain with zero test coverage. New: `B-Edge-Feature-Feasibility-Assessment-v1.md` under Business and Market.
+> Previously updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue. All three billing UI screens are now also built and committed: `/pricing` (public), `/dashboard/billing` (artist), and the admin Billing/Plans/Artists tabs — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
 >
 > **Schema version corrected Aug 29, 2026:** this header said v19 through the Aug 21/22 passes, but `db/migrations/` actually ends at `022_order_delivery_location`. Migrations 020 (`product_stock_quantity`), 021 (`product_photo_gallery`), and 022 (`order_delivery_location`) all landed without a doc pass. Only the version number here is corrected — the three migrations' contents have **not** been cross-checked against `B-Edge-PRD-v7-Final.docx`, `B-Edge-ERD.html`, or the UI spec, so treat product/order docs as potentially behind by those three changes.
 
@@ -11,7 +12,7 @@
 
 1. **The PRD-vs-Roadmap phase conflict is resolved (Aug 15, 2026).** `B-Edge-Product-Roadmap.docx` tagged Product Store as Phase 3 and Waitlist as Phase 2; `B-Edge-PRD-v7-Final.docx` tagged both Phase 1. Both have since shipped in full (migrations 016 and 017, full domains and screens on both frontend apps), so PRD v7's assignment wins — `B-Edge-Product-Roadmap.docx` has been edited to reclassify both as MVP with a note explaining why. That doc otherwise still reflects the original 2025 plan (email/password auth, SendGrid, 7-week timeline) rather than the actual build — not touched in this pass. See `CLAUDE-v6.md`.
 2. **Two new backend features are now cross-checked against the specs (Aug 15, 2026).** Customer OTP auth (`internal/customerauth`) and self-service artist onboarding + admin approval gate (`internal/onboarding`, `internal/admin`) both shipped without a doc pass. `B-Edge-PRD-v7-Final.docx` §3.3 actually said the *opposite* of what got built ("no approval required") — corrected in place with an update note, not silently rewritten. `B-Edge-UI-Spec-v2.md`'s C-11/C-12 (customer Register/Login) specced the artist email/password API for customers — corrected to the real OTP flow. Neither doc was rewritten wholesale; both got targeted update notes plus inline corrections at the specific wrong sections. See `CLAUDE-v6.md`.
-3. **Two files referenced in earlier sessions still aren't on disk:** `B-Edge-Angular-PWA-Architecture-v1.docx` and `B-Edge-Competitor-Analysis-v1.docx`. Worth re-uploading if they still matter.
+3. ~~**Two files referenced in earlier sessions still aren't on disk.**~~ **Corrected Aug 30, 2026 — both are on disk and always were.** `B-Edge-Angular-PWA-Architecture-v1.docx` and `B-Edge-Competitor-Analysis-v1.docx` are both present, dated May 31, 2026. This note appears to have been carried forward across several passes without re-checking. `B-Edge-Competitor-Analysis-v1.docx` in particular is substantial and current enough to be worth reading — full Fresha/DINGG/Zenoti feature inventories with per-platform strengths and weaknesses — and is now indexed properly under Competitor Intelligence. Both are now listed in their categories below.
 4. **Cart persistence: decided.** Earlier chat context assumed server-side cart persistence was done; it isn't, and won't be. `CartStore` persists to `localStorage` with reconcile-against-fresh-data (survives refresh, same device). No `cart` table, no cross-device sync, checkout stays guest-style (name + phone, no login) — decided sufficient for launch on Aug 15 rather than gating Shop behind login or keying a cart off a bare phone number. See `CLAUDE-v6.md`.
 5. **The guest booking funnel was silently broken until Aug 15.** `product/handler.go` scoped an authenticated-orders route group to the bare `/api/v1` prefix instead of `/api/v1/orders`; Fiber applied that auth requirement to every route registered afterward in `cmd/main.go`, which 401'd the public artist-portfolio endpoint and caused customer-pwa's session-expiry interceptor to bounce every guest straight to `/login` mid-funnel. Found via an actual browser walkthrough, not code review — fixed, and a full guest booking was re-verified end-to-end against the live API. See `CLAUDE-v6.md`'s Critical environment facts.
 
@@ -44,7 +45,8 @@
 | `B-Edge-Diagrams.html` | Architecture diagrams, booking flow, notification flow, database ERD. |
 | `B-Edge-ERD.html` | Database entity-relationship diagram. Predates migrations 014–019 (customer OTP, waitlist, products/orders, artist status) — check against real schema before trusting it. |
 | `B-Edge-INFRA.docx` | Infrastructure design — EC2, Docker, Kubernetes, PostgreSQL, deployment topology. |
-| `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified. |
+| `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified. Read `B-Edge-Feature-Feasibility-Assessment-v1.md` §2.1/§2.3 before adding range durations, resource scheduling or split bookings to this algorithm — all four features modify the same calculation and adding them as incremental special cases is the documented failure mode. |
+| `B-Edge-Angular-PWA-Architecture-v1.docx` | **Was wrongly listed as missing until Aug 30, 2026 — it is on disk and always was** (dated May 31, 2026). Angular PWA architecture from the pre-build design phase. Not yet cross-checked against the two apps as actually built, so treat as design intent rather than current truth. |
 
 ---
 
@@ -94,7 +96,8 @@
 
 | File | Description |
 |---|---|
-| `B-Edge-Monetization-Implementation-Spec-v1.md` | **New, Aug 29, 2026 — backend fully built same day.** The full "what do we need to actually charge money" spec, frontend and backend. As of Aug 29 the **entire `internal/billing` backend is real and live**: migrations `023_plans`/`024_subscriptions`/`025_invoices`, every artist endpoint (my subscription, my invoices, submit payment) and every admin endpoint (overview, confirmation queue, confirm, void, edit subscription), plus the public `/pricing` page in artist-dashboard. Verified two ways: a live browser screenshot of `/pricing` (Playwright, all 4 tiers + Growth's "Recommended" badge + `comped` correctly hidden), and a full backend walkthrough against the real dev DB — a backdated test subscription taken through trialing-equivalent→invoice generation→submit→admin confirm→period extension→status back to active, plus the edge cases (resubmitting, cross-artist ownership, re-confirming an already-paid invoice) all correctly rejected. **What's NOT built: all three UI screens** (artist `/dashboard/billing`, admin Billing/Plans/Artists tabs) **and enforcement** (nothing reads subscription status yet — Discover doesn't hide anyone, nothing blocks writes). See the doc's top status banner and §12 for the exact built-vs-not split, phase by phase. Findings worth reading regardless of build status: (1) **`artists.status` must not be reused for billing** — migration 019 defines it as a terminal editorial/trust gate, so cycling it for payment state would make a late payer indistinguishable from a declined application and would let a payment silently bypass admin review; (2) **there is no marketing site** — `/pricing` was added to artist-dashboard rather than a new build target; (3) subscription status is **never stored, only derived from dates at read time** (`DeriveStatus`), matching this codebase's existing no-scheduler pattern — verified this actually works: a subscription's status flips from grace back to active immediately on payment confirmation with no job or delay involved; (4) `confirm` on an already-paid invoice returns a 409, not the silent no-op this doc originally described — a deliberate deviation, since a double-click is more likely than a real second payment and should be visible, not swallowed. §6.4 is the one to read before touching plan editing: grandfathering existing subscribers is the *default* and falls out of prices being snapshotted on `subscriptions`/`invoices` rather than joined from `plans`. |
+| `B-Edge-Monetization-Implementation-Spec-v1.md` | **New, Aug 29, 2026 — backend fully built same day.** The full "what do we need to actually charge money" spec, frontend and backend. As of Aug 29 the **entire `internal/billing` backend is real and live**: migrations `023_plans`/`024_subscriptions`/`025_invoices`, every artist endpoint (my subscription, my invoices, submit payment) and every admin endpoint (overview, confirmation queue, confirm, void, edit subscription), plus the public `/pricing` page in artist-dashboard. Verified two ways: a live browser screenshot of `/pricing` (Playwright, all 4 tiers + Growth's "Recommended" badge + `comped` correctly hidden), and a full backend walkthrough against the real dev DB — a backdated test subscription taken through trialing-equivalent→invoice generation→submit→admin confirm→period extension→status back to active, plus the edge cases (resubmitting, cross-artist ownership, re-confirming an already-paid invoice) all correctly rejected. ~~**What's NOT built: all three UI screens and enforcement.**~~ **Superseded Aug 30, 2026 — both now shipped.** The UI landed in `401db07` (public `/pricing`, artist `/dashboard/billing`, admin Billing/Plans/Artists tabs) and `06e5e9b` (subscription status banners in the dashboard shell); enforcement landed in `0cd82f8` (`RequireActiveSubscription` middleware wired onto the artist, product and media route groups), with two E2E-found bugs fixed in `73c3cd8` (artist-domain subscription filter, null invoice list). **One real gap remains: `internal/billing` is 1,889 lines with zero tests** — the only substantial domain in the codebase without any, and it violates this project's own "no feature is done without code + tests + swagger docs" rule in `CLAUDE-v6.md`. It was hand-verified against the dev DB, which is real, but doesn't survive a refactor. See the doc's top status banner and §12 for the exact built-vs-not split, phase by phase. Findings worth reading regardless of build status: (1) **`artists.status` must not be reused for billing** — migration 019 defines it as a terminal editorial/trust gate, so cycling it for payment state would make a late payer indistinguishable from a declined application and would let a payment silently bypass admin review; (2) **there is no marketing site** — `/pricing` was added to artist-dashboard rather than a new build target; (3) subscription status is **never stored, only derived from dates at read time** (`DeriveStatus`), matching this codebase's existing no-scheduler pattern — verified this actually works: a subscription's status flips from grace back to active immediately on payment confirmation with no job or delay involved; (4) `confirm` on an already-paid invoice returns a 409, not the silent no-op this doc originally described — a deliberate deviation, since a double-click is more likely than a real second payment and should be visible, not swallowed. §6.4 is the one to read before touching plan editing: grandfathering existing subscribers is the *default* and falls out of prices being snapshotted on `subscriptions`/`invoices` rather than joined from `plans`. |
+| `B-Edge-Feature-Feasibility-Assessment-v1.md` | **New, Aug 30, 2026.** The "what should we build next, and what will it cost *us*" view — a proposed feature set (storefront/discovery, provider ergonomics, advanced calendar, payments) benchmarked against Fresha/Booksy/GlossGenius/Vagaro/Phorest/Zenoti, with each item scored against the **real codebase** rather than as a greenfield build. Contains a full feasibility matrix, three deep dives, a three-phase blueprint, and a strategic-risk section. Two findings worth knowing before reading anything else: (1) **there is no discount capability of any kind** — confirmed against real code, nothing in `services.price`/`deposit`/`products`/`invoices` supports a reduction; (2) **multi-merchant booth-renter payouts are blocked by geography, not complexity** — Stripe Connect (which Fresha/GlossGenius/Vagaro all build split payments on) does not operate in Lebanon, which is *why* the OMT/Whish manual flow exists. Card-on-file and automated cancellation-fee capture die on the same constraint, so all three are scoped as a boundary rather than a backlog. Also argues *against* variable duration ranges (no benchmark competitor ships them, and the reason is a real scheduling failure) in favour of a committed-duration-plus-releasable-buffer model. Flags that a discount engine makes the still-open USD-vs-LBP currency question in `B-Edge-Monetization-Implementation-Spec-v1.md` §11 materially worse. |
 | `B-Edge-Pricing-Strategy-v1.docx` | Competitor pricing analysis, B-Edge pricing model. Predates the Aug 2026 subscription decision — the proposed tiers now live in `B-Edge-Monetization-Implementation-Spec-v1.md` §1 (still unfinalized in both). |
 | `B-Edge-Lebanese-Market-GTM-v1.docx` | Market sizing, GTM phases. |
 
@@ -110,7 +113,7 @@
 | `B-Edge-Competitor-Implementation-v1.docx` | Implementation regrets and limitations per competitor. |
 | `B-Edge-Competitor-Technical-v1.docx` | Confirmed schema/stack details per competitor. |
 | `B-Edge-Competitor-Failures-v1.docx` | 8 failed competitors and the failure patterns behind them. |
-| *(`B-Edge-Competitor-Analysis-v1.docx` referenced but not currently on disk — see note at top)* | |
+| `B-Edge-Competitor-Analysis-v1.docx` | **Was wrongly listed as missing until Aug 30, 2026 — it is on disk and always was.** The primary feature inventory: full Fresha, DINGG and Zenoti breakdowns (booking/scheduling, payments/POS, client management, marketing, operations/staff) with per-platform pricing, explicit "their strengths B-Edge must match or beat" and "weaknesses vs B-Edge" lists. The source for the competitor columns in `B-Edge-Feature-Feasibility-Assessment-v1.md`. Note its Arabic-support finding in particular: it scores DINGG as having *the best Arabic support of any competitor* and Fresha as partial — while B-Edge currently has **none** (verified Aug 30: zero Arabic strings, no i18n framework, one `dir="auto"` in the whole frontend), despite `B-Edge-Pricing-Strategy-v1.docx` positioning B-Edge as "the first Arabic-first platform for Lebanon." |
 
 ---
 
@@ -133,8 +136,14 @@
 2. Cross-check against `CLAUDE-v6.md`'s route lists and design-system migration status — many screens are already built, and some already use the shared `bedge-*` primitives
 
 **Deciding what to build next?**
-1. `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the still-open Phase 1 gaps
-2. `CLAUDE-v6.md`'s "Immediate next steps" — the Product Roadmap edit and the PRD/UI-Spec doc-sync pass are the most time-sensitive items right now
+1. `B-Edge-Feature-Feasibility-Assessment-v1.md` — start here. Every candidate feature scored against the real codebase, with a three-phase blueprint. Its Phase 1 is deliberately all things where the hard part already exists (Open/Closed status, maps routing, service templates, portfolio-tagged-to-services) — cheap wins that read as major features.
+2. `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the still-open Phase 1 gaps
+3. `CLAUDE-v6.md`'s "Immediate next steps" — the Product Roadmap edit and the PRD/UI-Spec doc-sync pass are the most time-sensitive items right now
+
+**Benchmarking against competitors, or asked "why don't we have X"?**
+1. `B-Edge-Competitor-Analysis-v1.docx` — the feature inventory (Fresha/DINGG/Zenoti, with their strengths and their weaknesses vs B-Edge)
+2. `B-Edge-Feature-Feasibility-Assessment-v1.md` — what closing any given gap would actually cost, and which gaps are *not worth closing*. Read its §0 first: discounts genuinely don't exist, and the payments gaps are blocked by Lebanon's lack of card rails rather than by engineering capacity, so they belong outside the roadmap rather than at the bottom of it.
+3. The six `B-Edge-Competitor-*.docx` files for deeper per-competitor detail (architecture, failures, flows, implementation regrets, documented bugs, technical stack)
 
 **Need a specific command?**
 1. `B-Edge-Command-Reference.md` — organized by purpose (auth, booking lifecycle, services, handles, discovery, reviews, calendar, DB queries, frontend build/serve, diagnostics), not raw chronological order
@@ -157,17 +166,29 @@
 
 ## File statistics
 
+> **Recounted from disk Aug 30, 2026.** The previous totals had drifted — they
+> assumed two files were missing that were actually present, and the per-category
+> figures no longer summed to the real file count. The numbers below are a direct
+> `ls` of both folders, not an increment of the last figure.
+
 | Category | Count |
 |---|---|
 | Core Product | 4 |
-| Technical Design | 12 |
-| Frontend Design | 5 (style-guide.html added, lives in b-edge-web) |
-| Testing, Quality & Gap Analysis | 9 (RELEASE-CHECKLIST.md added; E2E-TEST-PLAN.md lives in b-edge-web) |
-| Infrastructure & Ops | 7 (WHATSAPP-SETUP.md added) |
-| Business & Market | 3 (B-Edge-Monetization-Implementation-Spec-v1.md added) |
-| Competitor Intelligence | 6 (7th referenced, not on disk) |
+| Technical Design | 13 (B-Edge-Angular-PWA-Architecture-v1.docx was on disk but unlisted) |
+| Frontend Design | 5 (style-guide.html lives in b-edge-web) |
+| Testing, Quality & Gap Analysis | 9 (E2E-TEST-PLAN.md lives in b-edge-web; the CLAUDE-v* history is one row covering 7 files) |
+| Infrastructure & Ops | 7 |
+| Business & Market | 4 (B-Edge-Feature-Feasibility-Assessment-v1.md added) |
+| Competitor Intelligence | 7 (B-Edge-Competitor-Analysis-v1.docx was on disk all along, not missing) |
 | Development Reference | 1 |
-| **TOTAL** | **49 (on disk) / 50 (referenced)** |
+| **TOTAL ON DISK** | **53 files — 51 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
+
+*Category counts are by index row, not by file: the CLAUDE-v* row covers 7 historical
+files (`CLAUDE.md`, `CLAUDE (1).md`, `CLAUDE (5).md`, `CLAUDE-v3` through `-v6`), which
+is why the categories sum to fewer than 53. The index also refers to two of those by
+names that don't match disk — `CLAUDE__1_.md` / `CLAUDE__4_.md` vs. the real
+`CLAUDE (1).md` / `CLAUDE (5).md`. Left as-is rather than renamed, since they're
+superseded historical files, but worth knowing if you go looking for them.*
 
 ---
 

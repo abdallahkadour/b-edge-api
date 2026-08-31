@@ -79,9 +79,17 @@ func (s *Service) CreatePlan(ctx context.Context, req CreatePlanRequest) (*Plan,
 		}
 	}
 
+	// USD only - decided 2026-08-30 and enforced at the database by
+	// migration 026's CHECK constraints. Rejecting here as well turns a
+	// non-USD plan into a 400 with a usable message rather than a
+	// constraint violation surfacing as a 500.
 	currency := strings.ToUpper(req.Currency)
 	if currency == "" {
-		currency = "USD"
+		currency = CurrencyUSD
+	}
+	if currency != CurrencyUSD {
+		return nil, apperror.BadRequest("UNSUPPORTED_CURRENCY",
+			"Only USD is supported. See migration 026 for why this is fixed rather than configurable.")
 	}
 
 	includedSeats := req.IncludedSeats

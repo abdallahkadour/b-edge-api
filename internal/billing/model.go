@@ -17,6 +17,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
 // ── Sentinel errors ───────────────────────────────────────────────────────────
@@ -105,72 +107,57 @@ type UpdatePlanRequest struct {
 
 // Status is an artist's derived subscription lifecycle state.
 //
-// Deliberately never stored - computed at read time by DeriveStatus from
-// the subscription's date columns alone. B-Edge has no background
-// scheduler by design elsewhere in this codebase (see
-// RELEASE-CHECKLIST.md's note on ExpireDeadlineBookings and friends being
-// called lazily from read paths); a stored status column here would be the
-// first thing that actually needed one. This way a subscription that
-// nobody has looked at in months is still exactly as correct the next time
-// someone reads it as it would be if a cron had been ticking the whole time.
-type Status string
+// A type ALIAS for subscription.Status, not a distinct type: the state
+// machine itself lives in internal/pkg/subscription so that
+// internal/middleware can share one implementation with this package
+// without closing an import cycle (billing/handler.go imports middleware
+// for RequireAuth). The alias keeps every existing billing.Status* call
+// site working unchanged.
+type Status = subscription.Status
 
-// The six derived subscription states, in the order DeriveStatus checks them.
+// The six derived subscription states, re-exported from the leaf package
+// that defines them so callers of this domain need not know it exists.
 const (
-	StatusTrialing  Status = "trialing"
-	StatusActive    Status = "active"
-	StatusGrace     Status = "grace"
-	StatusPastDue   Status = "past_due"
-	StatusSuspended Status = "suspended"
-	StatusCancelled Status = "cancelled"
+	StatusTrialing  = subscription.StatusTrialing
+	StatusActive    = subscription.StatusActive
+	StatusGrace     = subscription.StatusGrace
+	StatusPastDue   = subscription.StatusPastDue
+	StatusSuspended = subscription.StatusSuspended
+	StatusCancelled = subscription.StatusCancelled
 )
 
-// GraceDays and pastDueDays are the graduated enforcement windows past
-// current_period_end. See
-// B-Edge-Monetization-Implementation-Spec-v1.md section 6.1 for why this is
-// graduated (hide from Discover before locking the dashboard) rather than
-// an immediate hard cutoff - an overdue artist may still have confirmed
-// bookings with customers who already paid a real deposit.
+// CurrencyUSD is the only currency B-Edge transacts in.
 //
-// GraceDays is exported: discovery.Repository's Discover-hiding filter
-// (spec section 6.1's "precisely two lines") needs the exact same boundary
-// this package uses for Active/Grace vs PastDue, expressed in SQL rather
-// than Go - one constant, interpolated into both places, so the two can
-// never drift apart. pastDueDays has no such second consumer (a discovery
-// visibility check only needs "still within grace or better", never "past_due
-// specifically, not suspended"), so it stays unexported.
+// Decided 2026-08-30, closing the question
+// B-Edge-Monetization-Implementation-Spec-v1.md section 11 had left open.
+// Enforced at the database by migration 026's CHECK constraints on
+// plans/subscriptions/invoices, and in the service layer so a bad value is
+// a 400 rather than a constraint violation. The currency columns remain in
+// the schema deliberately - they cost nothing and preserve the option.
+const CurrencyUSD = "USD"
+
+// GraceDays and PastDueDays are the graduated enforcement windows past
+// current_period_end, re-exported from internal/pkg/subscription.
+//
+// GraceDays is interpolated into SQL by discovery.Repository's and
+// artist.Repository's visibility filters; PastDueDays is read by
+// middleware.RequireActiveSubscription. Both previously risked drift -
+// middleware in particular hand-copied the 21 with a comment asking
+// whoever changed one to remember the other. They now come from one
+// declaration.
 const (
-	GraceDays   = 7
-	pastDueDays = 21
+	GraceDays   = subscription.GraceDays
+	PastDueDays = subscription.PastDueDays
 )
 
 // DeriveStatus computes an artist's current subscription state from dates
 // alone - see the Status doc comment for why this is never stored.
+//
+// A thin adapter over subscription.Derive, which works over primitives so
+// that middleware can call it with columns scanned straight from SQL
+// without constructing a Subscription.
 func DeriveStatus(s *Subscription, now time.Time) Status {
-	switch {
-	case s.CancelledAt != nil:
-		return StatusCancelled
-	case s.PlanCode == "comped":
-		// Comped accounts (Rania, internal test accounts) are always
-		// active regardless of trial/period dates, which are meaningless
-		// for a plan that was never meant to be billed.
-		return StatusActive
-	case s.TrialEndsAt != nil && now.Before(*s.TrialEndsAt):
-		return StatusTrialing
-	case s.CurrentPeriodEnd == nil:
-		// Trial ended (or there never was one) and no period has ever been
-		// paid for - same enforcement posture as a lapsed payer, not a
-		// distinct state.
-		return StatusPastDue
-	case now.Before(*s.CurrentPeriodEnd):
-		return StatusActive
-	case now.Before(s.CurrentPeriodEnd.AddDate(0, 0, GraceDays)):
-		return StatusGrace
-	case now.Before(s.CurrentPeriodEnd.AddDate(0, 0, pastDueDays)):
-		return StatusPastDue
-	default:
-		return StatusSuspended
-	}
+	return subscription.Derive(s.PlanCode, s.TrialEndsAt, s.CurrentPeriodEnd, s.CancelledAt, now)
 }
 
 // ── Subscription ──────────────────────────────────────────────────────────────

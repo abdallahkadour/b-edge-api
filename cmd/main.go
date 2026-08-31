@@ -121,7 +121,7 @@ func main() {
 	// so a suspended artist can still submit a payment reference to unblock.
 	// Discovery enforcement (hiding past_due/suspended from Discover) is handled
 	// separately in discovery/repository.go via subscriptionVisibleCond.
-	suspendedGuard := middleware.RequireActiveSubscription(pool)
+	suspendedGuard := middleware.RequireActiveSubscription(middleware.NewPoolSubscriptionReader(pool))
 	app.Use("/api/v1/artists", suspendedGuard)
 	app.Use("/api/v1/products", suspendedGuard)
 	app.Use("/api/v1/media", suspendedGuard)

@@ -1,6 +1,6 @@
 # B-Edge — Documentation Index
 
-> 55 documents on disk (53 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+> 56 documents on disk (54 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
 >
 > **Last updated: August 31, 2026 — four sprints of the feasibility plan shipped.** Schema is now **v28** (migrations 026 USD-only, 027 store location, 028 media↔service tags). Two new leaf packages under `internal/pkg/`, one new domain (`internal/share`), and `internal/billing` is no longer untested — it was the only substantial domain with zero coverage and now has 59 service-layer tests. See "What shipped Aug 30–31" below before assuming anything in an older doc is current.
 >
@@ -78,6 +78,7 @@ product decisions, both live in `internal/billing`:
 | `B-Edge-Diagrams.html` | Architecture diagrams, booking flow, notification flow, database ERD. |
 | `B-Edge-ERD.html` | Database entity-relationship diagram. Predates migrations 014–019 (customer OTP, waitlist, products/orders, artist status) — check against real schema before trusting it. |
 | `B-Edge-INFRA.docx` | Infrastructure design — EC2, Docker, Kubernetes, PostgreSQL, deployment topology. |
+| `B-Edge-Bulk-Schedule-Operations-Spec-v1.md` | **New, Aug 31, 2026. Design only — not implemented.** Rania's two requested bulk actions: shift every booking on a day by N minutes, and cancel a whole day, each notifying customers over WhatsApp. **Read §1 before writing any multi-booking write, in this feature or another.** The `bookings` GIST exclusion constraint is not deferrable, and exclusion constraints are enforced row-by-row mid-statement — so shifting booking A into booking B's *old* slot fails with `23P01` even though the committed state would be valid. Verified against the real database, not reasoned about: a two-booking day fails on the obvious single `UPDATE`, and every ordering fails the same way. The fix (`DEFERRABLE INITIALLY IMMEDIATE` + `SET CONSTRAINTS ... DEFERRED` for that transaction only) is also verified, including that a genuine overlap is still caught at commit — the guarantee survives, only its timing moves. Also argues **against** the message queue the brief assumed: `notifications` already is a durable queue drained by a supervised worker, and enqueuing in the same transaction as the booking write avoids a dual-write problem that Redis or SQS would introduce. §4 covers edge cases a generic design misses, notably cross-store travel buffers. §8 lists six decisions needing Rania or the founder — the sharpest being what bulk cancellation does about **already-paid deposits**, since refunds are out-of-band bank transfers and the platform tracks no refund liability. |
 | `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified. Read `B-Edge-Feature-Feasibility-Assessment-v1.md` §2.1/§2.3 before adding range durations, resource scheduling or split bookings to this algorithm — all four features modify the same calculation and adding them as incremental special cases is the documented failure mode. |
 | `B-Edge-Angular-PWA-Architecture-v1.docx` | **Was wrongly listed as missing until Aug 30, 2026 — it is on disk and always was** (dated May 31, 2026). Angular PWA architecture from the pre-build design phase. Not yet cross-checked against the two apps as actually built, so treat as design intent rather than current truth. |
 | `B-Edge-Share-Previews-Decision-v1.md` | **New, Aug 31, 2026.** Why shared artist links are rendered by a Go endpoint (`GET /a/:handle`, `internal/share`) rather than by Angular SSR. Records the verified problem — both PWAs are client-rendered, crawlers do not run JavaScript, and `customer-pwa/src/index.html` contained exactly three meta tags with **no `og:` or `twitter:` tag at all**, so every link an artist shared previewed as a bare URL on the channel that is B-Edge's primary distribution. Compares Angular SSR (a workspace-wide commitment with permanent build/deploy cost, adopted to serve two URL shapes to machines wanting four meta tags), a Go pre-render endpoint (chosen), and deploy-time static HTML (rejected: profiles change and a snapshot would serve stale previews with no way to invalidate). Also records the two conditions that should reopen the decision, and one thing it explicitly does not cover — **the reverse proxy must route `/a/*` to the API rather than the static bundle, which is where this silently fails in production while working perfectly on localhost.** |
@@ -180,6 +181,10 @@ product decisions, both live in `internal/billing`:
 2. The `GraceDays` doc comment carries the **D2 reasoning** for why the windows are 21/45 rather than the 7/21 they started at — chiefly that B-Edge cannot auto-charge, so card-dunning timings punish latency in our own manual collection loop, and that no dunning reminder is sent yet.
 3. **Revisit the numbers once Twilio is live.** 21 days is generous precisely because nobody is currently being told they owe anything.
 
+**Writing anything that updates MORE THAN ONE booking at once?**
+1. `B-Edge-Bulk-Schedule-Operations-Spec-v1.md` §1 — non-negotiable reading. The GIST exclusion constraint is enforced per row, so any multi-booking time change fails with `23P01` mid-statement even when the final state is valid. This is not theoretical; it is reproduced against the real schema in that section.
+2. The fix is a deferrable constraint scoped to the one transaction that opts in — existing single-booking writes keep failing fast exactly as today.
+
 **Doing a security pass, or asked "is this safe"?**
 1. `B-Edge-Security-Test-Plan-v1.md` — the 44 test cases, ordered by yield. Start with the AUTH-* pass: that is where both prior security passes found real bugs, and four domains have shipped since the last one.
 2. `B-Edge-Security-UI-Enterprise-Assessment-v1.md` — what is already hardened, and the two bug *classes* (Fiber route-group leakage, cross-tenant IDOR) that recur with every new domain. Read §1.2 before testing; a regression is likelier than a novel finding.
@@ -219,14 +224,14 @@ product decisions, both live in `internal/billing`:
 | Category | Count |
 |---|---|
 | Core Product | 4 |
-| Technical Design | 14 (B-Edge-Share-Previews-Decision-v1.md added) |
+| Technical Design | 15 (B-Edge-Share-Previews-Decision-v1.md, B-Edge-Bulk-Schedule-Operations-Spec-v1.md added) |
 | Frontend Design | 5 (style-guide.html lives in b-edge-web) |
 | Testing, Quality & Gap Analysis | 10 (B-Edge-Security-Test-Plan-v1.md added; E2E-TEST-PLAN.md lives in b-edge-web; the CLAUDE-v* history is one row covering 7 files) |
 | Infrastructure & Ops | 7 |
 | Business & Market | 4 |
 | Competitor Intelligence | 7 |
 | Development Reference | 1 |
-| **TOTAL ON DISK** | **55 files — 53 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
+| **TOTAL ON DISK** | **56 files — 54 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
 
 *Category counts are by index row, not by file: the CLAUDE-v* row covers 7 historical
 files (`CLAUDE.md`, `CLAUDE (1).md`, `CLAUDE (5).md`, `CLAUDE-v3` through `-v6`), which

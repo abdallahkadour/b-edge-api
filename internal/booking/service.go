@@ -1536,3 +1536,116 @@ func validationMessage(fe validator.FieldError) string {
 		return fe.Field() + " is invalid"
 	}
 }
+
+// ── Bulk schedule operations: preview ────────────────────────────────────────
+
+// PreviewShiftDay is a dry run of shifting every movable booking at one
+// store on one day.
+//
+// Writes nothing. It exists so an artist can see the consequences before
+// committing - which matters more here than for most actions, because the
+// write version notifies every affected customer over WhatsApp and there is
+// no unsending that.
+//
+// The conflicts it surfaces (past closing, travel buffers) are exactly the
+// ones that would otherwise be discovered as a 409 after the artist had
+// already decided to go ahead.
+func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req ShiftPreviewRequest) (*ShiftPreviewResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	// Never trust a client-supplied artist ID - RequireRole("artist") proves
+	// the caller is AN artist, never that they are THIS artist.
+	artistID, err := s.repo.GetArtistIDByUserID(ctx, userID)
+	if err != nil {
+		return nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist profile not found")
+	}
+
+	storeID, err := uuid.Parse(req.StoreID)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
+	}
+	date, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
+	}
+
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+	}
+
+	// Resolve the trading window through the shared opening-hours package,
+	// so this agrees with slot generation and the public open/closed badge
+	// rather than re-deriving the same rules a third time.
+	exception, err := s.repo.GetBusinessHoursException(ctx, storeID, date)
+	if err != nil {
+		return nil, fmt.Errorf("preview shift day: get exception: %w", err)
+	}
+	bh, err := s.repo.GetBusinessHours(ctx, storeID, int(date.Weekday()))
+	if err != nil {
+		return nil, fmt.Errorf("preview shift day: get hours: %w", err)
+	}
+	window, storeOpen, err := openinghours.Resolve(store.Timezone, date, toDayHours(bh), toException(exception))
+	if err != nil {
+		return nil, fmt.Errorf("preview shift day: resolve hours: %w", err)
+	}
+
+	// The store's own calendar day, not the server's.
+	loc := openinghours.Location(store.Timezone)
+	dayStart := openinghours.LocalDate(date, loc)
+	dayEnd := dayStart.AddDate(0, 0, 1)
+
+	// One query for the whole day across every store: the bookings to move,
+	// the cross-store bookings that constrain them, and the customer and
+	// service names for the response. Fetching these separately would be an
+	// N+1 per booking just to render a preview.
+	all, err := s.repo.ListEnrichedBookingsForDay(ctx, artistID, dayStart, dayEnd)
+	if err != nil {
+		return nil, fmt.Errorf("preview shift day: list bookings: %w", err)
+	}
+
+	var sameStore, crossStore []*EnrichedBooking
+	for _, b := range all {
+		if b.StoreID == storeID {
+			sameStore = append(sameStore, b)
+		} else {
+			crossStore = append(crossStore, b)
+		}
+	}
+
+	// Buffer lookups are per store pair and hit the database, so they are
+	// resolved once here rather than from inside the pure evaluation.
+	isWeekend := !weekdays[date.Weekday()]
+	buffers := make(map[uuid.UUID]int, len(crossStore))
+	for _, csb := range crossStore {
+		if _, done := buffers[csb.StoreID]; done {
+			continue
+		}
+		mins := store.WeekdayBufferMin
+		if isWeekend {
+			mins = store.WeekendBufferMin
+		}
+		if override, err := s.repo.GetArtistStoreBuffer(ctx, artistID, csb.StoreID, storeID); err == nil && override != nil {
+			mins = override.WeekdayBufferMin
+			if isWeekend {
+				mins = override.WeekendBufferMin
+			}
+		}
+		buffers[csb.StoreID] = mins
+	}
+
+	resp := evaluateShift(shiftInput{
+		SameStore:    sameStore,
+		CrossStore:   crossStore,
+		OpenAt:       window.OpenAt,
+		CloseAt:      window.CloseAt,
+		StoreOpen:    storeOpen,
+		BufferFor:    func(id uuid.UUID) int { return buffers[id] },
+		ShiftMinutes: req.ShiftMinutes,
+		Now:          time.Now(),
+	})
+	resp.Date = req.Date
+	return resp, nil
+}

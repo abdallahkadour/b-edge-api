@@ -74,6 +74,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	b.Patch("/:id/cancel", handler.CancelBooking)
 	b.Patch("/:id/complete", handler.CompleteBooking)
 	b.Patch("/:id/no-show", handler.MarkNoShow)
+	// Dry run for bulk schedule shifting. POST rather than GET because it
+	// takes a body, but it writes NOTHING - see PreviewShiftDay. Registered
+	// before /:id would be needed only if it collided; "schedule" is a
+	// literal segment on a different path shape, so ordering is safe here.
+	b.Post("/schedule/shift-preview", handler.PreviewShiftDay)
 
 	// List endpoints
 	b.Get("/artist/:artist_id", middleware.RequireRole("artist", "admin"), handler.GetBookingsByArtist)
@@ -616,4 +621,31 @@ func parsePaginationParams(c *fiber.Ctx) (time.Time, int) {
 	}
 
 	return cursor, limit
+}
+
+// PreviewShiftDay godoc
+// @Summary      Preview shifting a day's bookings
+// @Description  Dry run. Returns what would move, what would be skipped, and every reason the shift cannot proceed. Writes nothing.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        body body ShiftPreviewRequest true "Store, date and shift in minutes"
+// @Success      200 {object} response.Body{data=ShiftPreviewResponse}
+// @Failure      400 {object} response.ErrorBody "INVALID_DATE"
+// @Failure      404 {object} response.ErrorBody "STORE_NOT_FOUND"
+// @Router       /bookings/schedule/shift-preview [post]
+func (h *Handler) PreviewShiftDay(c *fiber.Ctx) error {
+	var req ShiftPreviewRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Invalid request body")
+	}
+
+	userID := middleware.UserIDFromContext(c)
+
+	result, err := h.svc.PreviewShiftDay(c.Context(), userID, req)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, result)
 }

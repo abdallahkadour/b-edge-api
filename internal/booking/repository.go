@@ -65,6 +65,20 @@ type Repository interface {
 	// that are in a blocking status. Used to build the blocked time ranges.
 	GetArtistBookingsForDate(ctx context.Context, artistID uuid.UUID, date time.Time) ([]*Booking, error)
 
+	// ListEnrichedBookingsForDay returns every one of an artist's bookings
+	// on a calendar day, across ALL stores, with customer and service names
+	// attached.
+	//
+	// One query rather than the two-plus-N the bulk shift preview would
+	// otherwise need: same-store bookings to move, cross-store bookings to
+	// check travel buffers against, and a customer name and phone for each.
+	// Callers split by store_id in Go.
+	//
+	// Unlike the calendar queries this includes MovableStatuses rather than
+	// CalendarStatuses - a held or deposit_pending booking still occupies
+	// the artist's day and must be shifted with it.
+	ListEnrichedBookingsForDay(ctx context.Context, artistID uuid.UUID, dayStart, dayEnd time.Time) ([]*EnrichedBooking, error)
+
 	// GetArtistCrossStoreBookings returns artist bookings at stores OTHER than
 	// the target store on a given date. Used to calculate travel buffers.
 	GetArtistCrossStoreBookings(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, date time.Time) ([]*Booking, error)
@@ -401,6 +415,28 @@ func (r *pgRepo) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.
 	rows, err := r.db.Query(ctx, q, artistID, weekStart, weekEnd, CalendarStatuses)
 	if err != nil {
 		return nil, fmt.Errorf("list enriched bookings for week: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
+// ListEnrichedBookingsForDay returns an artist's bookings across all stores
+// within [dayStart, dayEnd), enriched with customer and service details.
+//
+// The window is half-open and supplied by the caller already resolved to
+// absolute instants, because "a day" depends on the STORE's timezone rather
+// than the server's - at 23:00 UTC it is already tomorrow in Beirut.
+func (r *pgRepo) ListEnrichedBookingsForDay(ctx context.Context, artistID uuid.UUID, dayStart, dayEnd time.Time) ([]*EnrichedBooking, error) {
+	q := fmt.Sprintf(`SELECT %s %s
+		WHERE b.artist_id = $1
+		AND b.start_time >= $2
+		AND b.start_time <  $3
+		AND b.deleted_at IS NULL
+		ORDER BY b.start_time ASC`,
+		enrichedSelectCols, enrichedFrom)
+	rows, err := r.db.Query(ctx, q, artistID, dayStart, dayEnd)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings for day: %w", err)
 	}
 	defer rows.Close()
 	return scanEnrichedBookings(rows)

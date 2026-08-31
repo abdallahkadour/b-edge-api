@@ -45,77 +45,80 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
-	getStoreStore                  *Store
-	getStoreErr                    error
-	getBusinessHoursBH             *BusinessHours
-	getBusinessHoursErr            error
-	getBusinessHoursExceptionEx    *BusinessHoursException
-	getBusinessHoursExceptionErr   error
-	getServiceSvc                  *SalonService
-	getServiceErr                  error
-	getArtistBookingsBookings      []*Booking
-	getArtistBookingsErr           error
-	getCrossStoreBookings          []*Booking
-	getCrossStoreErr               error
-	getArtistStoreBufferBuf        *ArtistStoreBuffer
-	getArtistStoreBufferErr        error
-	createBookingErr               error
-	getBookingByIDBooking          *Booking
-	getBookingByIDErr              error
-	getBookingsByArtistBookings    []*Booking
-	getBookingsByArtistErr         error
-	getBookingsByCustomerBookings  []*Booking
-	getBookingsByCustomerErr       error
-	getBookingsBySalonBookings     []*Booking
-	getBookingsBySalonErr          error
-	updateBookingStatusErr         error
-	attachGuestAndSubmitErr        error
-	getEnrichedBookingByIDBooking  *EnrichedBooking
-	getEnrichedBookingByIDErr      error
-	listEnrichedByArtistBookings   []*EnrichedBooking
-	listEnrichedByArtistErr        error
-	listEnrichedForWeekBookings    []*EnrichedBooking
-	listEnrichedForWeekErr         error
-	listEnrichedByCustomerBookings []*EnrichedBooking
-	listEnrichedByCustomerErr      error
-	approveBookingErr              error
-	approveBookingDepositDeadline  time.Time
-	confirmDepositErr              error
-	cancelBookingErr               error
-	completeBookingErr             error
-	completeBookingToken           string
-	notificationContextCustomer    string
-	notificationContextService     string
-	notificationContextErr         error
-	enqueuedNotifications          []enqueuedNotification
-	markNoShowErr                  error
-	releaseExpiredHoldsCount       int64
-	releaseExpiredHoldsErr         error
-	releaseExpiredHoldsCalled      bool
-	expireDeadlineBookingsCount    int64
-	expireDeadlineBookingsErr      error
-	expireDeadlineBookingsCalled   bool
-	expireStalePendingCount        int64
-	expireStalePendingErr          error
-	expireStalePendingCalled       bool
-	expireStalePendingArtistID     uuid.UUID
-	getArtistIDByUserIDArtistID    uuid.UUID
-	getArtistIDByUserIDErr         error
-	confirmDepositReceivedErr      error
+	// Bulk schedule preview (migration 029)
+	enrichedForDay                        []*EnrichedBooking
+	enrichedForDayErr                     error
+	getStoreStore                         *Store
+	getStoreErr                           error
+	getBusinessHoursBH                    *BusinessHours
+	getBusinessHoursErr                   error
+	getBusinessHoursExceptionEx           *BusinessHoursException
+	getBusinessHoursExceptionErr          error
+	getServiceSvc                         *SalonService
+	getServiceErr                         error
+	getArtistBookingsBookings             []*Booking
+	getArtistBookingsErr                  error
+	getCrossStoreBookings                 []*Booking
+	getCrossStoreErr                      error
+	getArtistStoreBufferBuf               *ArtistStoreBuffer
+	getArtistStoreBufferErr               error
+	createBookingErr                      error
+	getBookingByIDBooking                 *Booking
+	getBookingByIDErr                     error
+	getBookingsByArtistBookings           []*Booking
+	getBookingsByArtistErr                error
+	getBookingsByCustomerBookings         []*Booking
+	getBookingsByCustomerErr              error
+	getBookingsBySalonBookings            []*Booking
+	getBookingsBySalonErr                 error
+	updateBookingStatusErr                error
+	attachGuestAndSubmitErr               error
+	getEnrichedBookingByIDBooking         *EnrichedBooking
+	getEnrichedBookingByIDErr             error
+	listEnrichedByArtistBookings          []*EnrichedBooking
+	listEnrichedByArtistErr               error
+	listEnrichedForWeekBookings           []*EnrichedBooking
+	listEnrichedForWeekErr                error
+	listEnrichedByCustomerBookings        []*EnrichedBooking
+	listEnrichedByCustomerErr             error
+	approveBookingErr                     error
+	approveBookingDepositDeadline         time.Time
+	confirmDepositErr                     error
+	cancelBookingErr                      error
+	completeBookingErr                    error
+	completeBookingToken                  string
+	notificationContextCustomer           string
+	notificationContextService            string
+	notificationContextErr                error
+	enqueuedNotifications                 []enqueuedNotification
+	markNoShowErr                         error
+	releaseExpiredHoldsCount              int64
+	releaseExpiredHoldsErr                error
+	releaseExpiredHoldsCalled             bool
+	expireDeadlineBookingsCount           int64
+	expireDeadlineBookingsErr             error
+	expireDeadlineBookingsCalled          bool
+	expireStalePendingCount               int64
+	expireStalePendingErr                 error
+	expireStalePendingCalled              bool
+	expireStalePendingArtistID            uuid.UUID
+	getArtistIDByUserIDArtistID           uuid.UUID
+	getArtistIDByUserIDErr                error
+	confirmDepositReceivedErr             error
 	confirmDepositReceivedReferenceCalled *string
-	createBookingCaptured          *Booking
+	createBookingCaptured                 *Booking
 
 	// waitlist
-	createWaitlistEntryID          uuid.UUID
-	createWaitlistEntryErr         error
-	getWaitlistByArtistEntries     []*WaitlistEntryResponse
-	getWaitlistByArtistErr         error
-	notifyNextWaitlistCalled       bool
-	notifyNextWaitlistArtistID     uuid.UUID
-	notifyNextWaitlistStoreID      uuid.UUID
-	notifyNextWaitlistServiceID    uuid.UUID
-	notifyNextWaitlistDate         time.Time
-	notifyNextWaitlistErr          error
+	createWaitlistEntryID       uuid.UUID
+	createWaitlistEntryErr      error
+	getWaitlistByArtistEntries  []*WaitlistEntryResponse
+	getWaitlistByArtistErr      error
+	notifyNextWaitlistCalled    bool
+	notifyNextWaitlistArtistID  uuid.UUID
+	notifyNextWaitlistStoreID   uuid.UUID
+	notifyNextWaitlistServiceID uuid.UUID
+	notifyNextWaitlistDate      time.Time
+	notifyNextWaitlistErr       error
 }
 
 func (m *mockRepo) GetStore(_ context.Context, _ uuid.UUID) (*Store, error) {
@@ -179,6 +182,10 @@ func (m *mockRepo) GetEnrichedBookingByID(_ context.Context, _ uuid.UUID) (*Enri
 func (m *mockRepo) ListEnrichedBookingsByArtist(_ context.Context, _ uuid.UUID, _ string, _ time.Time, _ int) ([]*EnrichedBooking, error) {
 	return m.listEnrichedByArtistBookings, m.listEnrichedByArtistErr
 }
+func (m *mockRepo) ListEnrichedBookingsForDay(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]*EnrichedBooking, error) {
+	return m.enrichedForDay, m.enrichedForDayErr
+}
+
 func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _ time.Time) ([]*EnrichedBooking, error) {
 	return m.listEnrichedForWeekBookings, m.listEnrichedForWeekErr
 }
@@ -1536,7 +1543,7 @@ func TestConfirmDepositReceived_NoArtistProfile_Forbidden(t *testing.T) {
 	}
 
 	repo := &mockRepo{
-		getBookingByIDBooking: booking,
+		getBookingByIDBooking:  booking,
 		getArtistIDByUserIDErr: ErrArtistNotFound,
 	}
 	svc := newTestService(repo)
@@ -1979,8 +1986,8 @@ func TestListEnrichedBookingsByArtist_OwnBookings_Allowed(t *testing.T) {
 	userID := uuid.New()
 
 	repo := &mockRepo{
-		getArtistIDByUserIDArtistID:      artistID, // resolves to the SAME artist
-		listEnrichedByArtistBookings:     []*EnrichedBooking{},
+		getArtistIDByUserIDArtistID:  artistID, // resolves to the SAME artist
+		listEnrichedByArtistBookings: []*EnrichedBooking{},
 	}
 	svc := newTestService(repo)
 

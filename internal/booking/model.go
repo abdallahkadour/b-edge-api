@@ -93,33 +93,33 @@ type Booking struct {
 	CustomerID uuid.UUID `db:"customer_id"`
 	ServiceID  uuid.UUID `db:"service_id"`
 	// SessionID is reserved for migration 005 (multi-artist sessions). Always nil.
-	SessionID          *uuid.UUID      `db:"session_id"`
-	StartTime          time.Time       `db:"start_time"`
-	EndTime            time.Time       `db:"end_time"`
-	HeldUntil          *time.Time      `db:"held_until"`
-	Status             string          `db:"status"`
-	OriginalPrice      decimal.Decimal `db:"original_price"`
-	DiscountAmount     decimal.Decimal `db:"discount_amount"`
-	FinalPrice         decimal.Decimal `db:"final_price"`
-	DepositAmount      decimal.Decimal `db:"deposit_amount"`
-	DepositDeadline    *time.Time      `db:"deposit_deadline"`
-	DepositPaidAt      *time.Time      `db:"deposit_paid_at"`
+	SessionID       *uuid.UUID      `db:"session_id"`
+	StartTime       time.Time       `db:"start_time"`
+	EndTime         time.Time       `db:"end_time"`
+	HeldUntil       *time.Time      `db:"held_until"`
+	Status          string          `db:"status"`
+	OriginalPrice   decimal.Decimal `db:"original_price"`
+	DiscountAmount  decimal.Decimal `db:"discount_amount"`
+	FinalPrice      decimal.Decimal `db:"final_price"`
+	DepositAmount   decimal.Decimal `db:"deposit_amount"`
+	DepositDeadline *time.Time      `db:"deposit_deadline"`
+	DepositPaidAt   *time.Time      `db:"deposit_paid_at"`
 	// DepositReference is an optional artist-entered note captured on
 	// confirmation - e.g. an OMT/Wish transaction code. Free text, never
 	// customer-facing.
-	DepositReference  *string `db:"deposit_reference"`
+	DepositReference *string `db:"deposit_reference"`
 	// ReviewToken is generated when the booking completes, letting the guest
 	// leave a review with no login required. See migration 013.
-	ReviewToken *string `db:"review_token"`
-	Channel            string          `db:"channel"`
-	SpecialRequests    *string         `db:"special_requests"`
-	CancellationReason *string         `db:"cancellation_reason"`
-	CancelledAt        *time.Time      `db:"cancelled_at"`
-	CompletedAt        *time.Time      `db:"completed_at"`
-	NoShowAt           *time.Time      `db:"no_show_at"`
-	CreatedAt          time.Time       `db:"created_at"`
-	UpdatedAt          time.Time       `db:"updated_at"`
-	DeletedAt          *time.Time      `db:"deleted_at"`
+	ReviewToken        *string    `db:"review_token"`
+	Channel            string     `db:"channel"`
+	SpecialRequests    *string    `db:"special_requests"`
+	CancellationReason *string    `db:"cancellation_reason"`
+	CancelledAt        *time.Time `db:"cancelled_at"`
+	CompletedAt        *time.Time `db:"completed_at"`
+	NoShowAt           *time.Time `db:"no_show_at"`
+	CreatedAt          time.Time  `db:"created_at"`
+	UpdatedAt          time.Time  `db:"updated_at"`
+	DeletedAt          *time.Time `db:"deleted_at"`
 }
 
 // HoldGuestSlotResponse is returned when a guest holds a slot.
@@ -411,9 +411,9 @@ type EnrichedBookingResponse struct {
 	FinalPrice     decimal.Decimal `json:"final_price"`
 	DepositAmount  decimal.Decimal `json:"deposit_amount"`
 	// Deposit lifecycle
-	DepositDeadline *time.Time `json:"deposit_deadline,omitempty"`
-	DepositPaidAt   *time.Time `json:"deposit_paid_at,omitempty"`
-	DepositReference *string   `json:"deposit_reference,omitempty"`
+	DepositDeadline  *time.Time `json:"deposit_deadline,omitempty"`
+	DepositPaidAt    *time.Time `json:"deposit_paid_at,omitempty"`
+	DepositReference *string    `json:"deposit_reference,omitempty"`
 	// ReviewToken is present once the booking is completed. Artist-facing
 	// only - used to build a review-request link to send the customer
 	// manually (Calendar detail view) until automated WhatsApp delivery
@@ -524,4 +524,123 @@ type WaitlistEntryResponse struct {
 	NotifiedAt      *time.Time `json:"notified_at,omitempty"`
 	ConfirmDeadline *time.Time `json:"confirm_deadline,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// ── Bulk schedule operations ─────────────────────────────────────────────────
+
+// MovableStatuses are the booking statuses a bulk schedule operation may
+// move or cancel.
+//
+// Deliberately narrower than BlockingStatuses. A completed or no-show
+// booking still occupies its slot for availability purposes, but it is
+// history - rewriting when it happened would be falsifying a record.
+// cancelled/expired/refunded are already dead and excluded from the
+// overlap constraint anyway.
+var MovableStatuses = []string{
+	StatusPending, StatusApproved, StatusHeld,
+	StatusDepositPending, StatusDepositPaid, StatusConfirmed,
+}
+
+// isMovable reports whether a booking's status permits a bulk move.
+func isMovable(status string) bool {
+	for _, s := range MovableStatuses {
+		if s == status {
+			return true
+		}
+	}
+	return false
+}
+
+// ShiftPreviewRequest is the body for POST /bookings/schedule/shift-preview.
+type ShiftPreviewRequest struct {
+	StoreID string `json:"store_id" validate:"required,uuid4"`
+	// Date is the store-LOCAL calendar day, "YYYY-MM-DD". Resolved through
+	// the store's IANA zone rather than the server's - at 23:00 UTC it is
+	// already tomorrow in Beirut, so a UTC reading would preview the wrong
+	// day for two hours every night.
+	Date string `json:"date" validate:"required"`
+	// ShiftMinutes may be negative to pull a day earlier. Bounded so a
+	// mistyped value cannot fling a day into next week.
+	ShiftMinutes int `json:"shift_minutes" validate:"required,min=-240,max=240"`
+}
+
+// ShiftPreviewItem is one booking that would move.
+type ShiftPreviewItem struct {
+	BookingID    uuid.UUID `json:"booking_id"`
+	CustomerName string    `json:"customer_name"`
+	ServiceName  string    `json:"service_name"`
+	CurrentStart time.Time `json:"current_start"`
+	NewStart     time.Time `json:"new_start"`
+	NewEnd       time.Time `json:"new_end"`
+	Status       string    `json:"status"`
+	// HasPhone is false when no number is on file, meaning this customer
+	// cannot be notified and would need a call.
+	HasPhone bool `json:"has_phone"`
+}
+
+// ShiftBlockerReason explains why a shift cannot be applied.
+type ShiftBlockerReason string
+
+// The reasons a shift is refused. Each names a booking so the artist can
+// act on it rather than being told only that "something" is wrong.
+const (
+	// BlockerPastClosing - the booking would end after the store closes.
+	BlockerPastClosing ShiftBlockerReason = "past_closing"
+	// BlockerBeforeOpening - a negative shift would start it before opening.
+	BlockerBeforeOpening ShiftBlockerReason = "before_opening"
+	// BlockerIntoPast - a negative shift would move it to a past time.
+	BlockerIntoPast ShiftBlockerReason = "into_past"
+	// BlockerTravelBuffer - would leave too little travel time against a
+	// booking at another store. Specific to artists working several
+	// branches; see stores.weekday_buffer_min and artist_store_buffers.
+	BlockerTravelBuffer ShiftBlockerReason = "travel_buffer"
+	// BlockerStoreClosed - the store does not trade that day at all.
+	BlockerStoreClosed ShiftBlockerReason = "store_closed"
+)
+
+// ShiftBlocker is one reason the shift cannot proceed.
+type ShiftBlocker struct {
+	Reason    ShiftBlockerReason `json:"reason"`
+	BookingID *uuid.UUID         `json:"booking_id,omitempty"`
+	Detail    string             `json:"detail"`
+}
+
+// ShiftSkipReason explains why a booking is excluded from the shift.
+type ShiftSkipReason string
+
+// Skipped bookings are not errors - they are simply out of scope.
+const (
+	// SkipInProgress - already started. Telling someone mid-appointment
+	// that they are delayed is meaningless.
+	SkipInProgress ShiftSkipReason = "in_progress"
+	// SkipTerminalStatus - completed, cancelled or no-show. History.
+	SkipTerminalStatus ShiftSkipReason = "terminal_status"
+)
+
+// ShiftSkipped is one booking excluded from the operation.
+type ShiftSkipped struct {
+	BookingID uuid.UUID       `json:"booking_id"`
+	Reason    ShiftSkipReason `json:"reason"`
+	Status    string          `json:"status"`
+}
+
+// ShiftPreviewResponse is the full dry-run result.
+//
+// Read-only by construction: this endpoint writes nothing, so an artist can
+// see the consequences of a shift before committing to one. Blockers are
+// all-or-nothing - a partially shifted day is worse than an unshifted one,
+// because half the customers get told about a change that did not happen to
+// the other half.
+type ShiftPreviewResponse struct {
+	Date         string             `json:"date"`
+	ShiftMinutes int                `json:"shift_minutes"`
+	Movable      []ShiftPreviewItem `json:"movable"`
+	Skipped      []ShiftSkipped     `json:"skipped"`
+	Blockers     []ShiftBlocker     `json:"blockers"`
+	// CanApply is true only when there are movable bookings and no
+	// blockers. The UI should gate the apply button on exactly this.
+	CanApply bool `json:"can_apply"`
+	// NotifiableCount is how many movable bookings have a phone number.
+	// A gap between this and len(Movable) is customers who must be phoned.
+	NotifiableCount int `json:"notifiable_count"`
 }

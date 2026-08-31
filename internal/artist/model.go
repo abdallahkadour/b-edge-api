@@ -99,7 +99,12 @@ type Store struct {
 	IsActive           bool            `db:"is_active"             json:"is_active"`
 	// Timezone is the store's IANA zone (e.g. "Asia/Beirut"). early_bird_cutoff
 	// and this store's business hours are wall-clock LOCAL times in this zone.
-	Timezone  string    `db:"timezone"   json:"timezone"`
+	Timezone string `db:"timezone"   json:"timezone"`
+	// Latitude and Longitude are the artist-dropped map pin (migration 027).
+	// Both nil means no pin has been set; consumers omit the map rather than
+	// rendering a default location.
+	Latitude  *float64  `db:"latitude"   json:"latitude,omitempty"`
+	Longitude *float64  `db:"longitude"  json:"longitude,omitempty"`
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -227,6 +232,19 @@ type UpdateStoreRequest struct {
 	// like "+03:00" is rejected because offsets do not encode DST rules.
 	Timezone *string `json:"timezone" validate:"omitempty,max=64"`
 	IsActive *bool   `json:"is_active"`
+	// Latitude and Longitude are the store's map pin (migration 027).
+	//
+	// Sent together or not at all - a latitude without a longitude is not a
+	// location, and the service rejects a half-pin rather than storing one
+	// coordinate. Unlike the fields above, these are NOT merged with
+	// COALESCE: passing an explicit null clears the pin, which is the only
+	// way an artist can remove a mistakenly-placed one.
+	Latitude  *float64 `json:"latitude"  validate:"omitempty,min=-90,max=90"`
+	Longitude *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	// ClearLocation removes an existing pin. Needed because a JSON null in
+	// Latitude/Longitude is indistinguishable from the field being absent
+	// once decoded into a pointer.
+	ClearLocation bool `json:"clear_location"`
 }
 
 // SetBusinessHoursRequest sets working hours for a store on a specific day.

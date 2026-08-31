@@ -16,7 +16,36 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
 )
+
+// toDayHours adapts this domain's BusinessHours row onto the shared
+// openinghours value type. Returns nil for a nil row - the repository
+// returns (nil, nil) when a weekday has no hours configured, which
+// openinghours.Resolve reads as closed.
+func toDayHours(bh *BusinessHours) *openinghours.DayHours {
+	if bh == nil {
+		return nil
+	}
+	return &openinghours.DayHours{
+		IsOpen:    bh.IsOpen,
+		OpenTime:  bh.OpenTime,
+		CloseTime: bh.CloseTime,
+	}
+}
+
+// toException adapts this domain's BusinessHoursException row onto the
+// shared openinghours value type.
+func toException(e *BusinessHoursException) *openinghours.Exception {
+	if e == nil {
+		return nil
+	}
+	return &openinghours.Exception{
+		IsClosed:  e.IsClosed,
+		OpenTime:  e.OpenTime,
+		CloseTime: e.CloseTime,
+	}
+}
 
 // SubscriptionStatusReader is the one capability this domain needs from the
 // billing domain: given an artist, what is their subscription (if any)?
@@ -163,46 +192,31 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: get exception: %w", err)
 	}
-	if exception != nil && exception.IsClosed {
-		return []*TimeSlot{}, nil // store is closed - return empty
-	}
 
 	// Get regular hours for this day of week
 	bh, err := s.repo.GetBusinessHours(ctx, storeID, int(date.Weekday()))
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: get hours: %w", err)
 	}
-	if bh == nil || !bh.IsOpen {
-		return []*TimeSlot{}, nil // store is closed this day
-	}
 
-	// Parse open and close times as wall-clock LOCAL times in the store's
-	// own timezone. A store that opens at 09:00 opens at 09:00 where it
-	// physically is, in summer and in winter alike - resolving through the
-	// store's IANA zone applies the correct DST offset for this specific
-	// date automatically.
-	storeLoc := storeLocation(store)
-	localDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, storeLoc)
-
-	openTime, err := parseStoreTimeIn(localDate, bh.OpenTime, storeLoc)
+	// Resolving the trading window is shared with the public "Open now"
+	// badge on the discovery profile - see internal/pkg/openinghours for
+	// why it lives outside this domain rather than inline here.
+	window, open, err := openinghours.Resolve(store.Timezone, date, toDayHours(bh), toException(exception))
 	if err != nil {
-		return nil, fmt.Errorf("get available slots: parse open time: %w", err)
+		return nil, fmt.Errorf("get available slots: %w", err)
 	}
-	closeTime, err := parseStoreTimeIn(localDate, bh.CloseTime, storeLoc)
-	if err != nil {
-		return nil, fmt.Errorf("get available slots: parse close time: %w", err)
+	if !open {
+		return []*TimeSlot{}, nil // store is closed this date - return empty
 	}
-
-	// If exception has custom hours, override
-	if exception != nil && exception.OpenTime != nil && exception.CloseTime != nil {
-		openTime, _ = parseStoreTimeIn(localDate, *exception.OpenTime, storeLoc)
-		closeTime, _ = parseStoreTimeIn(localDate, *exception.CloseTime, storeLoc)
-	}
+	openTime, closeTime := window.OpenAt, window.CloseAt
 
 	// ── Step 2: Same-day minimum notice ──────────────────────────────────
 
+	storeLoc := openinghours.Location(store.Timezone)
+	localDate := openinghours.LocalDate(date, storeLoc)
 	earliestStart := openTime
-	if isToday(date) {
+	if openinghours.IsSameDayIn(date, time.Now(), storeLoc) {
 		minNotice := time.Now().UTC().Add(time.Duration(store.SameDayNoticeHours) * time.Hour)
 		if minNotice.After(earliestStart) {
 			earliestStart = minNotice
@@ -1461,52 +1475,25 @@ func isEarlyBirdSlot(store *Store, startTime time.Time) bool {
 	return startTime.Before(cutoff)
 }
 
-// storeLocation resolves a store's IANA timezone to a *time.Location.
+// storeLocation resolves a store's IANA timezone to a *time.Location,
+// tolerating a nil store.
 //
-// Falls back to UTC only if the zone is unset or unloadable. That fallback is
-// deliberately loud in behaviour but silent in logs at this call depth - the
-// column is NOT NULL DEFAULT 'Asia/Beirut' (migration 010) and cmd/main.go
-// blank-imports time/tzdata so the IANA database is compiled into the binary,
-// which means reaching the fallback indicates a genuinely malformed zone
-// string rather than a missing tzdata file.
+// A thin adapter over openinghours.Location, which owns the fallback
+// behaviour and documents it.
 func storeLocation(store *Store) *time.Location {
-	if store == nil || store.Timezone == "" {
+	if store == nil {
 		return time.UTC
 	}
-	loc, err := time.LoadLocation(store.Timezone)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
+	return openinghours.Location(store.Timezone)
 }
 
 // parseStoreTimeIn parses a PostgreSQL TIME string (e.g. "09:00:00") and
-// combines it with a date to produce an instant, interpreting the wall-clock
-// time in the given location.
+// combines it with a date to produce an instant in the given location.
 //
-// Constructing the time.Date in loc rather than time.UTC is the whole point:
-// Go applies that zone's DST rules for that specific date, so "09:00:00" in
-// Asia/Beirut resolves to 06:00Z in summer and 07:00Z in winter automatically.
-// Pre-converting and storing UTC would freeze one of those two and silently
-// break at the next clock change.
+// A thin adapter over openinghours.ParseTimeIn, kept so the two remaining
+// early-bird call sites read the same as they did before the extraction.
 func parseStoreTimeIn(date time.Time, timeStr string, loc *time.Location) (time.Time, error) {
-	t, err := time.Parse("15:04:05", timeStr)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse store time %q: %w", timeStr, err)
-	}
-	return time.Date(
-		date.Year(), date.Month(), date.Day(),
-		t.Hour(), t.Minute(), t.Second(), 0,
-		loc,
-	), nil
-}
-
-// isToday returns true if the given date is today in UTC.
-func isToday(date time.Time) bool {
-	now := time.Now().UTC()
-	return date.Year() == now.Year() &&
-		date.Month() == now.Month() &&
-		date.Day() == now.Day()
+	return openinghours.ParseTimeIn(date, timeStr, loc)
 }
 
 // zeroDecimal returns a zero decimal value.

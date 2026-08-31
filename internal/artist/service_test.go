@@ -886,3 +886,89 @@ func TestCreateStore_RepositoryFailure_Surfaces(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+// ── Store map pin (migration 027) ─────────────────────────────────────────────
+
+// A pin is a pair. Storing one coordinate without the other would put the
+// store on the equator or the prime meridian rather than where it is.
+func TestUpdateStore_LatitudeWithoutLongitude_Rejected(t *testing.T) {
+	lat := 33.8938
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: uuid.New()}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), uuid.New(), uuid.New(),
+		UpdateStoreRequest{Latitude: &lat})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "INCOMPLETE_LOCATION", appErr.Code)
+}
+
+func TestUpdateStore_LongitudeWithoutLatitude_Rejected(t *testing.T) {
+	lng := 35.5018
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: uuid.New()}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), uuid.New(), uuid.New(),
+		UpdateStoreRequest{Longitude: &lng})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "INCOMPLETE_LOCATION", appErr.Code)
+}
+
+// Setting and clearing in one request is contradictory - reject rather than
+// silently picking one.
+func TestUpdateStore_SetAndClearLocation_Rejected(t *testing.T) {
+	lat, lng := 33.8938, 35.5018
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: uuid.New()}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), uuid.New(), uuid.New(),
+		UpdateStoreRequest{Latitude: &lat, Longitude: &lng, ClearLocation: true})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "CONFLICTING_LOCATION", appErr.Code)
+}
+
+func TestUpdateStore_BothCoordinates_Accepted(t *testing.T) {
+	lat, lng := 33.8938, 35.5018
+	salonID, storeID := uuid.New(), uuid.New()
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), storeID, salonID,
+		UpdateStoreRequest{Latitude: &lat, Longitude: &lng})
+
+	require.NoError(t, err)
+}
+
+// Clearing alone is legitimate - it is how an artist removes a pin they
+// placed in the wrong spot.
+func TestUpdateStore_ClearLocationAlone_Accepted(t *testing.T) {
+	salonID, storeID := uuid.New(), uuid.New()
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: storeID, SalonID: salonID}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), storeID, salonID,
+		UpdateStoreRequest{ClearLocation: true})
+
+	require.NoError(t, err)
+}
+
+// Out-of-range coordinates are rejected by validation before reaching the
+// database's CHECK constraint, so the caller gets a 422 rather than a 500.
+func TestUpdateStore_OutOfRangeLatitude_Rejected(t *testing.T) {
+	lat, lng := 999.0, 35.5018
+	repo := &mockRepo{getStoreByIDStore: &Store{ID: uuid.New()}}
+	svc := newTestService(repo)
+
+	_, err := svc.UpdateStore(context.Background(), uuid.New(), uuid.New(),
+		UpdateStoreRequest{Latitude: &lat, Longitude: &lng})
+
+	require.Error(t, err, "latitude 999 must not reach the database")
+}

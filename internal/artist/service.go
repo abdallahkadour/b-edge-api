@@ -451,6 +451,18 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 		return nil, mapValidationError(err)
 	}
 
+	// A pin is a pair. One coordinate without the other is not a location,
+	// and storing half of one would put a store on the equator or the prime
+	// meridian rather than where it actually is.
+	if (req.Latitude == nil) != (req.Longitude == nil) {
+		return nil, apperror.BadRequest("INCOMPLETE_LOCATION",
+			"latitude and longitude must be sent together")
+	}
+	if req.ClearLocation && (req.Latitude != nil || req.Longitude != nil) {
+		return nil, apperror.BadRequest("CONFLICTING_LOCATION",
+			"cannot set a location and clear it in the same request")
+	}
+
 	if req.EarlyBirdFee != nil {
 		fee, err := decimal.NewFromString(*req.EarlyBirdFee)
 		if err != nil {

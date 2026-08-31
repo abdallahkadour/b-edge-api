@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 )
-
-// (no time import needed here; the New-badge computation lives in the service.)
 
 // subscriptionVisibleCond is a SQL EXISTS clause mirroring
 // billing.DeriveStatus's Active/Grace/Trialing/Comped/Cancelled branches -
@@ -63,6 +62,24 @@ type Repository interface {
 	// GetSalonServices returns the active services for a salon (an artist's
 	// service menu derives from their salon).
 	GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*ServiceRow, error)
+
+	// GetStoreHours returns every configured weekday row for the given
+	// stores, in one query rather than one per store.
+	//
+	// All seven days are fetched rather than just "today" because which day
+	// today IS depends on each store's own timezone, which this layer does
+	// not resolve - the service does, per store. Seven rows per store is
+	// small enough that filtering server-side would trade correctness for
+	// nothing.
+	GetStoreHours(ctx context.Context, storeIDs []uuid.UUID) ([]*DayHoursRow, error)
+
+	// GetStoreExceptions returns dated trading overrides for the given
+	// stores between from and to inclusive.
+	//
+	// Callers pass a window spanning at least the day before and after the
+	// instant of interest, because a store's local date can differ from the
+	// server's by one in either direction.
+	GetStoreExceptions(ctx context.Context, storeIDs []uuid.UUID, from, to time.Time) ([]*ExceptionRow, error)
 }
 
 // ListArtistCardsParams carries the filters and page cap for the list query.
@@ -196,7 +213,7 @@ func (r *pgRepo) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Art
 // GetArtistStores returns the active stores an artist works at, ordered by city.
 func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*StoreRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT s.id, s.name, s.city, s.address
+		SELECT s.id, s.name, s.city, s.address, s.phone, s.timezone, s.latitude, s.longitude
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
 		WHERE ast.artist_id = $1
@@ -212,7 +229,10 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 	var result []*StoreRow
 	for rows.Next() {
 		s := &StoreRow{}
-		if err := rows.Scan(&s.ID, &s.Name, &s.City, &s.Address); err != nil {
+		if err := rows.Scan(
+			&s.ID, &s.Name, &s.City, &s.Address,
+			&s.Phone, &s.Timezone, &s.Latitude, &s.Longitude,
+		); err != nil {
 			return nil, fmt.Errorf("scan store row: %w", err)
 		}
 		result = append(result, s)
@@ -224,6 +244,67 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 }
 
 // GetSalonServices returns the active services for a salon, cheapest first.
+// GetStoreHours returns every configured weekday row for the given stores.
+func (r *pgRepo) GetStoreHours(ctx context.Context, storeIDs []uuid.UUID) ([]*DayHoursRow, error) {
+	if len(storeIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT store_id, day_of_week, is_open, open_time, close_time
+		FROM business_hours
+		WHERE store_id = ANY($1)`,
+		storeIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get store hours: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*DayHoursRow
+	for rows.Next() {
+		h := &DayHoursRow{}
+		if err := rows.Scan(&h.StoreID, &h.DayOfWeek, &h.IsOpen, &h.OpenTime, &h.CloseTime); err != nil {
+			return nil, fmt.Errorf("scan store hours row: %w", err)
+		}
+		result = append(result, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get store hours rows: %w", err)
+	}
+	return result, nil
+}
+
+// GetStoreExceptions returns dated trading overrides in [from, to].
+func (r *pgRepo) GetStoreExceptions(ctx context.Context, storeIDs []uuid.UUID, from, to time.Time) ([]*ExceptionRow, error) {
+	if len(storeIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT store_id, exception_date, is_closed, open_time, close_time
+		FROM business_hours_exceptions
+		WHERE store_id = ANY($1)
+		AND exception_date BETWEEN $2 AND $3`,
+		storeIDs, from, to,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get store exceptions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*ExceptionRow
+	for rows.Next() {
+		e := &ExceptionRow{}
+		if err := rows.Scan(&e.StoreID, &e.ExceptionDate, &e.IsClosed, &e.OpenTime, &e.CloseTime); err != nil {
+			return nil, fmt.Errorf("scan store exception row: %w", err)
+		}
+		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get store exceptions rows: %w", err)
+	}
+	return result, nil
+}
+
 func (r *pgRepo) GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*ServiceRow, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, name, duration_min, price, deposit_amount

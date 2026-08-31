@@ -104,12 +104,13 @@ func (r *pgRepo) CreateStore(ctx context.Context, store *Store, artistID uuid.UU
 		INSERT INTO stores (salon_id, name, name_ar, address, city, phone)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, country, same_day_notice_hours, early_bird_cutoff, early_bird_fee,
-		          weekday_buffer_min, weekend_buffer_min, timezone, is_active,
+		          weekday_buffer_min, weekend_buffer_min, timezone, latitude, longitude, is_active,
 		          created_at, updated_at`,
 		store.SalonID, store.Name, store.NameAr, store.Address, store.City, store.Phone,
 	).Scan(
 		&store.ID, &store.Country, &store.SameDayNoticeHours, &store.EarlyBirdCutoff, &store.EarlyBirdFee,
-		&store.WeekdayBufferMin, &store.WeekendBufferMin, &store.Timezone, &store.IsActive,
+		&store.WeekdayBufferMin, &store.WeekendBufferMin, &store.Timezone,
+		&store.Latitude, &store.Longitude, &store.IsActive,
 		&store.CreatedAt, &store.UpdatedAt,
 	)
 	if err != nil {
@@ -147,6 +148,11 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 			weekend_buffer_min    = COALESCE($10, weekend_buffer_min),
 			timezone              = COALESCE($11, timezone),
 			is_active             = COALESCE($12, is_active),
+			-- Not COALESCE: $13 (clear_location) forces both coordinates to
+			-- NULL, which is the only way to remove a mis-placed pin. When
+			-- not clearing, COALESCE keeps the existing pin if none is sent.
+			latitude              = CASE WHEN $13 THEN NULL ELSE COALESCE($14, latitude) END,
+			longitude             = CASE WHEN $13 THEN NULL ELSE COALESCE($15, longitude) END,
 			updated_at            = NOW()
 		WHERE id = $1`,
 		storeID,
@@ -154,6 +160,7 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 		req.SameDayNoticeHours, req.EarlyBirdCutoff, req.EarlyBirdFee,
 		req.WeekdayBufferMin, req.WeekendBufferMin,
 		req.Timezone, req.IsActive,
+		req.ClearLocation, req.Latitude, req.Longitude,
 	)
 	if err != nil {
 		return fmt.Errorf("update store: %w", err)
@@ -294,7 +301,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		SELECT id, salon_id, name, name_ar, address, city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
-		       timezone, is_active, created_at, updated_at
+		       timezone, latitude, longitude, is_active, created_at, updated_at
 		FROM stores
 		WHERE id = $1`,
 		storeID,
@@ -302,7 +309,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		&s.ID, &s.SalonID, &s.Name, &s.NameAr, &s.Address, &s.City, &s.Country, &s.Phone,
 		&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 		&s.WeekdayBufferMin, &s.WeekendBufferMin,
-		&s.Timezone, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+		&s.Timezone, &s.Latitude, &s.Longitude, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -319,7 +326,7 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 		       s.city, s.country, s.phone,
 		       s.same_day_notice_hours, s.early_bird_cutoff, s.early_bird_fee,
 		       s.weekday_buffer_min, s.weekend_buffer_min,
-		       s.timezone, s.is_active, s.created_at, s.updated_at
+		       s.timezone, s.latitude, s.longitude, s.is_active, s.created_at, s.updated_at
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
 		WHERE ast.artist_id = $1
@@ -348,7 +355,7 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 		       city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
-		       timezone, is_active, created_at, updated_at
+		       timezone, latitude, longitude, is_active, created_at, updated_at
 		FROM stores
 		WHERE salon_id = $1
 		ORDER BY name ASC`,
@@ -586,7 +593,7 @@ func scanStores(rows pgx.Rows) ([]*Store, error) {
 			&s.City, &s.Country, &s.Phone,
 			&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 			&s.WeekdayBufferMin, &s.WeekendBufferMin,
-			&s.Timezone, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+			&s.Timezone, &s.Latitude, &s.Longitude, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan store: %w", err)
 		}

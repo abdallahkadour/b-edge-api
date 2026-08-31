@@ -37,9 +37,9 @@ func (s *Service) GetPortfolio(ctx context.Context, artistID uuid.UUID) (*Portfo
 		return nil, fmt.Errorf("get portfolio: %w", err)
 	}
 
-	photos := make([]MediaResponse, 0, len(items))
-	for _, item := range items {
-		photos = append(photos, toMediaResponse(item))
+	photos, err := s.toMediaResponsesWithTags(ctx, items)
+	if err != nil {
+		return nil, fmt.Errorf("get portfolio: %w", err)
 	}
 
 	return &PortfolioResponse{
@@ -48,6 +48,119 @@ func (s *Service) GetPortfolio(ctx context.Context, artistID uuid.UUID) (*Portfo
 		TotalCount: len(photos),
 		MaxAllowed: MaxPortfolioPhotos,
 	}, nil
+}
+
+// toMediaResponsesWithTags converts media items and attaches each one's
+// tagged service IDs.
+//
+// Tags are fetched for the whole batch in one query rather than per photo -
+// a 20-photo portfolio would otherwise issue 20 extra round trips to render
+// one gallery.
+//
+// ServiceIDs is always a non-nil slice, so JSON carries [] rather than
+// null and clients can filter without a nil check.
+func (s *Service) toMediaResponsesWithTags(ctx context.Context, items []*MediaItem) ([]MediaResponse, error) {
+	photos := make([]MediaResponse, 0, len(items))
+	if len(items) == 0 {
+		return photos, nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+
+	tags, err := s.repo.GetServiceIDsByMedia(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load service tags: %w", err)
+	}
+
+	for _, item := range items {
+		r := toMediaResponse(item)
+		if svc, ok := tags[item.ID]; ok {
+			r.ServiceIDs = svc
+		} else {
+			r.ServiceIDs = []uuid.UUID{}
+		}
+		photos = append(photos, r)
+	}
+	return photos, nil
+}
+
+// SetMediaServices replaces which services a portfolio photo is tagged to.
+//
+// Three ownership facts have to line up, and all three are checked here
+// rather than in SQL:
+//  1. The caller is an artist.
+//  2. The photo is artist-owned media belonging to THAT artist - a product
+//     photo, or another artist's photo, is not taggable.
+//  3. Every service belongs to the caller's salon.
+//
+// (3) crosses a scope boundary: services are salon-scoped while portfolio
+// media is artist-scoped, so the artist must be resolved to their salon
+// first. A constraint in migration 028 could not express this.
+func (s *Service) SetMediaServices(ctx context.Context, userID, mediaID uuid.UUID, req SetMediaServicesRequest) (*MediaResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	artistID, err := s.resolveArtist(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	item, err := s.repo.GetByID(ctx, mediaID)
+	if err != nil {
+		if errors.Is(err, ErrMediaNotFound) {
+			return nil, apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+		}
+		return nil, fmt.Errorf("set media services: %w", err)
+	}
+
+	// Same 404 for "not yours" as for "doesn't exist", so a caller cannot
+	// enumerate other artists' media IDs by watching the status code -
+	// matching the ownership posture used on billing invoices.
+	if item.OwnerType != OwnerTypeArtist || item.OwnerID != artistID {
+		return nil, apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+	}
+
+	serviceIDs := make([]uuid.UUID, 0, len(req.ServiceIDs))
+	for _, raw := range req.ServiceIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, apperror.BadRequest("INVALID_SERVICE_ID", "service_ids must be valid UUIDs")
+		}
+		serviceIDs = append(serviceIDs, id)
+	}
+
+	if len(serviceIDs) > 0 {
+		salonID, err := s.repo.GetSalonIDByArtistID(ctx, artistID)
+		if err != nil {
+			if errors.Is(err, ErrArtistNotFound) {
+				return nil, apperror.UnprocessableEntity("NO_SALON", nil)
+			}
+			return nil, fmt.Errorf("set media services: %w", err)
+		}
+
+		n, err := s.repo.CountSalonServices(ctx, salonID, serviceIDs)
+		if err != nil {
+			return nil, fmt.Errorf("set media services: %w", err)
+		}
+		// Deliberately does not say WHICH service failed: naming it would
+		// confirm the existence of another salon's service ID.
+		if n != len(serviceIDs) {
+			return nil, apperror.BadRequest("INVALID_SERVICE_ID",
+				"One or more services do not belong to your salon")
+		}
+	}
+
+	if err := s.repo.SetMediaServices(ctx, mediaID, serviceIDs); err != nil {
+		return nil, fmt.Errorf("set media services: %w", err)
+	}
+
+	resp := toMediaResponse(item)
+	resp.ServiceIDs = serviceIDs
+	return &resp, nil
 }
 
 // GetMyPortfolio returns the portfolio for the authenticated artist.
@@ -204,6 +317,9 @@ func (s *Service) GetProductPhotos(ctx context.Context, productID uuid.UUID) (*P
 		return nil, fmt.Errorf("get product photos: %w", err)
 	}
 
+	// No service tags here: a product photo shows merchandise, not a
+	// service being performed, so media_services is not consulted for
+	// product-owned media. ServiceIDs stays an empty slice.
 	photos := make([]MediaResponse, 0, len(items))
 	for _, item := range items {
 		photos = append(photos, toMediaResponse(item))

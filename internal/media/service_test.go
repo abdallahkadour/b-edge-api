@@ -38,6 +38,18 @@ type mockRepo struct {
 	productSalonID    uuid.UUID
 	productSalonErr   error
 	productReorderErr error
+
+	// Service tags (migration 028)
+	salonID           uuid.UUID
+	salonErr          error
+	salonServiceCount int
+	salonServiceErr   error
+	setServicesErr    error
+	serviceIDsByMedia map[uuid.UUID][]uuid.UUID
+	serviceIDsErr     error
+	// captured args for assertions
+	lastSetServicesMediaID uuid.UUID
+	lastSetServiceIDs      []uuid.UUID
 }
 
 func (m *mockRepo) GetArtistIDByUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
@@ -87,6 +99,20 @@ func (m *mockRepo) ReorderProduct(_ context.Context, _ uuid.UUID, _ []uuid.UUID)
 
 func (m *mockRepo) GetProductSalonID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
 	return m.productSalonID, m.productSalonErr
+}
+func (m *mockRepo) GetSalonIDByArtistID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
+	return m.salonID, m.salonErr
+}
+func (m *mockRepo) CountSalonServices(_ context.Context, _ uuid.UUID, _ []uuid.UUID) (int, error) {
+	return m.salonServiceCount, m.salonServiceErr
+}
+func (m *mockRepo) SetMediaServices(_ context.Context, mediaID uuid.UUID, serviceIDs []uuid.UUID) error {
+	m.lastSetServicesMediaID = mediaID
+	m.lastSetServiceIDs = serviceIDs
+	return m.setServicesErr
+}
+func (m *mockRepo) GetServiceIDsByMedia(_ context.Context, _ []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	return m.serviceIDsByMedia, m.serviceIDsErr
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -495,4 +521,189 @@ func TestReorderProductPhotos_OtherSalonsProduct_Denied(t *testing.T) {
 		ReorderRequest{IDs: []string{uuid.New().String()}})
 
 	assert.Error(t, err)
+}
+
+// ── SetMediaServices (migration 028) ──────────────────────────────────────────
+//
+// Three ownership facts must line up: the caller is an artist, the photo is
+// theirs and is artist-owned, and every service belongs to their salon.
+// None of that is expressible as a database constraint, so each rule gets
+// its own test.
+
+func artistPhoto(artistID uuid.UUID) *MediaItem {
+	return &MediaItem{
+		ID: uuid.New(), OwnerType: OwnerTypeArtist, OwnerID: artistID,
+		URL: "https://res.cloudinary.com/x/a.jpg", Type: "photo",
+	}
+}
+
+func TestSetMediaServices_Success(t *testing.T) {
+	artistID := uuid.New()
+	photo := artistPhoto(artistID)
+	svcID := uuid.New()
+	repo := &mockRepo{
+		artistID: artistID, getByIDItem: photo,
+		salonID: uuid.New(), salonServiceCount: 1,
+	}
+	svc := NewService(repo)
+
+	got, err := svc.SetMediaServices(context.Background(), uuid.New(), photo.ID,
+		SetMediaServicesRequest{ServiceIDs: []string{svcID.String()}})
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, photo.ID, repo.lastSetServicesMediaID)
+	assert.Equal(t, []uuid.UUID{svcID}, repo.lastSetServiceIDs)
+	assert.Equal(t, []uuid.UUID{svcID}, got.ServiceIDs)
+}
+
+// An empty list is how a photo gets untagged - it must reach the repository
+// as a real (empty) replace, not be skipped as a no-op.
+func TestSetMediaServices_EmptyList_ClearsTags(t *testing.T) {
+	artistID := uuid.New()
+	photo := artistPhoto(artistID)
+	repo := &mockRepo{artistID: artistID, getByIDItem: photo}
+	svc := NewService(repo)
+
+	got, err := svc.SetMediaServices(context.Background(), uuid.New(), photo.ID,
+		SetMediaServicesRequest{ServiceIDs: nil})
+
+	require.NoError(t, err)
+	assert.Equal(t, photo.ID, repo.lastSetServicesMediaID, "clearing must still hit the repo")
+	assert.Empty(t, got.ServiceIDs)
+}
+
+// A service belonging to someone else's salon is rejected, and the error
+// deliberately does not name which one - naming it would confirm that
+// another salon's service ID exists.
+func TestSetMediaServices_ForeignService_Rejected(t *testing.T) {
+	artistID := uuid.New()
+	photo := artistPhoto(artistID)
+	repo := &mockRepo{
+		artistID: artistID, getByIDItem: photo,
+		salonID: uuid.New(),
+		// Two requested, only one belongs to this salon.
+		salonServiceCount: 1,
+	}
+	svc := NewService(repo)
+
+	_, err := svc.SetMediaServices(context.Background(), uuid.New(), photo.ID,
+		SetMediaServicesRequest{ServiceIDs: []string{uuid.NewString(), uuid.NewString()}})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "INVALID_SERVICE_ID", appErr.Code)
+	assert.NotContains(t, appErr.Message, "does not exist",
+		"the message must not reveal whether a foreign service ID is real")
+	assert.Nil(t, repo.lastSetServiceIDs, "nothing may be written when validation fails")
+}
+
+// Another artist's photo is a 404, not a 403 - same posture as billing
+// invoices, so IDs cannot be enumerated by watching the status code.
+func TestSetMediaServices_AnotherArtistsPhoto_Returns404(t *testing.T) {
+	callerArtistID := uuid.New()
+	someoneElses := artistPhoto(uuid.New())
+	repo := &mockRepo{artistID: callerArtistID, getByIDItem: someoneElses}
+	svc := NewService(repo)
+
+	_, err := svc.SetMediaServices(context.Background(), uuid.New(), someoneElses.ID,
+		SetMediaServicesRequest{})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "MEDIA_NOT_FOUND", appErr.Code)
+	assert.Equal(t, fiber.StatusNotFound, appErr.HTTPStatus)
+}
+
+// A product photo is not taggable to a service - it shows merchandise, not
+// a service being performed.
+func TestSetMediaServices_ProductPhoto_Rejected(t *testing.T) {
+	artistID := uuid.New()
+	productPhoto := &MediaItem{
+		ID: uuid.New(), OwnerType: OwnerTypeProduct, OwnerID: uuid.New(),
+		URL: "https://res.cloudinary.com/x/p.jpg", Type: "photo",
+	}
+	repo := &mockRepo{artistID: artistID, getByIDItem: productPhoto}
+	svc := NewService(repo)
+
+	_, err := svc.SetMediaServices(context.Background(), uuid.New(), productPhoto.ID,
+		SetMediaServicesRequest{})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "MEDIA_NOT_FOUND", appErr.Code)
+}
+
+func TestSetMediaServices_MissingPhoto_Returns404(t *testing.T) {
+	repo := &mockRepo{artistID: uuid.New(), getByIDErr: ErrMediaNotFound}
+	svc := NewService(repo)
+
+	_, err := svc.SetMediaServices(context.Background(), uuid.New(), uuid.New(),
+		SetMediaServicesRequest{})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "MEDIA_NOT_FOUND", appErr.Code)
+}
+
+// ── Portfolio tags on read ────────────────────────────────────────────────────
+
+// ServiceIDs must always be a non-nil slice so JSON carries [] rather than
+// null - clients filter on it without a nil check.
+func TestGetPortfolio_UntaggedPhoto_HasEmptyNotNullServiceIDs(t *testing.T) {
+	artistID := uuid.New()
+	repo := &mockRepo{items: []*MediaItem{artistPhoto(artistID)}}
+	svc := NewService(repo)
+
+	got, err := svc.GetPortfolio(context.Background(), artistID)
+
+	require.NoError(t, err)
+	require.Len(t, got.Photos, 1)
+	assert.NotNil(t, got.Photos[0].ServiceIDs, "must be [] in JSON, never null")
+	assert.Empty(t, got.Photos[0].ServiceIDs)
+}
+
+func TestGetPortfolio_TaggedPhoto_CarriesItsServiceIDs(t *testing.T) {
+	artistID := uuid.New()
+	photo := artistPhoto(artistID)
+	svcID := uuid.New()
+	repo := &mockRepo{
+		items:             []*MediaItem{photo},
+		serviceIDsByMedia: map[uuid.UUID][]uuid.UUID{photo.ID: {svcID}},
+	}
+	svc := NewService(repo)
+
+	got, err := svc.GetPortfolio(context.Background(), artistID)
+
+	require.NoError(t, err)
+	require.Len(t, got.Photos, 1)
+	assert.Equal(t, []uuid.UUID{svcID}, got.Photos[0].ServiceIDs)
+}
+
+// Tags for a whole portfolio are loaded in one query, not one per photo.
+func TestGetPortfolio_ManyPhotos_LoadsTagsInOneCall(t *testing.T) {
+	artistID := uuid.New()
+	items := []*MediaItem{artistPhoto(artistID), artistPhoto(artistID), artistPhoto(artistID)}
+	repo := &countingTagRepo{mockRepo: mockRepo{items: items}}
+	svc := NewService(repo)
+
+	_, err := svc.GetPortfolio(context.Background(), artistID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, repo.tagCalls, "a 20-photo portfolio must not issue 20 tag queries")
+}
+
+// countingTagRepo counts GetServiceIDsByMedia calls to prove batching.
+type countingTagRepo struct {
+	mockRepo
+	tagCalls int
+}
+
+func (c *countingTagRepo) GetServiceIDsByMedia(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	c.tagCalls++
+	return c.mockRepo.GetServiceIDsByMedia(ctx, ids)
 }

@@ -71,6 +71,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	m.Delete("/product-photos/:id", handler.DeleteProductPhoto)
 	m.Delete("/:id", handler.DeletePhoto)
 	m.Patch("/:id/cover", handler.SetCover)
+	m.Put("/:id/services", handler.SetMediaServices)
 }
 
 // GetPortfolio godoc
@@ -197,6 +198,40 @@ func (h *Handler) SetCover(c *fiber.Ctx) error {
 	}
 
 	return response.NoContent(c)
+}
+
+// SetMediaServices godoc
+// @Summary      Set which services a portfolio photo depicts
+// @Description  Replaces the photo's entire tag set. Send an empty list to clear every tag. Every service must belong to the caller's salon.
+// @Tags         media
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id   path string                   true "Media ID"
+// @Param        body body SetMediaServicesRequest  true "Full desired set of service IDs"
+// @Success      200 {object} response.Body{data=MediaResponse}
+// @Failure      400 {object} response.ErrorBody "INVALID_SERVICE_ID"
+// @Failure      404 {object} response.ErrorBody "MEDIA_NOT_FOUND"
+// @Router       /media/{id}/services [put]
+func (h *Handler) SetMediaServices(c *fiber.Ctx) error {
+	mediaID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid media ID")
+	}
+
+	var req SetMediaServicesRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Invalid request body")
+	}
+
+	userID := middleware.UserIDFromContext(c)
+
+	item, err := h.svc.SetMediaServices(c.Context(), userID, mediaID, req)
+	if err != nil {
+		return err
+	}
+
+	return response.OK(c, item)
 }
 
 // Reorder godoc

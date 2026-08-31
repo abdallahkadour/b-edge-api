@@ -104,6 +104,21 @@ type MediaResponse struct {
 	Type         string    `json:"type"`
 	DisplayOrder int       `json:"display_order"`
 	CreatedAt    time.Time `json:"created_at"`
+	// ServiceIDs are the services this photo depicts (migration 028).
+	// Always present, never null - an untagged photo has an empty slice,
+	// so a client can filter on it without a nil check.
+	ServiceIDs []uuid.UUID `json:"service_ids"`
+}
+
+// SetMediaServicesRequest is the body for PUT /api/v1/media/:id/services.
+//
+// The full desired tag set, not a delta. An empty or omitted list clears
+// every tag, which is how a photo gets untagged - see
+// Repository.SetMediaServices for why replace beats add/remove here.
+type SetMediaServicesRequest struct {
+	// ServiceIDs is capped to keep one photo from being tagged to an
+	// entire menu, which would make the customer-side filter meaningless.
+	ServiceIDs []string `json:"service_ids" validate:"omitempty,max=20,dive,uuid4"`
 }
 
 // PortfolioResponse is the response for GET /api/v1/media/portfolio/:artist_id.

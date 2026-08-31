@@ -39,6 +39,36 @@ type Repository interface {
 	// ids is the desired order: ids[0] gets display_order=0, ids[1] gets 1, etc.
 	Reorder(ctx context.Context, artistID uuid.UUID, ids []uuid.UUID) error
 
+	// ── Service tags (migration 028) ──────────────────────────────────────
+
+	// GetSalonIDByArtistID resolves an artist to the salon whose service
+	// menu they work from. Needed because services are salon-scoped while
+	// portfolio media is artist-scoped, so validating "is this service
+	// mine?" requires crossing that boundary.
+	GetSalonIDByArtistID(ctx context.Context, artistID uuid.UUID) (uuid.UUID, error)
+
+	// CountSalonServices returns how many of the given service IDs belong
+	// to the salon. The caller compares against len(serviceIDs) to detect
+	// any that are missing or belong to someone else - one query rather
+	// than one per service, and it deliberately does not report WHICH id
+	// failed, so a caller cannot probe for the existence of another
+	// salon's service IDs.
+	CountSalonServices(ctx context.Context, salonID uuid.UUID, serviceIDs []uuid.UUID) (int, error)
+
+	// SetMediaServices replaces a photo's entire tag set in one
+	// transaction. Passing an empty slice clears every tag.
+	//
+	// Replace rather than add/remove: the UI edits a checkbox group and
+	// submits the result, so a diff-based API would need the client to
+	// track what changed and would race two tabs against each other. A
+	// full replace is idempotent and has one obvious meaning.
+	SetMediaServices(ctx context.Context, mediaID uuid.UUID, serviceIDs []uuid.UUID) error
+
+	// GetServiceIDsByMedia returns the tagged service IDs for each of the
+	// given media IDs, keyed by media ID. Media with no tags are absent
+	// from the map rather than present with an empty slice.
+	GetServiceIDsByMedia(ctx context.Context, mediaIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
+
 	// ── Products ──────────────────────────────────────────────────────────
 	// Deliberately separate methods rather than generalising the ones above
 	// to take an ownerType parameter - the artist portfolio path (implicit
@@ -279,6 +309,112 @@ func (r *pgRepo) ReorderProduct(ctx context.Context, productID uuid.UUID, ids []
 	}
 
 	return tx.Commit(ctx)
+}
+
+// ── Service tags (migration 028) ─────────────────────────────────────────────
+
+// GetSalonIDByArtistID resolves an artist to their salon.
+func (r *pgRepo) GetSalonIDByArtistID(ctx context.Context, artistID uuid.UUID) (uuid.UUID, error) {
+	var salonID *uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT salon_id FROM artists WHERE id = $1`, artistID,
+	).Scan(&salonID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrArtistNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get salon id by artist id: %w", err)
+	}
+	// An artist with no salon has no service menu to tag against. Same
+	// error as a missing artist: the caller's only sensible response to
+	// either is "you cannot tag services".
+	if salonID == nil {
+		return uuid.Nil, ErrArtistNotFound
+	}
+	return *salonID, nil
+}
+
+// CountSalonServices counts how many of serviceIDs belong to salonID.
+func (r *pgRepo) CountSalonServices(ctx context.Context, salonID uuid.UUID, serviceIDs []uuid.UUID) (int, error) {
+	if len(serviceIDs) == 0 {
+		return 0, nil
+	}
+	var n int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM services
+		WHERE salon_id = $1 AND id = ANY($2)`,
+		salonID, serviceIDs,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count salon services: %w", err)
+	}
+	return n, nil
+}
+
+// SetMediaServices replaces a photo's tag set atomically.
+//
+// Delete-then-insert inside a transaction rather than a diff: the whole
+// operation is one desired state, and a partial application (old tags
+// removed, new ones not yet written) must never be observable.
+func (r *pgRepo) SetMediaServices(ctx context.Context, mediaID uuid.UUID, serviceIDs []uuid.UUID) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set media services: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM media_services WHERE media_id = $1`, mediaID,
+	); err != nil {
+		return fmt.Errorf("set media services: clear: %w", err)
+	}
+
+	for _, sid := range serviceIDs {
+		// ON CONFLICT DO NOTHING absorbs a caller that sent the same
+		// service twice in one request, which is a UI slip rather than an
+		// error worth rejecting.
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO media_services (media_id, service_id)
+			VALUES ($1, $2)
+			ON CONFLICT (media_id, service_id) DO NOTHING`,
+			mediaID, sid,
+		); err != nil {
+			return fmt.Errorf("set media services: insert %s: %w", sid, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetServiceIDsByMedia returns tagged service IDs keyed by media ID.
+func (r *pgRepo) GetServiceIDsByMedia(ctx context.Context, mediaIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	out := make(map[uuid.UUID][]uuid.UUID)
+	if len(mediaIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT media_id, service_id
+		FROM media_services
+		WHERE media_id = ANY($1)
+		ORDER BY created_at ASC`,
+		mediaIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get service ids by media: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var mediaID, serviceID uuid.UUID
+		if err := rows.Scan(&mediaID, &serviceID); err != nil {
+			return nil, fmt.Errorf("scan media service row: %w", err)
+		}
+		out[mediaID] = append(out[mediaID], serviceID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get service ids by media rows: %w", err)
+	}
+	return out, nil
 }
 
 // GetProductSalonID resolves a product's owning salon directly against the

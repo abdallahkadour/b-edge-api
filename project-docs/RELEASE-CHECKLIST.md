@@ -4,6 +4,55 @@
 > flow (see `b-edge-web/project-docs/E2E-TEST-PLAN.md` for the full detail —
 > this document is the summary view, not a replacement). Verified against
 > real code and real live behavior throughout, not asserted from memory.
+>
+> **Updated 2026-08-31.** Four sprints of
+> `B-Edge-Feature-Feasibility-Assessment-v1.md`'s plan shipped since. What
+> that changes for release readiness is in the new section immediately
+> below; the original assessment follows unchanged beneath it.
+
+---
+
+## Added since first writing (2026-08-30/31)
+
+**Closed one thing this document did not list as a risk, because it did not
+exist yet when this was written:** `internal/billing` shipped on Aug 29 with
+**zero tests** — the only substantial domain without any, and the one
+deciding who gets locked out. It now has 59 service-layer tests, with
+`DeriveStatus` and `ensureInvoicesUpTo` at 100%. Subscriptions are the entire
+revenue model in a market without card rails, so this was disproportionately
+serious for its size.
+
+**Changed a launch-relevant policy.** Subscription enforcement windows moved
+from 7/21 days to **21/45** (decision D2, 2026-08-31). An artist is now
+visible and bookable for three weeks after a missed payment, hidden and
+unbookable from 21–45 days, and blocked from editing at 45+. The reasoning is
+in `internal/pkg/subscription/status.go`'s `GraceDays` comment; the short
+version is that every published dunning benchmark assumes an automatic card
+retry, which B-Edge does not have, and that **no dunning reminder is sent at
+all yet** — so the old timings punished artists for a missing feature of ours.
+
+> ⚠️ **These numbers assume reminders do not exist. Revisit them once Twilio
+> is live**, at which point 21 days is arguably generous.
+
+**Shipped and verified live:** customer-facing open/closed status per store,
+store map pins with one-tap directions, portfolio photos tagged to bookable
+services with a customer-side filter, portfolio reordering, and crawlable
+share-link previews (`GET /a/:handle`).
+
+**New near-term blocker, in addition to WhatsApp.** Share previews work on
+localhost and will silently do nothing in production until the reverse proxy
+routes `/a/*` to the Go API rather than the static bundle. Nothing errors when
+this is wrong — the preview simply stays blank. See
+`B-Edge-Share-Previews-Decision-v1.md`.
+
+**Two known-wrong billing behaviours are pinned by tests, not fixed**, because
+both are product decisions rather than defects: unpaid months stack one
+invoice each (contradicting the spec's claim of only ever one outstanding),
+and month-end billing dates drift forward permanently because Go's `AddDate`
+normalizes rather than clamps (Jan 31 → Mar 3). Anyone billed on the 29th–31st
+is affected.
+
+---
 
 ## Done, verified live this session
 

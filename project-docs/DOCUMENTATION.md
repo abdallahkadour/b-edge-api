@@ -1,10 +1,43 @@
 # B-Edge — Documentation Index
 
-> 53 documents on disk (51 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`) — recounted directly from disk on Aug 30, 2026 after the previous figure was found to have drifted. Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
-> Last updated: August 30, 2026 · **Billing UI and enforcement both shipped** (`401db07`, `06e5e9b`, `0cd82f8`, `73c3cd8`) — the index previously said neither was built. `internal/billing` remains the only substantial domain with zero test coverage. New: `B-Edge-Feature-Feasibility-Assessment-v1.md` under Business and Market.
+> 54 documents on disk (52 in `b-edge-api/project-docs/` including this index + 2 in `b-edge-web/project-docs/`). Read `CLAUDE-v6.md` first in any new chat — it supersedes all earlier CLAUDE.md versions.
+>
+> **Last updated: August 31, 2026 — four sprints of the feasibility plan shipped.** Schema is now **v28** (migrations 026 USD-only, 027 store location, 028 media↔service tags). Two new leaf packages under `internal/pkg/`, one new domain (`internal/share`), and `internal/billing` is no longer untested — it was the only substantial domain with zero coverage and now has 59 service-layer tests. See "What shipped Aug 30–31" below before assuming anything in an older doc is current.
+>
+> Previously updated: August 30, 2026 · Billing UI and enforcement both shipped (`401db07`, `06e5e9b`, `0cd82f8`, `73c3cd8`); `B-Edge-Feature-Feasibility-Assessment-v1.md` added.
 > Previously updated: August 29, 2026 · **Schema v22 + migrations 023–025 (`plans`, `subscriptions`, `invoices`)** · 13 backend domains live (12 route-bearing + audit), including the new `internal/billing` domain — full subscription billing backend (plans, subscriptions, invoices, admin confirm/void), not just the plan catalogue. All three billing UI screens are now also built and committed: `/pricing` (public), `/dashboard/billing` (artist), and the admin Billing/Plans/Artists tabs — see `B-Edge-Monetization-Implementation-Spec-v1.md`.
 >
 > **Schema version corrected Aug 29, 2026:** this header said v19 through the Aug 21/22 passes, but `db/migrations/` actually ends at `022_order_delivery_location`. Migrations 020 (`product_stock_quantity`), 021 (`product_photo_gallery`), and 022 (`order_delivery_location`) all landed without a doc pass. Only the version number here is corrected — the three migrations' contents have **not** been cross-checked against `B-Edge-PRD-v7-Final.docx`, `B-Edge-ERD.html`, or the UI spec, so treat product/order docs as potentially behind by those three changes.
+
+---
+
+## What shipped Aug 30–31, 2026
+
+Four sprints of `B-Edge-Feature-Feasibility-Assessment-v1.md`'s plan. Listed here
+because several older docs describe the *previous* state and have not all been
+rewritten — this is the diff to hold in mind while reading them.
+
+| Area | What changed | Where to read |
+|---|---|---|
+| **Billing tests** | `internal/billing` went from 0 to 59 service-layer tests. `DeriveStatus` and `ensureInvoicesUpTo` at 100%. No DB test infrastructure exists, so repository tests remain deliberately out of scope. | `B-Edge-Monetization-Implementation-Spec-v1.md` |
+| **Enforcement windows** | **Changed from 7/21 days to 21/45** (decision D2). Grace 0–21 (full access), past_due 21–45 (hidden + unbookable, still editable), suspended 45+ (also no writes). The policy now lives in one function, `subscription.Enforce`. | `internal/pkg/subscription/status.go` — the reasoning is in the `GraceDays` doc comment |
+| **`internal/pkg/subscription`** | New leaf package holding the subscription state machine. Exists because `middleware` cannot import `billing` (import cycle) and had been hand-copying the threshold *and* re-implementing the derivation. | package doc comment |
+| **`internal/pkg/openinghours`** | New leaf package resolving whether a store is open. Extracted from `GetAvailableSlots` step 1, which was the only place the algorithm existed. | package doc comment |
+| **Open/closed status** | `discovery.StoreCard` gains `open_status`, `phone`, `latitude`, `longitude`. Derived per request, never stored. An unresolvable status reports `unknown` and renders **no badge**, deliberately not "Closed". | `E2E-TEST-PLAN.md` Suite 9 |
+| **Store map pins** | Migration 027. `PATCH /artists/stores/:id` accepts coordinates; half a pin is rejected, and `clear_location` exists because COALESCE cannot express "remove". | `E2E-TEST-PLAN.md` Suite 9 |
+| **Photo→service tags** | Migration 028 + `PUT /media/:id/services`. Portfolio photos tag to services; the customer gallery filters by them. | `E2E-TEST-PLAN.md` Suite 10 |
+| **`internal/share`** | New domain. `GET /a/:handle` returns crawlable Open Graph tags for shared links — previously every shared link previewed as a bare URL. | `B-Edge-Share-Previews-Decision-v1.md` |
+| **USD only** | Migration 026 pins currency at the database. Closes the question `B-Edge-Monetization-Implementation-Spec-v1.md` §11 left open. | migration header |
+
+**Two known-wrong things pinned by characterization tests, not fixed** — both are
+product decisions, both live in `internal/billing`:
+
+1. `ensureInvoicesUpTo`'s doc comment (and the monetization spec §12) claim an
+   unpaid subscription never accumulates more than one outstanding invoice. **It
+   does** — four unpaid months produce five invoices.
+2. Go's `AddDate` normalizes rather than clamps, so a period starting Jan 31 rolls
+   to **Mar 3**, not Feb 28. The billing day then shifts forward permanently.
+   Anyone on the 29th–31st is affected.
 
 ---
 
@@ -47,6 +80,7 @@
 | `B-Edge-INFRA.docx` | Infrastructure design — EC2, Docker, Kubernetes, PostgreSQL, deployment topology. |
 | `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode. Only the travel-buffer step has been cross-checked against real code so far (confirmed exact match) — the rest of the 7-step algorithm not yet verified. Read `B-Edge-Feature-Feasibility-Assessment-v1.md` §2.1/§2.3 before adding range durations, resource scheduling or split bookings to this algorithm — all four features modify the same calculation and adding them as incremental special cases is the documented failure mode. |
 | `B-Edge-Angular-PWA-Architecture-v1.docx` | **Was wrongly listed as missing until Aug 30, 2026 — it is on disk and always was** (dated May 31, 2026). Angular PWA architecture from the pre-build design phase. Not yet cross-checked against the two apps as actually built, so treat as design intent rather than current truth. |
+| `B-Edge-Share-Previews-Decision-v1.md` | **New, Aug 31, 2026.** Why shared artist links are rendered by a Go endpoint (`GET /a/:handle`, `internal/share`) rather than by Angular SSR. Records the verified problem — both PWAs are client-rendered, crawlers do not run JavaScript, and `customer-pwa/src/index.html` contained exactly three meta tags with **no `og:` or `twitter:` tag at all**, so every link an artist shared previewed as a bare URL on the channel that is B-Edge's primary distribution. Compares Angular SSR (a workspace-wide commitment with permanent build/deploy cost, adopted to serve two URL shapes to machines wanting four meta tags), a Go pre-render endpoint (chosen), and deploy-time static HTML (rejected: profiles change and a snapshot would serve stale previews with no way to invalidate). Also records the two conditions that should reopen the decision, and one thing it explicitly does not cover — **the reverse proxy must route `/a/*` to the API rather than the static bundle, which is where this silently fails in production while working perfectly on localhost.** |
 
 ---
 
@@ -67,7 +101,7 @@
 | File | Description |
 |---|---|
 | `RELEASE-CHECKLIST.md` | **New, Aug 22, 2026.** The durable "what's remaining for first release" answer — three sections: what's done and verified live this session (with pointers into `E2E-TEST-PLAN.md`), what's deliberate design rather than a gap (payment model, one-salon-per-artist, VIP badge deferred, no scheduler), and what's genuinely unassessed by any engineering work so far (hosting, SSL, prod secrets, backups, monitoring, load testing, legal) — stated plainly as unassessed rather than implied fine. The one near-term blocker it flags: WhatsApp delivery, see `WHATSAPP-SETUP.md` under Infrastructure and Operations. |
-| `E2E-TEST-PLAN.md` *(in `b-edge-web/project-docs/`, not `b-edge-api`)* | **Aug 22, 2026 — closing session; all 7 suites live-executed, 12 real bugs found and fixed total.** UI-driven end-to-end test plan for a human tester — every real route in all 12 backend domains (~90 endpoints) mapped to the exact UI element that triggers it, 7 full Given/When/Then journeys, an exhaustive "click everything, try every boundary value" stress pass (the one deliberately-unexecuted piece, given its lower bug-yield against real journeys). Originally found 5 endpoints with no UI path at all; **all 5 are now closed**. Live execution across six passes found and fixed 12 real bugs: a registration flow bypassing admin review; a dead password-reset delivery path; a freeze/unfreeze endpoint 500ing on every call; an unreachable review "show" toggle; no cancel action anywhere in artist-dashboard; a product-photo-upload race; an over-restrictive Clients CRM filter; three related "nonsensical timing" bugs (approving/completing/no-showing a booking whose appointment time didn't make sense for that action); abandoned booking holds permanently blocking real availability (fixed with self-healing lazy expiry, no scheduler needed) — and, in the closing session, **the self-service onboarding flow never linking a new artist to their own store** (every self-onboarded artist was invisible and unbookable) and **`special_requests` never rendered anywhere in artist-dashboard** despite being fully present in the API (a customer's allergy/access note was invisible to the artist). The closing session also built a **permanent 14-account multi-persona test roster** (`user1`-`user10`, `mkup1`-`mkup4` — not cleaned up, meant to stay) spanning 5 regions including Bekaa and Akkar, verified the cross-region travel buffer and its interaction with cancellation, and proved the concurrency model (atomic guarded `UPDATE`, no `FOR UPDATE` needed) safe under 6 real concurrent approve-vs-cancel races. Two stale test-plan wording bugs also corrected. One deliberately-not-fixed gap noted: no ownership check on the artist review-list endpoint. Use this instead of writing test cases from scratch. |
+| `E2E-TEST-PLAN.md` *(in `b-edge-web/project-docs/`, not `b-edge-api`)* | **Now 11 suites. Suites 9-11 added Aug 31, 2026** (open/closed status + store map pins; portfolio-to-service tagging; share link previews) — written but **not yet human-executed**, unlike 1-8. Suite 8's setup SQL and boundary cases were corrected for the 21/45 enforcement windows; the old 7/21 fixtures would now silently test the wrong state. Suite 11 is the unusual one: it cannot be verified in a browser, because the whole feature exists for clients that do not run JavaScript — its only real acceptance test is pasting a link into WhatsApp. **Aug 22, 2026 — earlier closing session; all 7 suites live-executed, 12 real bugs found and fixed total.** UI-driven end-to-end test plan for a human tester — every real route in all 12 backend domains (~90 endpoints) mapped to the exact UI element that triggers it, 7 full Given/When/Then journeys, an exhaustive "click everything, try every boundary value" stress pass (the one deliberately-unexecuted piece, given its lower bug-yield against real journeys). Originally found 5 endpoints with no UI path at all; **all 5 are now closed**. Live execution across six passes found and fixed 12 real bugs: a registration flow bypassing admin review; a dead password-reset delivery path; a freeze/unfreeze endpoint 500ing on every call; an unreachable review "show" toggle; no cancel action anywhere in artist-dashboard; a product-photo-upload race; an over-restrictive Clients CRM filter; three related "nonsensical timing" bugs (approving/completing/no-showing a booking whose appointment time didn't make sense for that action); abandoned booking holds permanently blocking real availability (fixed with self-healing lazy expiry, no scheduler needed) — and, in the closing session, **the self-service onboarding flow never linking a new artist to their own store** (every self-onboarded artist was invisible and unbookable) and **`special_requests` never rendered anywhere in artist-dashboard** despite being fully present in the API (a customer's allergy/access note was invisible to the artist). The closing session also built a **permanent 14-account multi-persona test roster** (`user1`-`user10`, `mkup1`-`mkup4` — not cleaned up, meant to stay) spanning 5 regions including Bekaa and Akkar, verified the cross-region travel buffer and its interaction with cancellation, and proved the concurrency model (atomic guarded `UPDATE`, no `FOR UPDATE` needed) safe under 6 real concurrent approve-vs-cancel races. Two stale test-plan wording bugs also corrected. One deliberately-not-fixed gap noted: no ownership check on the artist review-list endpoint. Use this instead of writing test cases from scratch. |
 | `B-Edge-Test-Strategy-v1.docx` | Unit vs integration tests, coverage targets, CI config. |
 | `B-Edge-Targets-vs-Actual-Analysis-v1.md` | Verified gap analysis comparing PRD v7 / Booking Domain Spec / Technical Decisions against actual code as of Aug 7. Confirms exact-match wins (travel buffer, early-bird cutoffs), the deliberate deposit-confirm state-machine deviation, and the Phase-1 gaps that existed then. Two of those gaps (Waitlist, Product Store) have since closed — see `CLAUDE-v6.md` for what changed since this was written. Rescheduling, home-visit bookings, real discount system, SMS fallback, admin dashboard for ops (distinct from the new artist-approval admin), and Arabic RTL are still gaps as of Aug 15. |
 | `CLAUDE-v6.md` | **CURRENT context document.** Supersedes v5. Verified directly against code on Aug 15: schema v19, 12 domains, both frontend apps' real routes, design-system migration status (artist-dashboard complete, customer-pwa partial by deliberate design). Test coverage for admin/audit/notification closed same day; cart-persistence decision made (ship as-is, no server cart); a real backend routing bug that silently broke guest booking was found and fixed. Read this first in any new chat. |
@@ -140,6 +174,11 @@
 2. `B-Edge-Targets-vs-Actual-Analysis-v1.md` for the still-open Phase 1 gaps
 3. `CLAUDE-v6.md`'s "Immediate next steps" — the Product Roadmap edit and the PRD/UI-Spec doc-sync pass are the most time-sensitive items right now
 
+**Touching subscription enforcement — who gets hidden, blocked or locked out?**
+1. `internal/pkg/subscription/status.go` is the source of truth, not any doc. `Derive` computes the state; `Enforce` says what that state permits. Both are in one leaf package precisely so the three enforcement points (middleware, booking, discovery/artist SQL) cannot drift.
+2. The `GraceDays` doc comment carries the **D2 reasoning** for why the windows are 21/45 rather than the 7/21 they started at — chiefly that B-Edge cannot auto-charge, so card-dunning timings punish latency in our own manual collection loop, and that no dunning reminder is sent yet.
+3. **Revisit the numbers once Twilio is live.** 21 days is generous precisely because nobody is currently being told they owe anything.
+
 **Benchmarking against competitors, or asked "why don't we have X"?**
 1. `B-Edge-Competitor-Analysis-v1.docx` — the feature inventory (Fresha/DINGG/Zenoti, with their strengths and their weaknesses vs B-Edge)
 2. `B-Edge-Feature-Feasibility-Assessment-v1.md` — what closing any given gap would actually cost, and which gaps are *not worth closing*. Read its §0 first: discounts genuinely don't exist, and the payments gaps are blocked by Lebanon's lack of card rails rather than by engineering capacity, so they belong outside the roadmap rather than at the bottom of it.
@@ -174,14 +213,14 @@
 | Category | Count |
 |---|---|
 | Core Product | 4 |
-| Technical Design | 13 (B-Edge-Angular-PWA-Architecture-v1.docx was on disk but unlisted) |
+| Technical Design | 14 (B-Edge-Share-Previews-Decision-v1.md added) |
 | Frontend Design | 5 (style-guide.html lives in b-edge-web) |
 | Testing, Quality & Gap Analysis | 9 (E2E-TEST-PLAN.md lives in b-edge-web; the CLAUDE-v* history is one row covering 7 files) |
 | Infrastructure & Ops | 7 |
-| Business & Market | 4 (B-Edge-Feature-Feasibility-Assessment-v1.md added) |
-| Competitor Intelligence | 7 (B-Edge-Competitor-Analysis-v1.docx was on disk all along, not missing) |
+| Business & Market | 4 |
+| Competitor Intelligence | 7 |
 | Development Reference | 1 |
-| **TOTAL ON DISK** | **53 files — 51 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
+| **TOTAL ON DISK** | **54 files — 52 in `b-edge-api/project-docs/` (incl. this index) + 2 in `b-edge-web/project-docs/`** |
 
 *Category counts are by index row, not by file: the CLAUDE-v* row covers 7 historical
 files (`CLAUDE.md`, `CLAUDE (1).md`, `CLAUDE (5).md`, `CLAUDE-v3` through `-v6`), which

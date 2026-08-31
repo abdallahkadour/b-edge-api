@@ -145,6 +145,22 @@ func Derive(planCode string, trialEndsAt, currentPeriodEnd, cancelledAt *time.Ti
 type Enforcement struct {
 	// VisibleInDiscovery - the artist appears in Discover and is reachable
 	// by direct profile link.
+	//
+	// ⚠️ NOT WIRED, AND IT DISAGREES WITH THE SQL FOR ONE STATE.
+	//
+	// Visibility is currently enforced by `subscriptionVisibleCond`, a SQL
+	// fragment duplicated in internal/discovery, internal/artist and
+	// internal/share. Nothing reads this field yet - it states the intent
+	// so the ladder is complete and reviewable in one place.
+	//
+	// Before wiring it, resolve this: that SQL lists
+	// `cancelled_at IS NOT NULL` as a VISIBLE condition, so a cancelled
+	// artist still appears on Discover today. This field says the opposite.
+	// Swapping the SQL for this function would therefore silently change
+	// behaviour for cancelled artists, which is a product decision (does
+	// leaving remove your listing immediately, or at period end?) and not
+	// a refactor. E2E-TEST-PLAN.md's billing known-gaps section has flagged
+	// this ambiguity since 2026-08-29; it is still open.
 	VisibleInDiscovery bool
 	// AcceptsNewBookings - customers can book NEW appointments. Existing
 	// confirmed bookings are always honoured regardless of this flag; a

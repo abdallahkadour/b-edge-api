@@ -14,7 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/abdallahkadour/b-edge-api/internal/inbox"
 	"go.uber.org/zap"
 )
 
@@ -42,16 +45,21 @@ type PendingNotification struct {
 	// that case.
 	UserID         *string
 	RecipientPhone *string
-	BookingID    *string
-	TemplateName string
-	Channel      string
-	Payload      []byte
-	Attempts     int
+	BookingID      *string
+	TemplateName   string
+	Channel        string
+	Payload        []byte
+	Attempts       int
 }
 
 // Worker polls the notifications table and sends WhatsApp messages.
 type Worker struct {
-	db     *pgxpool.Pool
+	db *pgxpool.Pool
+	// inbox files in-app alerts when a message is permanently
+	// undeliverable. The outbound queue and the in-app feed are separate
+	// systems (see internal/inbox's package comment); this is the one
+	// place they meet.
+	inbox  inbox.Repository
 	log    *zap.Logger
 	client *http.Client
 }
@@ -60,6 +68,7 @@ type Worker struct {
 func NewWorker(db *pgxpool.Pool, log *zap.Logger) *Worker {
 	return &Worker{
 		db:     db,
+		inbox:  inbox.NewRepository(db),
 		log:    log.With(zap.String("module", "notification_worker")),
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
@@ -340,6 +349,19 @@ func (w *Worker) markFailed(ctx context.Context, n *PendingNotification, errMsg 
 			zap.String("notification_id", n.ID),
 			zap.Error(err),
 		)
+		return
+	}
+
+	// A permanently undeliverable message is the failure that actually
+	// costs someone something: the customer was never told, and until now
+	// nobody found out. Surface it to the artist in their notification
+	// centre so it becomes a phone call rather than a no-show.
+	//
+	// Best-effort and after the fact: the notification row is already
+	// correctly marked dead, and failing to raise the alert must not undo
+	// that or stall the worker.
+	if status == "dead" {
+		w.alertArtistOfDeadLetter(ctx, n, errMsg)
 	}
 }
 
@@ -363,4 +385,62 @@ func buildMessageBody(templateName string, payload []byte) (string, error) {
 
 	// Fallback - use template name as message
 	return templateName, nil
+}
+
+// alertArtistOfDeadLetter files an in-app notification telling the artist a
+// message to their customer could not be delivered.
+//
+// Resolved through the booking, because the dead notification's own user_id
+// is the CUSTOMER - who, for a guest booking, has no account and no inbox.
+// The person who needs to act is the artist, and they are only reachable
+// via the booking.
+//
+// Notifications with no booking_id (a customer OTP, a password reset) have
+// no artist to tell and are skipped: nobody in the product owns that
+// failure, which is itself worth knowing when reading the Twilio setup
+// runbook.
+func (w *Worker) alertArtistOfDeadLetter(ctx context.Context, n *PendingNotification, errMsg string) {
+	if n.BookingID == nil || *n.BookingID == "" {
+		return
+	}
+
+	var artistUserID uuid.UUID
+	var customerName string
+	err := w.db.QueryRow(ctx, `
+		SELECT au.id, COALESCE(cu.name, 'a customer')
+		FROM bookings b
+		JOIN artists a  ON a.id = b.artist_id
+		JOIN users   au ON au.id = a.user_id
+		LEFT JOIN users cu ON cu.id = b.customer_id
+		WHERE b.id = $1`, *n.BookingID,
+	).Scan(&artistUserID, &customerName)
+	if err != nil {
+		// Includes pgx.ErrNoRows for a deleted booking. Nothing to alert.
+		return
+	}
+
+	title := "A customer could not be notified"
+	body := fmt.Sprintf(
+		"We could not deliver a WhatsApp message to %s. They may not know about a change to their booking - please contact them directly. (%s)",
+		customerName, errMsg,
+	)
+	link := "/dashboard/bookings"
+	// One group key per artist, so a batch of failures collapses into a
+	// single "customers could not be notified" row rather than flooding
+	// the feed - which is exactly what would have happened to the 58 dead
+	// messages that motivated this.
+	groupKey := "delivery_failed"
+
+	if err := w.inbox.Create(ctx, inbox.CreateParams{
+		UserID:   artistUserID,
+		Kind:     inbox.KindDeliveryFailed,
+		Level:    inbox.LevelActionRequired,
+		Title:    title,
+		Body:     &body,
+		Link:     &link,
+		GroupKey: &groupKey,
+	}); err != nil {
+		w.log.Error("notification worker: could not file delivery-failure alert",
+			zap.String("notification_id", n.ID), zap.Error(err))
+	}
 }

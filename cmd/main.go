@@ -25,6 +25,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/customerauth"
 	"github.com/abdallahkadour/b-edge-api/internal/discovery"
+	"github.com/abdallahkadour/b-edge-api/internal/inbox"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
@@ -149,6 +150,10 @@ func main() {
 	// /api/v1, since this serves HTML to social crawlers rather than JSON
 	// to a client. See project-docs/B-Edge-Share-Previews-Decision-v1.md.
 	share.RegisterRoutes(app, pool, logger)
+	// In-app notification centre. Distinct from internal/notification,
+	// which is the outbound WhatsApp queue - see internal/inbox's package
+	// comment for why the two are separate.
+	inbox.RegisterRoutes(app, pool, logger)
 	earnings.RegisterRoutes(app, pool, logger)
 	product.RegisterRoutes(app, pool, logger)
 	media.RegisterRoutes(app, pool, logger)

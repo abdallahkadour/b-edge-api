@@ -71,6 +71,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	b.Patch("/:id/deposit-received", handler.MarkDepositReceived)
 	b.Patch("/:id/confirm-deposit", handler.ConfirmDeposit)
 	b.Patch("/:id/confirm-payment", handler.ConfirmDepositReceived)
+	b.Patch("/:id/refunded", middleware.RequireRole("artist", "admin"), handler.MarkRefunded)
 	b.Patch("/:id/cancel", handler.CancelBooking)
 	b.Patch("/:id/complete", handler.CompleteBooking)
 	b.Patch("/:id/no-show", handler.MarkNoShow)
@@ -317,6 +318,50 @@ func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 		return err
 	}
 
+	return response.OK(c, booking)
+}
+
+// MarkRefundedRequest is the optional body for the refunded endpoint.
+type MarkRefundedRequest struct {
+	Reference *string `json:"reference"`
+}
+
+// MarkRefunded godoc
+// @Summary      Record that an owed refund has been paid (artist only)
+// @Description  Transitions refund_due to refunded. Refunds in Lebanon are
+// @Description  out-of-band bank transfers, so this records the artist's own
+// @Description  assertion that the money was sent - there is no rail to verify
+// @Description  it against. Without this refund_due is terminal and the refund
+// @Description  alert in the notification centre can never be cleared.
+// @Description  The optional reference is the artist's own note (an OMT or Whish
+// @Description  code) and is never shown to the customer.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Booking UUID"
+// @Param        body body MarkRefundedRequest false "Optional reference note"
+// @Success      200 {object} response.Body{data=BookingResponse}
+// @Failure      409 {object} response.ErrorBody "BOOKING_NOT_REFUND_DUE"
+// @Router       /bookings/{id}/refunded [patch]
+func (h *Handler) MarkRefunded(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+
+	// Optional body, same as confirm-payment above.
+	var req MarkRefundedRequest
+	if len(c.Body()) > 0 {
+		if err := c.BodyParser(&req); err != nil {
+			return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+		}
+	}
+
+	booking, err := h.svc.MarkRefunded(c.Context(), bookingID, middleware.UserIDFromContext(c), req.Reference)
+	if err != nil {
+		return err
+	}
 	return response.OK(c, booking)
 }
 

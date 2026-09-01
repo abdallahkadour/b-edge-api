@@ -985,6 +985,21 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, reque
 	}
 
 	b.Status = StatusConfirmed
+
+	// This route used to announce NOTHING. Both ConfirmDeposit and
+	// ConfirmDepositReceived reach `confirmed`, but only the latter told
+	// the customer - so whether they learned their booking was confirmed,
+	// and (since the calendar link rides on the same message) whether they
+	// could add it to their calendar, depended on which button the artist
+	// pressed. The two-step route is the partial-payment path, which is
+	// still a real confirmation the moment it completes.
+	//
+	// Found by enumerating the state machine, not by a test. See
+	// B-Edge-Booking-State-Machine-Matrix-v1.md section 5.1.
+	if customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID); ctxErr == nil {
+		s.announceConfirmed(ctx, b, customerName, serviceName)
+	}
+
 	return toResponse(b), nil
 }
 
@@ -1078,20 +1093,65 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
 	if ctxErr == nil {
-		message := fmt.Sprintf(
-			"Hi %s! You're all confirmed for %s on %s. See you then!",
-			customerName, serviceName, notificationTimeLabel(b.StartTime),
-		)
-		// The calendar link rides on the CONFIRMED message, not the
-		// approved one. An approved booking whose deposit never arrives
-		// expires, and putting that in someone's calendar first would
-		// leave a ghost appointment they then have to clear themselves.
-		if b.CalendarToken != nil && *b.CalendarToken != "" {
-			message += fmt.Sprintf(" Add it to your calendar: %s/c/%s", apiPublicURL, *b.CalendarToken)
-		}
-		s.enqueueNotification(ctx, bookingID, b.CustomerID, "booking_confirmed", message)
+		s.announceConfirmed(ctx, b, customerName, serviceName)
 	}
 
+	return toResponse(b), nil
+}
+
+// MarkRefunded records that the artist has paid an owed refund.
+//
+// Closes a loop that previously had no end. CancelBooking(refundDue=true)
+// wrote `refund_due`, and nothing could ever transition out of it: the
+// `refunded` status existed in the schema but was written by nothing, and
+// CancelBooking's own guard excluded refund_due. The artist had no way to
+// say "I sent the money", so the notification centre's refund_due alert was
+// unresolvable by construction. See
+// B-Edge-Booking-State-Machine-Matrix-v1.md section 5.2.
+//
+// Deliberately no customer notification. The customer is told about the
+// cancellation when it happens; a second message announcing an out-of-band
+// bank transfer they either have or have not received would raise more
+// questions than it answers.
+func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string) (*BookingResponse, error) {
+	if reference != nil && len(*reference) > 255 {
+		return nil, apperror.BadRequest("REFERENCE_TOO_LONG", "Reference note must be 255 characters or fewer")
+	}
+
+	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+		}
+		return nil, fmt.Errorf("mark refunded: get booking: %w", err)
+	}
+
+	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
+	if err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		}
+		return nil, fmt.Errorf("mark refunded: resolve artist: %w", err)
+	}
+	if b.ArtistID != requesterArtistID {
+		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+	}
+
+	if b.Status != StatusRefundDue {
+		return nil, apperror.Conflict("BOOKING_NOT_REFUND_DUE", "Only bookings with a refund outstanding can be marked refunded")
+	}
+
+	if err := s.repo.MarkRefunded(ctx, bookingID, reference); err != nil {
+		if errors.Is(err, ErrBookingNotRefundDue) {
+			return nil, apperror.Conflict("BOOKING_NOT_REFUND_DUE", "Only bookings with a refund outstanding can be marked refunded")
+		}
+		return nil, fmt.Errorf("mark refunded: %w", err)
+	}
+
+	b.Status = StatusRefunded
+	if reference != nil {
+		b.DepositReference = reference
+	}
 	return toResponse(b), nil
 }
 
@@ -1446,6 +1506,38 @@ var apiPublicURL = func() string {
 	}
 	return "http://localhost:3000"
 }()
+
+// announceConfirmed tells the customer their booking is confirmed.
+//
+// Shared by BOTH routes to `confirmed` on purpose. Attaching it to one call
+// site is exactly how it came to fire on ConfirmDepositReceived and not on
+// ConfirmDeposit; anything wired to "the booking became confirmed" belongs
+// here rather than at a caller.
+//
+// A booking whose appointment has already passed is confirmed silently. The
+// bookkeeping is legitimate - an artist reconciling a bank transfer that
+// landed late still needs to record it - but "You're all confirmed for last
+// Tuesday. See you then!" is not, and neither is a calendar link for a date
+// in the past. Mirrors ApproveBooking's BOOKING_TIME_PASSED reasoning, which
+// refuses the same nonsense one step earlier.
+func (s *Service) announceConfirmed(ctx context.Context, b *Booking, customerName, serviceName string) {
+	if b.StartTime.Before(time.Now()) {
+		return
+	}
+
+	message := fmt.Sprintf(
+		"Hi %s! You're all confirmed for %s on %s. See you then!",
+		customerName, serviceName, notificationTimeLabel(b.StartTime),
+	)
+	// The calendar link rides on the CONFIRMED message, never the approved
+	// one. An approved booking whose deposit never arrives expires, and
+	// putting that in someone's calendar first would leave a ghost
+	// appointment they then have to clear themselves.
+	if b.CalendarToken != nil && *b.CalendarToken != "" {
+		message += fmt.Sprintf(" Add it to your calendar: %s/c/%s", apiPublicURL, *b.CalendarToken)
+	}
+	s.enqueueNotification(ctx, b.ID, b.CustomerID, "booking_confirmed", message)
+}
 
 // enqueueNotification is a best-effort wrapper around
 // repo.EnqueueNotification: a queuing failure must never fail the booking

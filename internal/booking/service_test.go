@@ -84,6 +84,8 @@ type mockRepo struct {
 	approveBookingErr                     error
 	approveBookingDepositDeadline         time.Time
 	approveBookingCalendarToken           string
+	markRefundedErr                       error
+	markRefundedReference                 *string
 	confirmDepositErr                     error
 	cancelBookingErr                      error
 	completeBookingErr                    error
@@ -205,6 +207,10 @@ func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, depositDeadlin
 }
 func (m *mockRepo) ConfirmDeposit(_ context.Context, _ uuid.UUID) error {
 	return m.confirmDepositErr
+}
+func (m *mockRepo) MarkRefunded(_ context.Context, _ uuid.UUID, reference *string) error {
+	m.markRefundedReference = reference
+	return m.markRefundedErr
 }
 func (m *mockRepo) CancelBooking(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
 	return m.cancelBookingErr
@@ -2119,4 +2125,204 @@ func TestHoldGuestSlot_SuspendedArtist_Blocked(t *testing.T) {
 	var appErr *apperror.AppError
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, "ARTIST_NOT_ACCEPTING_BOOKINGS", appErr.Code)
+}
+
+// ── Confirmation symmetry and refund closure ─────────────────────────────────
+//
+// Both blocks below cover defects found by enumerating the booking state
+// machine rather than by a failing test - see
+// B-Edge-Booking-State-Machine-Matrix-v1.md sections 5.1 and 5.2.
+
+func confirmableBooking(status string, start time.Time, artistID uuid.UUID) *Booking {
+	tok := strings.Repeat("c", 64)
+	return &Booking{
+		ID: uuid.New(), ArtistID: artistID, CustomerID: uuid.New(),
+		Status: status, StartTime: start, CalendarToken: &tok,
+	}
+}
+
+func confirmedNotifications(m *mockRepo) []enqueuedNotification {
+	var out []enqueuedNotification
+	for _, n := range m.enqueuedNotifications {
+		if n.TemplateName == "booking_confirmed" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// THE defect. Both routes reach `confirmed`, so both must tell the customer.
+// Before this, ConfirmDeposit announced nothing, which meant whether a
+// customer learned their booking was confirmed - and whether they got the
+// calendar link, which rides on the same message - depended on which button
+// the artist happened to press.
+func TestConfirmDeposit_AnnouncesToTheCustomer(t *testing.T) {
+	artistID := uuid.New()
+	userID := uuid.New()
+	repo := &mockRepo{
+		getBookingByIDBooking:       confirmableBooking(StatusDepositPaid, time.Now().Add(72*time.Hour), artistID),
+		getArtistIDByUserIDArtistID: artistID,
+		notificationContextCustomer: "Layla",
+		notificationContextService:  "Bridal makeup",
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.ConfirmDeposit(context.Background(), repo.getBookingByIDBooking.ID, userID)
+
+	require.NoError(t, err)
+	sent := confirmedNotifications(repo)
+	require.Len(t, sent, 1, "the two-step route must not confirm silently")
+	assert.Contains(t, sent[0].Message, "all confirmed")
+}
+
+// The two routes must stay indistinguishable to the customer. This is the
+// property that was missing, so it is asserted directly rather than left
+// implied by the two tests above and below passing separately.
+func TestBothConfirmationRoutes_SendTheSameAnnouncement(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	start := time.Now().Add(72 * time.Hour)
+
+	newRepo := func(status string) *mockRepo {
+		return &mockRepo{
+			getBookingByIDBooking:       confirmableBooking(status, start, artistID),
+			getArtistIDByUserIDArtistID: artistID,
+			notificationContextCustomer: "Layla",
+			notificationContextService:  "Bridal makeup",
+		}
+	}
+
+	oneStep := newRepo(StatusApproved)
+	svcOne := newTestService(oneStep)
+	_, err := svcOne.ConfirmDepositReceived(context.Background(), oneStep.getBookingByIDBooking.ID, userID, nil)
+	require.NoError(t, err)
+
+	twoStep := newRepo(StatusDepositPaid)
+	svcTwo := newTestService(twoStep)
+	_, err = svcTwo.ConfirmDeposit(context.Background(), twoStep.getBookingByIDBooking.ID, userID)
+	require.NoError(t, err)
+
+	a, b := confirmedNotifications(oneStep), confirmedNotifications(twoStep)
+	require.Len(t, a, 1)
+	require.Len(t, b, 1)
+	assert.Equal(t, a[0].Message, b[0].Message,
+		"a customer must not be able to tell which button the artist pressed")
+}
+
+// The calendar link rides on this message, so it must reach both routes too.
+func TestConfirmDeposit_IncludesTheCalendarLink(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	repo := &mockRepo{
+		getBookingByIDBooking:       confirmableBooking(StatusDepositPaid, time.Now().Add(72*time.Hour), artistID),
+		getArtistIDByUserIDArtistID: artistID,
+		notificationContextCustomer: "Layla",
+		notificationContextService:  "Bridal makeup",
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.ConfirmDeposit(context.Background(), repo.getBookingByIDBooking.ID, userID)
+
+	require.NoError(t, err)
+	assert.Contains(t, confirmedNotifications(repo)[0].Message, "/c/"+strings.Repeat("c", 64))
+}
+
+// Decision 4.1: confirming a past appointment is legitimate bookkeeping - an
+// artist reconciling a transfer that landed late - but "See you then!" about
+// last Tuesday, with a calendar link for a date that has gone, is not.
+// ApproveBooking refuses the same nonsense one step earlier.
+func TestConfirmation_PastAppointment_ConfirmsSilently(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	past := time.Now().Add(-21 * 24 * time.Hour)
+
+	for name, run := range map[string]func(*Service, uuid.UUID) error{
+		"one-step": func(s *Service, id uuid.UUID) error {
+			_, err := s.ConfirmDepositReceived(context.Background(), id, userID, nil)
+			return err
+		},
+		"two-step": func(s *Service, id uuid.UUID) error {
+			_, err := s.ConfirmDeposit(context.Background(), id, userID)
+			return err
+		},
+	} {
+		status := StatusApproved
+		if name == "two-step" {
+			status = StatusDepositPaid
+		}
+		repo := &mockRepo{
+			getBookingByIDBooking:       confirmableBooking(status, past, artistID),
+			getArtistIDByUserIDArtistID: artistID,
+			notificationContextCustomer: "Layla",
+			notificationContextService:  "Bridal makeup",
+		}
+		svc := newTestService(repo)
+
+		require.NoError(t, run(svc, repo.getBookingByIDBooking.ID), "%s: the bookkeeping must still succeed", name)
+		assert.Empty(t, confirmedNotifications(repo),
+			"%s: must not message a customer about an appointment that already happened", name)
+	}
+}
+
+// Defect 5.2: refund_due used to be terminal. Nothing transitioned out of it,
+// so the notification centre's refund_due alert was unresolvable and the
+// booking sat owing money forever.
+func TestMarkRefunded_ClosesTheRefundLoop(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), artistID)
+	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+	svc := newTestService(repo)
+
+	ref := "Whish #94821"
+	got, err := svc.MarkRefunded(context.Background(), b.ID, userID, &ref)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusRefunded, got.Status)
+	require.NotNil(t, repo.markRefundedReference)
+	assert.Equal(t, ref, *repo.markRefundedReference, "the artist's own reconciliation note")
+}
+
+// Only a booking that actually owes a refund can be closed. Otherwise this
+// becomes a way to move arbitrary bookings into a terminal state.
+func TestMarkRefunded_WrongStatus_Conflict(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	for _, status := range []string{
+		StatusConfirmed, StatusCancelled, StatusCompleted, StatusRefunded, StatusPending,
+	} {
+		b := confirmableBooking(status, time.Now().Add(-48*time.Hour), artistID)
+		repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+		svc := newTestService(repo)
+
+		_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil)
+
+		require.Error(t, err, "status %q", status)
+		var appErr *apperror.AppError
+		require.ErrorAs(t, err, &appErr)
+		assert.Equal(t, "BOOKING_NOT_REFUND_DUE", appErr.Code, "status %q", status)
+	}
+}
+
+func TestMarkRefunded_WrongArtist_Forbidden(t *testing.T) {
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), uuid.New())
+	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: uuid.New()}
+	svc := newTestService(repo)
+
+	_, err := svc.MarkRefunded(context.Background(), b.ID, uuid.New(), nil)
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 403, appErr.HTTPStatus)
+}
+
+// The customer was already told about the cancellation. A second message
+// announcing an out-of-band bank transfer they either have or have not
+// received would raise more questions than it answers.
+func TestMarkRefunded_DoesNotMessageTheCustomer(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), artistID)
+	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+	svc := newTestService(repo)
+
+	_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, repo.enqueuedNotifications)
 }

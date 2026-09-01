@@ -72,7 +72,10 @@ var (
 	ErrBookingNotPending     = errors.New("booking is not in pending status")
 	ErrBookingNotApproved    = errors.New("booking is not in approved status")
 	ErrBookingNotCancellable = errors.New("booking cannot be cancelled in its current status")
-	ErrNotBookingOwner       = errors.New("not authorised to act on this booking")
+	// ErrBookingNotRefundDue is returned when marking a refund paid on a
+	// booking that does not owe one.
+	ErrBookingNotRefundDue = errors.New("booking does not have a refund outstanding")
+	ErrNotBookingOwner     = errors.New("not authorised to act on this booking")
 	// ErrBookingNotHeld is returned when a held guest booking can no longer be
 	// submitted - it was already submitted or its 10-minute hold expired.
 	ErrBookingNotHeld = errors.New("booking is not in held status")

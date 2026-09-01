@@ -185,6 +185,11 @@ type Repository interface {
 	// booking that will ever be worth putting in a calendar.
 	ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) (calendarToken string, err error)
 
+	// MarkRefunded transitions refund_due → refunded, recording the
+	// artist's assertion that they sent the money. Without it refund_due
+	// is terminal and the refund alert can never be cleared.
+	MarkRefunded(ctx context.Context, id uuid.UUID, reference *string) error
+
 	// ConfirmDeposit transitions deposit_paid → confirmed.
 	ConfirmDeposit(ctx context.Context, id uuid.UUID) error
 
@@ -1037,6 +1042,39 @@ func (r *pgRepo) ConfirmDepositReceived(ctx context.Context, id uuid.UUID, refer
 	}
 	if result.RowsAffected() == 0 {
 		return ErrBookingNotApproved
+	}
+	return nil
+}
+
+// MarkRefunded records that the artist has paid an owed refund,
+// transitioning refund_due -> refunded.
+//
+// Guarded on status = refund_due, so this can only ever close a refund that
+// was actually opened. The reference is the artist's own record of the
+// transfer (an OMT or Whish code), never shown to the customer - the same
+// shape and purpose as ConfirmDepositReceived's reference.
+//
+// Lebanon has no card rails, so refunds are out-of-band bank transfers and
+// the platform can only record the artist's assertion that one happened.
+// Recording it is the entire point: without this the refund_due alert in the
+// notification centre is unresolvable, and the booking sits owing money
+// forever.
+func (r *pgRepo) MarkRefunded(ctx context.Context, id uuid.UUID, reference *string) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		SET status = $1,
+		    deposit_reference = COALESCE($2, deposit_reference),
+		    updated_at = NOW()
+		WHERE id = $3
+		AND status = $4
+		AND deleted_at IS NULL`,
+		StatusRefunded, reference, id, StatusRefundDue,
+	)
+	if err != nil {
+		return fmt.Errorf("mark refunded: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrBookingNotRefundDue
 	}
 	return nil
 }

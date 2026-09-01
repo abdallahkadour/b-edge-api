@@ -21,6 +21,7 @@ import (
 	artist "github.com/abdallahkadour/b-edge-api/internal/artist"
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/booking"
+	"github.com/abdallahkadour/b-edge-api/internal/calendar"
 	"github.com/abdallahkadour/b-edge-api/internal/client"
 	"github.com/abdallahkadour/b-edge-api/internal/config"
 	"github.com/abdallahkadour/b-edge-api/internal/customerauth"
@@ -154,6 +155,11 @@ func main() {
 	// which is the outbound WhatsApp queue - see internal/inbox's package
 	// comment for why the two are separate.
 	inbox.RegisterRoutes(app, pool, logger)
+	// "Add to calendar" links at /c/:token, also outside /api/v1 - these
+	// are opened by a human from a WhatsApp message and serve HTML and an
+	// .ics, not JSON. Twilio cannot attach text/calendar on WhatsApp, so a
+	// fetched link is the only route to a calendar entry at all.
+	calendar.RegisterRoutes(app, pool, logger)
 	earnings.RegisterRoutes(app, pool, logger)
 	product.RegisterRoutes(app, pool, logger)
 	media.RegisterRoutes(app, pool, logger)

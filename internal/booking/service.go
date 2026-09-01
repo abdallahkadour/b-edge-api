@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -904,7 +905,8 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 		}
 	}
 
-	if err := s.repo.ApproveBooking(ctx, bookingID, depositDeadline); err != nil {
+	calendarToken, err := s.repo.ApproveBooking(ctx, bookingID, depositDeadline)
+	if err != nil {
 		if errors.Is(err, ErrBookingNotPending) {
 			return nil, apperror.Conflict("BOOKING_NOT_PENDING", "Only pending bookings can be approved")
 		}
@@ -913,6 +915,9 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 
 	b.Status = StatusApproved
 	b.DepositDeadline = &depositDeadline
+	if calendarToken != "" {
+		b.CalendarToken = &calendarToken
+	}
 
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
 	if ctxErr == nil {
@@ -1077,6 +1082,13 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 			"Hi %s! You're all confirmed for %s on %s. See you then!",
 			customerName, serviceName, notificationTimeLabel(b.StartTime),
 		)
+		// The calendar link rides on the CONFIRMED message, not the
+		// approved one. An approved booking whose deposit never arrives
+		// expires, and putting that in someone's calendar first would
+		// leave a ghost appointment they then have to clear themselves.
+		if b.CalendarToken != nil && *b.CalendarToken != "" {
+			message += fmt.Sprintf(" Add it to your calendar: %s/c/%s", apiPublicURL, *b.CalendarToken)
+		}
 		s.enqueueNotification(ctx, bookingID, b.CustomerID, "booking_confirmed", message)
 	}
 
@@ -1416,6 +1428,23 @@ var customerPWAURL = func() string {
 		return v
 	}
 	return "http://localhost:4200"
+}()
+
+// apiPublicURL is where THIS server is reachable from a customer's phone.
+//
+// Distinct from customerPWAURL on purpose: the calendar link is served by
+// the API itself (internal/calendar, GET /c/:token), not by the PWA, so
+// reusing the PWA base would produce a link to a route the frontend does
+// not have. Same fallback reasoning - a visibly wrong localhost beats a
+// silent empty string that yields "/c/abc" with no host.
+var apiPublicURL = func() string {
+	if v := os.Getenv("API_PUBLIC_URL"); v != "" {
+		return strings.TrimSuffix(v, "/")
+	}
+	if port := os.Getenv("PORT"); port != "" {
+		return "http://localhost:" + port
+	}
+	return "http://localhost:3000"
 }()
 
 // enqueueNotification is a best-effort wrapper around

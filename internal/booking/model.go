@@ -110,7 +110,13 @@ type Booking struct {
 	DepositReference *string `db:"deposit_reference"`
 	// ReviewToken is generated when the booking completes, letting the guest
 	// leave a review with no login required. See migration 013.
-	ReviewToken        *string    `db:"review_token"`
+	ReviewToken *string `db:"review_token"`
+	// CalendarToken is minted when the booking is APPROVED, letting the
+	// guest fetch an .ics for the appointment without an account. Distinct
+	// from ReviewToken, which is minted at completion - a calendar entry is
+	// for an appointment that has not happened yet, so the two can never
+	// share a lifecycle. See migration 031.
+	CalendarToken      *string    `db:"calendar_token"`
 	Channel            string     `db:"channel"`
 	SpecialRequests    *string    `db:"special_requests"`
 	CancellationReason *string    `db:"cancellation_reason"`
@@ -420,6 +426,14 @@ type EnrichedBookingResponse struct {
 	// exists. Deliberately NOT exposed on the plain BookingResponse the
 	// guest funnel returns.
 	ReviewToken *string `json:"review_token,omitempty"`
+	// CalendarToken is present once the booking is approved. Artist-facing
+	// only, for exactly the same reason as ReviewToken above: until
+	// automated WhatsApp delivery exists (D8), the only way a customer
+	// receives the "add to calendar" link is the artist copying it out of
+	// the calendar detail view and sending it herself. Deliberately NOT on
+	// the plain BookingResponse the guest funnel returns - at guest-submit
+	// time the booking is still pending and no token exists yet.
+	CalendarToken *string `json:"calendar_token,omitempty"`
 	// Meta
 	Channel            string    `json:"channel"`
 	SpecialRequests    *string   `json:"special_requests,omitempty"`
@@ -453,6 +467,7 @@ func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
 		DepositPaidAt:      e.DepositPaidAt,
 		DepositReference:   e.DepositReference,
 		ReviewToken:        e.ReviewToken,
+		CalendarToken:      e.CalendarToken,
 		Channel:            e.Channel,
 		SpecialRequests:    e.SpecialRequests,
 		CancellationReason: e.CancellationReason,

@@ -83,6 +83,7 @@ type mockRepo struct {
 	listEnrichedByCustomerErr             error
 	approveBookingErr                     error
 	approveBookingDepositDeadline         time.Time
+	approveBookingCalendarToken           string
 	confirmDepositErr                     error
 	cancelBookingErr                      error
 	completeBookingErr                    error
@@ -192,9 +193,15 @@ func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _
 func (m *mockRepo) ListEnrichedBookingsByCustomer(_ context.Context, _ uuid.UUID, _ time.Time, _ int) ([]*EnrichedBooking, error) {
 	return m.listEnrichedByCustomerBookings, m.listEnrichedByCustomerErr
 }
-func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, depositDeadline time.Time) error {
+func (m *mockRepo) ApproveBooking(_ context.Context, _ uuid.UUID, depositDeadline time.Time) (string, error) {
 	m.approveBookingDepositDeadline = depositDeadline
-	return m.approveBookingErr
+	if m.approveBookingErr != nil {
+		return "", m.approveBookingErr
+	}
+	if m.approveBookingCalendarToken != "" {
+		return m.approveBookingCalendarToken, nil
+	}
+	return strings.Repeat("a", 64), nil
 }
 func (m *mockRepo) ConfirmDeposit(_ context.Context, _ uuid.UUID) error {
 	return m.confirmDepositErr

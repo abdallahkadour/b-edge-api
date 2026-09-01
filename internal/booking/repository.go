@@ -178,8 +178,12 @@ type Repository interface {
 	// live held booking (already submitted or expired).
 	AttachGuestAndSubmit(ctx context.Context, bookingID, guestUserID uuid.UUID, specialRequests *string) error
 
-	// ApproveBooking transitions pending → approved and sets the deposit deadline.
-	ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) error
+	// ApproveBooking transitions pending → approved, sets the deposit
+	// deadline, and mints the calendar token, returning it. Approval is
+	// the single choke point for the calendar link: both routes to
+	// 'confirmed' descend from 'approved', so one call site covers every
+	// booking that will ever be worth putting in a calendar.
+	ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) (calendarToken string, err error)
 
 	// ConfirmDeposit transitions deposit_paid → confirmed.
 	ConfirmDeposit(ctx context.Context, id uuid.UUID) error
@@ -265,7 +269,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
 		&b.DepositReference,
-		&b.ReviewToken,
+		&b.ReviewToken, &b.CalendarToken,
 		&b.Channel,
 		&b.SpecialRequests,
 		&b.CancellationReason,
@@ -286,7 +290,7 @@ const bookingSelectCols = `
 	id, salon_id, store_id, artist_id, customer_id, service_id,
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price,
-	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token,
+	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token, calendar_token,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
@@ -299,7 +303,7 @@ const enrichedSelectCols = `
 	b.id, b.salon_id, b.store_id, b.artist_id, b.customer_id, b.service_id,
 	b.start_time, b.end_time, b.held_until, b.status,
 	b.original_price, b.discount_amount, b.final_price,
-	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.review_token,
+	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.review_token, b.calendar_token,
 	b.channel, b.special_requests, b.cancellation_reason,
 	b.cancelled_at, b.completed_at, b.no_show_at,
 	b.created_at, b.updated_at, b.deleted_at,
@@ -332,7 +336,7 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 		&e.ID, &e.SalonID, &e.StoreID, &e.ArtistID, &e.CustomerID, &e.ServiceID,
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
-		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.ReviewToken,
+		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.ReviewToken, &e.CalendarToken,
 		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
 		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
@@ -942,24 +946,47 @@ func (r *pgRepo) AttachGuestAndSubmit(
 }
 
 // ApproveBooking transitions a pending booking to approved and sets deposit deadline.
-func (r *pgRepo) ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) error {
+func (r *pgRepo) ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) (string, error) {
+	// Reuses generateReviewToken - same 32 random bytes, same hex encoding,
+	// same VARCHAR(64) column shape. Two token generators producing the
+	// same thing under different names would be worse than one shared one.
+	token, err := generateReviewToken()
+	if err != nil {
+		return "", err
+	}
+
+	// COALESCE, not a plain assignment: a booking only reaches 'approved'
+	// once, because this UPDATE is guarded on status = pending - but if a
+	// future path ever re-approves, overwriting the token would silently
+	// break every calendar link already sent for it.
 	result, err := r.db.Exec(ctx, `
 		UPDATE bookings
 		SET status = $1,
 		    deposit_deadline = $2,
+		    calendar_token = COALESCE(calendar_token, $3),
 		    updated_at = NOW()
-		WHERE id = $3
-		AND status = $4
+		WHERE id = $4
+		AND status = $5
 		AND deleted_at IS NULL`,
-		StatusApproved, depositDeadline, id, StatusPending,
+		StatusApproved, depositDeadline, token, id, StatusPending,
 	)
 	if err != nil {
-		return fmt.Errorf("approve booking: %w", err)
+		return "", fmt.Errorf("approve booking: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrBookingNotPending
+		return "", ErrBookingNotPending
 	}
-	return nil
+
+	// Read back rather than returning the generated value: COALESCE may
+	// have kept an existing token, in which case the one generated above
+	// is not the one now stored.
+	var stored string
+	if err := r.db.QueryRow(ctx,
+		`SELECT COALESCE(calendar_token, '') FROM bookings WHERE id = $1`, id,
+	).Scan(&stored); err != nil {
+		return "", fmt.Errorf("approve booking: read calendar token: %w", err)
+	}
+	return stored, nil
 }
 
 // ConfirmDeposit marks a deposit as received and transitions to confirmed.
@@ -1167,7 +1194,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.ID, &b.SalonID, &b.StoreID, &b.ArtistID, &b.CustomerID, &b.ServiceID,
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice,
-			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken,
+			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken, &b.CalendarToken,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,
 			&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt,

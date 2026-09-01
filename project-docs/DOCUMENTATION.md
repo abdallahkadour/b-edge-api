@@ -31,6 +31,7 @@ rewritten — this is the diff to hold in mind while reading them.
 | **`internal/inbox`** | New domain: the in-app notification centre. Named `inbox`, not `notification`, because `internal/notification` already exists and is the *outbound* WhatsApp queue — two things called "notification" would be a standing invitation to wire the wrong one. Bundling is enforced by a partial unique index (migration 030), not application logic. | package doc comment |
 | **Notification bell (frontend)** | **Sep 1, 2026.** `bedge-notification-bell` in the dashboard shell: badge, dropdown panel, mark-read / mark-all-read / dismiss, 60s polling that pauses on a hidden tab. Until this shipped the `inbox` backend had no reader — the feature existed only over curl. | `E2E-TEST-PLAN.md` Suite 13 |
 | **`internal/pkg/bidi`** | **Sep 1, 2026.** New leaf package. `StripControls` was inlined in `internal/share`; a second caller appeared (`notification/worker.go` interpolates a customer-supplied name into a body another person reads), and a security rule in two copies is a rule that drifts. | package doc comment |
+| **`internal/calendar`** | **Sep 1, 2026.** "Add to calendar" links: `GET /c/:token` (chooser page) and `GET /c/:token.ics`. Migration 031 adds `bookings.calendar_token` (minted at approval) and `calendar_sequence` (RFC 5545 SEQUENCE). **A link, not an attachment, because Twilio does not accept `text/calendar` on WhatsApp** — calendar files are MMS-only there. | migration 031 header |
 
 **Bidi spoofing, closed in two places.** Executing `E2E-TEST-PLAN.md` §2.5.1 found
 that a U+202E in an artist bio survived into Open Graph tags, so a WhatsApp preview
@@ -41,6 +42,22 @@ name** into a body the **artist** reads. Both now go through `internal/pkg/bidi`
 U+200E/U+200F (directional *marks*) are deliberately KEPT — they are weak hints, not
 overrides, and are what makes a phone number render correctly inside an Arabic
 sentence.
+
+**The calendar link's one hard rule.** `bookings.calendar_sequence` must be
+incremented in the same statement as **any** change to `start_time` or
+`end_time`. A calendar client decides whether a re-imported `.ics` updates the
+event it holds or adds a second one by comparing UID plus SEQUENCE. Shifting a
+whole day of bookings without incrementing it would give every one of those
+customers two appointments — the exact failure the bulk-shift feature exists to
+prevent. The column shipped **before** that write path on purpose; retrofitting
+it does not help events already imported.
+
+Honest limit, recorded so nobody later assumes otherwise: even done correctly
+this is best-effort. A customer who imported once and never opens the updated
+link keeps the stale time, and a Google Calendar user who used the deep link
+holds Google's own event id rather than ours, so their entry cannot be updated
+at all. The calendar entry is a convenience, never the source of truth — a
+reschedule message must still state the new time in words.
 
 **Two known-wrong things pinned by characterization tests, not fixed** — both are
 product decisions, both live in `internal/billing`:

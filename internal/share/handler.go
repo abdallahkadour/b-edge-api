@@ -10,6 +10,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/bidi"
 )
 
 // defaultOGImage is advertised for artists with no portfolio photo. A card
@@ -97,9 +99,9 @@ func (h *Handler) ArtistPreview(c *fiber.Ctx) error {
 func renderPreviewHTML(title, description, image, target string) string {
 	// Bidi controls are stripped BEFORE escaping, because they are not
 	// HTML-special and would otherwise pass straight through - see
-	// stripBidiControls for the spoofing this prevents.
-	t := html.EscapeString(stripBidiControls(title))
-	d := html.EscapeString(stripBidiControls(description))
+	// bidi.StripControls for the spoofing this prevents.
+	t := html.EscapeString(bidi.StripControls(title))
+	d := html.EscapeString(bidi.StripControls(description))
 	i := html.EscapeString(image)
 	u := html.EscapeString(target)
 

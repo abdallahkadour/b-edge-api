@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/abdallahkadour/b-edge-api/internal/inbox"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/bidi"
 	"go.uber.org/zap"
 )
 
@@ -420,10 +421,18 @@ func (w *Worker) alertArtistOfDeadLetter(ctx context.Context, n *PendingNotifica
 	}
 
 	title := "A customer could not be notified"
-	body := fmt.Sprintf(
+	// customerName is user-supplied and is being interpolated into text a
+	// DIFFERENT person reads, which is the same shape as the share-card
+	// finding: a name containing U+202E silently reverses the rest of the
+	// sentence, and neither the database nor Angular's interpolation
+	// touches it - a bidi override is not markup, so escaping does nothing.
+	// errMsg is Twilio's, not the customer's, but it is the tail of the
+	// sentence an override would reorder, so the whole body is cleaned
+	// rather than only the one field known to be hostile today.
+	body := bidi.StripControls(fmt.Sprintf(
 		"We could not deliver a WhatsApp message to %s. They may not know about a change to their booking - please contact them directly. (%s)",
 		customerName, errMsg,
-	)
+	))
 	link := "/dashboard/bookings"
 	// One group key per artist, so a batch of failures collapses into a
 	// single "customers could not be notified" row rather than flooding

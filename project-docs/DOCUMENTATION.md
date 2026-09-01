@@ -11,7 +11,7 @@
 
 ---
 
-## What shipped Aug 30–31, 2026
+## What shipped Aug 30 – Sep 1, 2026
 
 Four sprints of `B-Edge-Feature-Feasibility-Assessment-v1.md`'s plan. Listed here
 because several older docs describe the *previous* state and have not all been
@@ -28,6 +28,19 @@ rewritten — this is the diff to hold in mind while reading them.
 | **Photo→service tags** | Migration 028 + `PUT /media/:id/services`. Portfolio photos tag to services; the customer gallery filters by them. | `E2E-TEST-PLAN.md` Suite 10 |
 | **`internal/share`** | New domain. `GET /a/:handle` returns crawlable Open Graph tags for shared links — previously every shared link previewed as a bare URL. | `B-Edge-Share-Previews-Decision-v1.md` |
 | **USD only** | Migration 026 pins currency at the database. Closes the question `B-Edge-Monetization-Implementation-Spec-v1.md` §11 left open. | migration header |
+| **`internal/inbox`** | New domain: the in-app notification centre. Named `inbox`, not `notification`, because `internal/notification` already exists and is the *outbound* WhatsApp queue — two things called "notification" would be a standing invitation to wire the wrong one. Bundling is enforced by a partial unique index (migration 030), not application logic. | package doc comment |
+| **Notification bell (frontend)** | **Sep 1, 2026.** `bedge-notification-bell` in the dashboard shell: badge, dropdown panel, mark-read / mark-all-read / dismiss, 60s polling that pauses on a hidden tab. Until this shipped the `inbox` backend had no reader — the feature existed only over curl. | `E2E-TEST-PLAN.md` Suite 13 |
+| **`internal/pkg/bidi`** | **Sep 1, 2026.** New leaf package. `StripControls` was inlined in `internal/share`; a second caller appeared (`notification/worker.go` interpolates a customer-supplied name into a body another person reads), and a security rule in two copies is a rule that drifts. | package doc comment |
+
+**Bidi spoofing, closed in two places.** Executing `E2E-TEST-PLAN.md` §2.5.1 found
+that a U+202E in an artist bio survived into Open Graph tags, so a WhatsApp preview
+could be made to read `Book now https://evil.com`. HTML escaping does not help — a
+bidi override is not markup. Building the notification bell surfaced the same vector
+on a second surface: `alertArtistOfDeadLetter` interpolates a **customer-supplied
+name** into a body the **artist** reads. Both now go through `internal/pkg/bidi`.
+U+200E/U+200F (directional *marks*) are deliberately KEPT — they are weak hints, not
+overrides, and are what makes a phone number render correctly inside an Arabic
+sentence.
 
 **Two known-wrong things pinned by characterization tests, not fixed** — both are
 product decisions, both live in `internal/billing`:

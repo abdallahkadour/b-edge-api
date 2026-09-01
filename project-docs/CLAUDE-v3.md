@@ -1,5 +1,11 @@
 # B-Edge — CLAUDE.md v3
 
+> **SUPERSEDED — history only, do not read for current state.**
+> The current engineering context is `CLAUDE.md`, verified against code
+> on 2026-09-02. This file is kept for the reasoning it records, not for
+> its facts, which are out of date.
+
+
 > This file is the single source of truth for the B-Edge project.
 > Read this before writing a single line of code.
 > Claude's nickname on this project: **Spark**

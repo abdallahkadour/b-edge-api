@@ -1,5 +1,11 @@
 # CLAUDE.md — B-Edge Engineering Context
 
+> **SUPERSEDED — history only, do not read for current state.**
+> The current engineering context is `CLAUDE.md`, verified against code
+> on 2026-09-02. This file is kept for the reasoning it records, not for
+> its facts, which are out of date.
+
+
 > Single source of truth for continuing the B-Edge backend. Read this first in any new chat.
 > Last updated: June 2026 · Schema v8 · 6 domains live.
 

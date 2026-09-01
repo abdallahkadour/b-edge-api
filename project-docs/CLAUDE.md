@@ -1,477 +1,154 @@
-# B-Edge — CLAUDE.md
+# B-Edge — engineering context
 
-> This file is the complete context for the B-Edge project.
-> Read this before writing a single line of code.
-> Claude's nickname on this project: **Spark**
-
----
-
-## What is B-Edge
-
-Beauty booking platform for Lebanon and the MENA region.
-Tagline: **"Beauty at the Edge / الجمال عند الحافة"**
-
-Fresha for Lebanon. Built by Lebanese, for Lebanese beauty artists.
-Connects clients with beauty artists for booking makeup, hair, nails, and related services.
-
-**Launch partner:** Rania — popular beauty artist, 300K Instagram followers,
-2 physical studios in Beirut and Tripoli, staff artists working under her.
+> **Read this first in any new session.** Verified against the code on
+> 2026-09-02 — migrations, routes, `go.mod`, `package.json`, the live
+> database — not against memory or earlier docs.
+>
+> This file replaced a version dated May 2026 that described 9 tables, ~34
+> endpoints and "Go version: starting fresh." All three were wrong by an
+> order of magnitude, and it was being auto-loaded into every session.
+> `CLAUDE-v3` … `CLAUDE-v6` and `CLAUDE (1)/(5)` are **history, not context** —
+> do not read them for current state.
 
 ---
 
-## Decision Log
+## What it is
 
-| Decision | Choice | Reason |
-|---|---|---|
-| Backend language | Go (Fiber) | Performance, K8s native, love the language |
-| Frontend framework | Angular 21 PWA | Developer knows it well |
-| Database | PostgreSQL 15 | Relational, reliable |
-| Logging | Zap + Fiber logger | Fastest logger, structured JSON |
-| Tracing | OpenTelemetry + Jaeger | Industry standard, K8s native |
-| Email | Resend | 3K free/month, TypeScript-friendly API |
-| SMS | Twilio | Industry standard |
-| Media | Cloudinary | Free tier 25GB, CDN included |
-| Infra | Docker + K8s + AWS EC2 t3.medium | Developer has K8s experience |
-| CI/CD | GitHub Actions + ArgoCD | GitOps, zero manual deploys |
+Beauty booking + product marketplace for Lebanon and MENA. "Fresha for
+Lebanon." Solo founder build.
 
-**Note:** Previous Node.js + TypeScript version exists at `abdallahkadour/b-edge-api-node`
-Use it as a blueprint for business logic only. Do not translate — rebuild the Go way.
+- **Founder:** Edge (Abdallah Kadour), GitHub `abdallahkadour`
+- **Launch artist:** Rania — ~300K Instagram, two studios (Beirut Downtown,
+  Tripoli), public handle `rania` (`/book/rania` works like the UUID link)
+- **Backend:** `b-edge-api` (Go) · **Frontend:** `b-edge-web` (Angular monorepo)
 
 ---
 
-## Tech Stack
+## Where things actually stand — 2026-09-02
 
-```
-Backend         Go 1.22+ with Fiber v2
-Database        PostgreSQL 15 (Docker locally, AWS RDS production)
-Migrations      golang-migrate (same SQL files from Node version)
-Auth            golang-jwt/jwt v5 + golang.org/x/crypto/bcrypt
-Validation      go-playground/validator v10
-Logging         go.uber.org/zap + Fiber built-in HTTP logger
-Tracing         OpenTelemetry + Jaeger (otlptracehttp exporter)
-Swagger         swaggo/swag + swaggo/fiber-swagger
-Environment     joho/godotenv
-UUID            google/uuid
-Testing         testing (built-in) + testify + net/http/httptest
-Migrations      golang-migrate/migrate v4
-```
+| | |
+|---|---|
+| Go / Fiber | 1.26.3 / v2.52.13 |
+| Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
+| Migrations | **32** (latest `032_drop_deposit_pending_status`) |
+| Tables | **29** |
+| Route registrations | **110** |
+| Go tests | **570**, all passing |
+| Frontend routes | 13 customer · 25 artist-dashboard |
+| Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
 
----
+**Domains** (`internal/`): admin, artist, audit, billing, booking, **calendar**,
+client, customerauth, discovery, earnings, **inbox**, media, notification,
+onboarding, product, review, **share** — plus `domain/auth`, `config`,
+`middleware`.
 
-## Project Structure
+**Leaf packages** (`internal/pkg/`): apperror, **bidi**, hash, jwt,
+**openinghours**, response, **subscription**.
 
-```
-b-edge-api/
-├── cmd/
-│   └── main.go                         ← entry point
-├── internal/
-│   ├── config/
-│   │   ├── database.go                 ← pgx pool
-│   │   ├── swagger.go                  ← swaggo setup
-│   │   └── telemetry.go                ← OpenTelemetry + Jaeger
-│   ├── domain/
-│   │   ├── auth/
-│   │   │   ├── handler.go              ← HTTP handlers (controllers)
-│   │   │   ├── service.go              ← business logic
-│   │   │   ├── repository.go           ← DB queries
-│   │   │   ├── types.go                ← structs + interfaces
-│   │   │   ├── validation.go           ← input validation rules
-│   │   │   ├── routes.go               ← route registration
-│   │   │   ├── handler_test.go         ← handler tests
-│   │   │   ├── service_test.go         ← service tests
-│   │   │   └── repository_test.go      ← DB tests
-│   │   ├── artist/                     ← same structure
-│   │   ├── booking/                    ← same structure
-│   │   ├── customer/                   ← same structure
-│   │   └── review/                     ← same structure
-│   ├── middleware/
-│   │   ├── auth.go                     ← JWT authentication
-│   │   ├── error.go                    ← global error handler
-│   │   └── logger.go                   ← request logging
-│   └── pkg/
-│       ├── apperror/                   ← AppError type
-│       ├── response/                   ← JSON response helpers
-│       ├── jwt/                        ← JWT helpers
-│       └── hash/                       ← bcrypt helpers
-├── db/
-│   └── migrations/                     ← SQL files (copied from Node version)
-│       ├── 001_initial_schema.sql
-│       ├── 002_add_user_status.sql
-│       ├── 003_add_salon_id_to_artists.sql
-│       └── 004_password_resets.sql
-├── docs/                               ← swaggo generates this
-├── logs/                               ← never committed to git
-├── .env
-├── .env.example
-├── .gitignore
-├── go.mod
-├── go.sum
-├── Makefile
-└── README.md
-```
+Bold entries are recent and are not described in any older doc.
 
 ---
 
-## Database Schema — 9 Tables
+## The five things most likely to trip you up
 
-```sql
-users           id, name, email, password_hash, role, phone,
-                status (active/frozen/suspended/deleted),
-                created_at, updated_at, deleted_at
+**1. The product does not work for customers yet, and it is one variable.**
+`TWILIO_WHATSAPP_FROM` is unset. Every notification ever queued is `dead` —
+**61 of them, 100%**, including 38 customer login codes. That gates customer
+login, booking approvals/confirmations/cancellations, review requests and the
+calendar link. Tracked as **D8**. Do not design around it; it is procurement.
 
-artists         id, user_id, bio, city, country, instagram,
-                rating, is_verified, salon_id,
-                created_at, updated_at
+**2. Decisions live in `B-Edge-Decision-Register-v1.md`.** One list, 8
+resolved with the file each landed in, 11 open with who can settle each. Read
+it before planning any sprint. The monetization spec's §11 is **history** and
+says so.
 
-services        id, artist_id, name, description, duration_min,
-                price, currency, is_active, created_at
+**3. Leaf packages exist to break import cycles.** `billing/handler.go` imports
+`middleware`, so `middleware` cannot import `billing` — hence
+`internal/pkg/subscription`. Same shape for `openinghours` and `bidi`. When two
+domains need the same rule, it goes in a leaf package, not a copy.
 
-availability    id, artist_id, day_of_week (0-6),
-                start_time, end_time, is_blocked, created_at
-                UNIQUE (artist_id, day_of_week)
+**4. State is derived, never stored, and there is no scheduler.** Subscription
+status comes from `DeriveStatus`; a store's open/closed state is computed per
+request; expired holds self-heal lazily on read. Adding a cron to "fix" any of
+this would be undoing a deliberate design.
 
-bookings        id, customer_id, artist_id, service_id,
-                date, time, status, notes,
-                created_at, updated_at, deleted_at
-                status: pending/confirmed/cancelled/completed/no_show
-
-reviews         id, booking_id, customer_id, artist_id,
-                rating (1-5), comment, created_at
-                UNIQUE (booking_id)
-
-media           id, artist_id, url, cloudinary_id,
-                type (photo/video), created_at
-
-notifications   id, user_id, type, channel (email/sms/push),
-                status (pending/sent/failed), payload JSONB,
-                sent_at, created_at
-
-password_resets id, user_id, token UUID, expires_at,
-                used_at, created_at
-```
+**5. There is no database test infrastructure.** `TEST_DB_NAME` is vestigial —
+only `cmd/migrate` reads it. Every test is service-layer with hand-written
+mocks. Repository tests are **out of scope**, not missing; do not spend a
+sprint on testcontainers.
 
 ---
 
-## API Endpoints
+## Testing
 
-### Auth — 10 endpoints
-```
-POST   /api/v1/auth/register
-POST   /api/v1/auth/login
-POST   /api/v1/auth/refresh
-POST   /api/v1/auth/logout
-POST   /api/v1/auth/forgot-password
-POST   /api/v1/auth/reset-password
-PATCH  /api/v1/auth/change-password      ← protected
-DELETE /api/v1/auth/delete-account       ← protected
-PATCH  /api/v1/auth/freeze-account       ← admin only
-PATCH  /api/v1/auth/unfreeze-account     ← admin only
-```
+House style: in-package, hand-written mock structs, `newTestService()`,
+`Test<Method>_<Condition>_<Expected>`, no table-driven, no `t.Run`, decimals
+compared with `.Equal()`.
 
-### Artist — ~10 endpoints (coming)
-### Booking — ~6 endpoints (coming)
-### Customer — ~4 endpoints (coming)
-### Review — ~3 endpoints (coming)
-### Search — ~1 endpoint (coming)
+Two suites are worth knowing before writing tests:
+
+- **`internal/booking/statematrix_test.go`** — the booking state machine as
+  data: 7 actions × 11 statuses × 2 time positions, 154 cells. It asserts the
+  exact **error code** and that a rejected action **did not write the row**.
+  Adding a status or an action means adding a row or a column. Mutation-tested.
+  The design doc is `B-Edge-Booking-State-Machine-Matrix-v1.md` (in
+  `b-edge-web/project-docs/`).
+- **`E2E-TEST-PLAN.md`** (also in `b-edge-web/project-docs/`) — 14 suites plus
+  an adversarial pass. Suites 1–10 and 12–13 have been live-executed; 11 and
+  14.8 **cannot be automated** (they need a link pasted into WhatsApp and an
+  `.ics` imported on a real phone).
 
 ---
 
-## Auth Rules
+## Conventions that are enforced
 
-```
-JWT access token      15 minutes
-JWT refresh token     7 days (httpOnly cookie)
-bcrypt rounds         10 (1 for tests)
-Password rules        min 8 chars, 1 uppercase, 1 number
-Phone format          Lebanese only +961XXXXXXXX (optional)
-Role values           customer | artist (register API)
-                      admin (seeded directly, never via API)
-User status values    active | frozen | suspended | deleted
-```
-
----
-
-## Response Format
-
-```json
-// Success
-{
-  "success": true,
-  "data": { }
-}
-
-// Error
-{
-  "success": false,
-  "error": {
-    "code": 400,
-    "message": "Human readable message"
-  }
-}
-
-// Validation error
-{
-  "success": false,
-  "error": {
-    "code": 400,
-    "message": "Validation failed. Please check your input.",
-    "details": [
-      { "field": "email", "message": "Please enter a valid email address" }
-    ]
-  }
-}
-```
+- Migrations are paired `.up`/`.down` with a prose header saying **why**.
+  Migrations 010, 016, 029 and 031 are the standard to match.
+- Nothing ships without code + tests + `make swagger` and a committed `docs/`
+  diff.
+- Ownership failures return **404, not 403**, so IDs cannot be enumerated —
+  billing invoices, media, notifications, calendar links.
+- User-supplied text rendered to a *different* person must go through
+  `internal/pkg/bidi`. A bidi override is not markup, so no escaping catches
+  it. Current surfaces: Open Graph tags, notification bodies, `.ics`
+  SUMMARY/LOCATION, the Google Calendar deep link.
+- **Any code changing `bookings.start_time`/`end_time` must increment
+  `calendar_sequence` in the same statement**, or a rescheduled booking creates
+  a second event in the customer's calendar instead of moving the first.
 
 ---
 
-## Security Rules
+## Two known-wrong behaviours, pinned by tests rather than fixed
 
-```
-Passwords           bcrypt hashed, NEVER stored plain
-JWT secrets         64 random hex chars minimum
-httpOnly cookies    refresh token only
-CORS                whitelist only (CLIENT_URL env var)
-Rate limiting       100 req / 15 min per IP
-Helmet              security headers on all responses
-Input validation    every endpoint validated
-SQL queries         parameterized always, no raw interpolation
-Email enumeration   wrong email = same message as wrong password
-Timing safe         token comparison uses crypto safe equal
-Token rotation      new refresh token on every /refresh call
-Token blacklist     logout invalidates token immediately
-```
+Both are product decisions, both in `internal/billing`:
+
+1. `ensureInvoicesUpTo`'s doc comment claims an unpaid subscription never
+   accumulates more than one outstanding invoice. **It does** — four unpaid
+   months produce five invoices.
+2. Go's `AddDate` normalises rather than clamps, so a period starting Jan 31
+   rolls to **Mar 3**, not Feb 28, and the billing day then shifts forward
+   permanently. Anyone on the 29th–31st is affected.
 
 ---
 
-## Observability Stack
+## Environment
 
-```
-Application logs    Zap (go.uber.org/zap)
-                    JSON format in production
-                    Human readable in development
-                    Written to logs/app.log in production
+Local Postgres runs in Docker as `bedge-postgres` (not a host install — there
+is no `psql` on the PATH; use `docker exec -i bedge-postgres psql -U postgres
+-d bedge`). API on **:3000**. Customer PWA :4200, artist dashboard :4300;
+CORS whitelists only those two, so a dev server on any other port needs
+`CLIENT_URL` updated.
 
-HTTP logs           Fiber built-in logger middleware
-                    Written to logs/access.log in production
-
-Tracing             OpenTelemetry SDK
-                    Auto instruments: Fiber routes, pgx queries
-                    Exports to: Jaeger via OTLP HTTP
-                    Jaeger UI: http://localhost:16686 (dev)
-                               kubectl port-forward (prod)
-
-Metrics             Prometheus (Phase 6)
-Dashboards          Grafana (Phase 6)
-EFK stack           Phase 6 on K8s
-
-Health endpoint     GET /health
-                    Returns: status, uptime, memory, DB status,
-                             environment, version
-```
+There is a **permanent 14-account test roster** (`user1`–`user10`,
+`mkup1`–`mkup4`) plus `rania@bedge.com`. **It is deliberately never cleaned
+up.** Leave it alone.
 
 ---
 
-## Infrastructure
+## Where the documentation is
 
-```
-Development
-  PostgreSQL        Docker container port 5432
-  Jaeger            Docker container port 16686 (UI) 4318 (OTLP)
-  API               go run cmd/main.go port 3000
-  Hot reload        air
+`project-docs/DOCUMENTATION.md` is the index — read it before opening anything
+else in that folder. Many files there predate the current build and are marked
+as such; the index says which.
 
-Production
-  Cloud             AWS EC2 t3.medium eu-west-1
-  OS                Amazon Linux 2
-  K8s               Single node kubeadm
-  Gateway           Nginx (reverse proxy + SSL)
-  SSL               Let's Encrypt (free)
-  Domain            bedge.app
-  DB                PostgreSQL in Docker on same EC2
-  Registry          AWS ECR
-  CI/CD             GitHub Actions → ArgoCD → K8s
-  Monitoring        CloudWatch (basic) → Prometheus/Grafana (Phase 6)
-  Uptime            UptimeRobot (free)
-  Logs              logs/ folder → CloudWatch → EFK (Phase 6)
-```
-
----
-
-## B-Edge Coding Rules — STRICTLY ENFORCED
-
-```
-1. Every file has a package comment explaining its purpose
-2. Every exported function has a Go doc comment
-3. Every exported struct has a Go doc comment
-4. Every exported constant has a Go doc comment
-5. Every exported error variable has a Go doc comment
-6. No hardcoded values — all configuration via .env
-7. Named constants for all magic numbers/strings
-8. Parameterized SQL queries always — never interpolate
-9. Migration files for all DB schema changes — no manual SQL
-10. Human-readable error messages always
-11. Pointer receivers on all service/handler/repository methods
-12. Always check error returns — never ignore with _
-13. context.Context as first parameter on all DB/service functions
-14. Tests written alongside code — not after
-15. No feature is done without: code + tests + swagger docs
-```
-
----
-
-## Environment Variables
-
-```env
-# Server
-PORT=3000
-NODE_ENV=development
-
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=bedge
-DB_USER=postgres
-DB_PASSWORD=your_password
-
-# JWT
-JWT_SECRET=64_random_hex_chars_minimum
-JWT_REFRESH_SECRET=64_different_random_hex_chars
-JWT_EXPIRES_IN=15m
-JWT_REFRESH_EXPIRES_IN=7d
-
-# CORS
-CLIENT_URL=http://localhost:4200
-
-# Tracing
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
-
-# Email (Phase 2)
-RESEND_API_KEY=re_xxxx
-
-# SMS (Phase 2)
-TWILIO_ACCOUNT_SID=xxxx
-TWILIO_AUTH_TOKEN=xxxx
-TWILIO_PHONE_NUMBER=+1xxxx
-
-# Media (Phase 2)
-CLOUDINARY_CLOUD_NAME=xxxx
-CLOUDINARY_API_KEY=xxxx
-CLOUDINARY_API_SECRET=xxxx
-
-# Test
-TEST_DB_NAME=bedge_test
-```
-
----
-
-## Test Rules
-
-```
-Test database       bedge_test (separate from bedge)
-Test bcrypt rounds  1 (speed — never in production)
-Before each test    truncate relevant tables
-After all tests     close DB connection
-
-Every domain tests:
-  handler_test.go   HTTP integration tests (like supertest)
-  service_test.go   business logic unit tests
-  repository_test.go DB query tests
-
-Coverage required:
-  All success paths
-  All validation errors
-  All auth failures
-  All edge cases
-  All security scenarios
-
-Run tests:          go test ./...
-Run with coverage:  go test ./... -cover
-```
-
----
-
-## Makefile Commands
-
-```makefile
-make run          # go run cmd/main.go
-make dev          # air (hot reload)
-make test         # go test ./...
-make coverage     # go test ./... -cover
-make migrate      # run migrations
-make migrate-test # run migrations on bedge_test
-make swagger      # swag init
-make build        # go build -o bin/b-edge cmd/main.go
-make docker-up    # docker-compose up -d
-make docker-down  # docker-compose down
-make lint         # golangci-lint run
-```
-
----
-
-## Git Strategy
-
-```
-main        production only — never commit directly
-develop     integration branch
-feature/*   all new work
-
-Flow:
-  git checkout -b feature/auth-api develop
-  (build + test)
-  git checkout develop
-  git merge feature/auth-api
-  git push origin develop
-```
-
----
-
-## Current State
-
-```
-Node.js version (reference)
-  ✅ Auth API — 10 endpoints complete
-  ✅ 54 tests passing
-  ✅ Swagger docs live
-  ✅ All project documents
-
-Go version (this repo)
-  ⏳ Starting fresh
-  → Foundation first (config, pkg, middleware)
-  → Then auth domain
-  → Then tests + swagger
-  → Then artist, booking, customer, review APIs
-  → Then Angular PWAs
-  → Then deploy
-```
-
----
-
-## Product Roadmap
-
-```
-Week 1-2    Backend APIs (Go)
-Week 3-4    Artist PWA (Angular)
-Week 5-6    Customer PWA (Angular)
-Week 7      Deploy + Rania onboarded + first real booking
-Month 2-3   Feedback + polish
-Month 3-6   Growth features (SMS, Instagram, rebook)
-Month 6-12  MENA expansion (Jordan, UAE, KSA)
-Year 2      Payments, AI recommendations, white label
-```
-
----
-
-## People
-
-```
-Edge (Abdallah Kadour)    Founder, full stack, DevOps
-Rania                     Launch artist + brand ambassador
-                          300K Instagram followers
-                          2 studios: Beirut + Tripoli
-Spark (Claude)            AI engineering partner
-```
-
----
-
-*Last updated: May 2026*
-*Go rewrite started after Node.js MVP auth API complete*
+*Last verified against code: 2026-09-02.*

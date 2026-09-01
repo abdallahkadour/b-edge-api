@@ -1,5 +1,11 @@
 # CLAUDE-v5.md — B-Edge Engineering Context
 
+> **SUPERSEDED — history only, do not read for current state.**
+> The current engineering context is `CLAUDE.md`, verified against code
+> on 2026-09-02. This file is kept for the reasoning it records, not for
+> its facts, which are out of date.
+
+
 > Single source of truth for continuing the B-Edge build. Read this first in any new chat. Supersedes CLAUDE-v4.md and all earlier versions.
 > Last updated: August 7, 2026 · Schema v13 · 9 domains live · Both frontend apps substantially built · Gap analysis complete against locked specs (see `B-Edge-Targets-vs-Actual-Analysis-v1.md`).
 

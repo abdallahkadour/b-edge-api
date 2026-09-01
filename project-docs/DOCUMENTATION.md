@@ -20,6 +20,7 @@ rewritten — this is the diff to hold in mind while reading them.
 | Area | What changed | Where to read |
 |---|---|---|
 | **Billing tests** | `internal/billing` went from 0 to 59 service-layer tests. `DeriveStatus` and `ensureInvoicesUpTo` at 100%. No DB test infrastructure exists, so repository tests remain deliberately out of scope. | `B-Edge-Monetization-Implementation-Spec-v1.md` |
+| `B-Edge-Decision-Register-v1.md` | **New, Sep 2, 2026. The single list of what this product is waiting on.** 8 resolved decisions with the file each landed in, and 11 open ones with the column that actually matters: who can settle each. Three need only an hour of engineering (D3 discount precedence and D5 review attribution both have defensible competitor-practice defaults; D7 Stripe/Lebanon is purely factual). Three need the founder and nothing else: **D4** the service catalogue, which has the longest lead time in the whole plan and is not engineering work; **D6** Arabic priority, which D4 forces early; **D9** demand evidence for resources/split bookings. Absorbs the four founder questions stranded in the monetization spec §11, the sharpest being **D19 — who confirms payments daily**: there is exactly one admin account, and the entire revenue model assumes a human reliably checks OMT/Whish and clicks Confirm. Written because a decision that exists only in a chat transcript is not a decision the project has. |
 | **Enforcement windows** | **Changed from 7/21 days to 21/45** (decision D2). Grace 0–21 (full access), past_due 21–45 (hidden + unbookable, still editable), suspended 45+ (also no writes). The policy now lives in one function, `subscription.Enforce`. | `internal/pkg/subscription/status.go` — the reasoning is in the `GraceDays` doc comment |
 | **`internal/pkg/subscription`** | New leaf package holding the subscription state machine. Exists because `middleware` cannot import `billing` (import cycle) and had been hand-copying the threshold *and* re-implementing the derivation. | package doc comment |
 | **`internal/pkg/openinghours`** | New leaf package resolving whether a store is open. Extracted from `GetAvailableSlots` step 1, which was the only place the algorithm existed. | package doc comment |
@@ -72,6 +73,14 @@ product decisions, both live in `internal/billing`:
 ---
 
 ## ⚠️ Before anything else
+
+**Decisions live in one place now: `B-Edge-Decision-Register-v1.md`.** Read it
+before planning any sprint. The D1–D9 numbering used in planning sessions
+previously existed only in a chat transcript — nothing in either repository
+mentioned D3 or D9 — while the one log that did exist
+(`B-Edge-Monetization-Implementation-Spec-v1.md` §11) still listed currency and
+the enforcement thresholds as open after both had shipped. Both problems are
+fixed; §11 is now marked historical and points at the register.
 
 1. **The PRD-vs-Roadmap phase conflict is resolved (Aug 15, 2026).** `B-Edge-Product-Roadmap.docx` tagged Product Store as Phase 3 and Waitlist as Phase 2; `B-Edge-PRD-v7-Final.docx` tagged both Phase 1. Both have since shipped in full (migrations 016 and 017, full domains and screens on both frontend apps), so PRD v7's assignment wins — `B-Edge-Product-Roadmap.docx` has been edited to reclassify both as MVP with a note explaining why. That doc otherwise still reflects the original 2025 plan (email/password auth, SendGrid, 7-week timeline) rather than the actual build — not touched in this pass. See `CLAUDE-v6.md`.
 2. **Two new backend features are now cross-checked against the specs (Aug 15, 2026).** Customer OTP auth (`internal/customerauth`) and self-service artist onboarding + admin approval gate (`internal/onboarding`, `internal/admin`) both shipped without a doc pass. `B-Edge-PRD-v7-Final.docx` §3.3 actually said the *opposite* of what got built ("no approval required") — corrected in place with an update note, not silently rewritten. `B-Edge-UI-Spec-v2.md`'s C-11/C-12 (customer Register/Login) specced the artist email/password API for customers — corrected to the real OTP flow. Neither doc was rewritten wholesale; both got targeted update notes plus inline corrections at the specific wrong sections. See `CLAUDE-v6.md`.

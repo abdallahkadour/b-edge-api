@@ -718,19 +718,35 @@ from *should* to *must*:
 - **Admin console scope:** Billing + Plans + Artists tabs, plus a metrics summary
   strip; full analytics excluded (§7.2).
 
+### Resolved since — moved to the decision register
+
+> **This section was stale and is superseded.** Items 3 and 4 below were listed
+> as open here for days after both had been decided *and shipped to the
+> database*. The live list now lives in
+> **`B-Edge-Decision-Register-v1.md`**, which is the single place decisions are
+> tracked; keep this section as history and record new ones there.
+
+3. ~~**Grace/past_due/suspended thresholds.** §6.1 proposes 7/21 days.~~
+   **RESOLVED 2026-08-31 as 21/45** (register D2). §6.1's 7/21 proposal was
+   rejected as too aggressive. The policy now lives in one function,
+   `subscription.Enforce`, read by three call sites — **any threshold written
+   in this document is historical, not current.**
+4. ~~**Currency.** USD throughout, or USD-priced and LBP-collected?~~
+   **RESOLVED 2026-08-30 as USD only** (register D1), pinned at the database by
+   migration 026's `CHECK (currency = 'USD')` on `plans`, `subscriptions` and
+   `invoices`. The collected-amount-and-rate columns this item worried about are
+   not needed and must not be added.
+
 ### Still open
 
-These need the founder, not an engineer:
+These need the founder, not an engineer. Tracked as D16–D19 in the register:
 
 1. **Final prices.** §1's table is a proposal. Nothing is blocked by it — plans
    are rows now, so launch prices are a seed script and later changes are a form.
+   Six are seeded today (`starter` $7 … `multi` $50, plus `comped`).
 2. **Trial length**, and does it start at signup or at approval? (§7.3
-   recommends approval.)
-3. **Grace/past_due/suspended thresholds.** §6.1 proposes 7/21 days.
-4. **Currency.** USD throughout, or USD-priced and LBP-collected? Affects whether
-   `invoices.amount` needs a collected-amount-and-rate alongside it. **Decide
-   before migration 025 ships** — retrofitting currency onto historical invoices
-   is genuinely painful.
+   recommends approval.) `subscriptions.trial_ends_at` exists and is settable,
+   but **no subscription currently has one** — all six live ones are `comped`.
 5. **Does Rania's comp have an end date**, or is it revisited manually?
 6. **Who is the admin that confirms payments daily?** The flow assumes a human
    checks OMT and clicks Confirm. If that person doesn't exist reliably, the

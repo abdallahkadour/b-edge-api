@@ -14,18 +14,20 @@ import (
 // ── Booking status constants ──────────────────────────────────────────────────
 
 const (
-	StatusPending        = "pending"
-	StatusApproved       = "approved"
-	StatusHeld           = "held"
-	StatusDepositPending = "deposit_pending"
-	StatusDepositPaid    = "deposit_paid"
-	StatusConfirmed      = "confirmed"
-	StatusCompleted      = "completed"
-	StatusCancelled      = "cancelled"
-	StatusExpired        = "expired"
-	StatusNoShow         = "no_show"
-	StatusRefundDue      = "refund_due"
-	StatusRefunded       = "refunded"
+	StatusPending  = "pending"
+	StatusApproved = "approved"
+	StatusHeld     = "held"
+	// StatusDepositPending was removed from the schema by migration 032:
+	// no write path ever set it. The constant is gone rather than kept
+	// unused, so nothing can reintroduce it by autocomplete.
+	StatusDepositPaid = "deposit_paid"
+	StatusConfirmed   = "confirmed"
+	StatusCompleted   = "completed"
+	StatusCancelled   = "cancelled"
+	StatusExpired     = "expired"
+	StatusNoShow      = "no_show"
+	StatusRefundDue   = "refund_due"
+	StatusRefunded    = "refunded"
 )
 
 // ── Channel constants ─────────────────────────────────────────────────────────
@@ -183,7 +185,6 @@ var BlockingStatuses = []string{
 	StatusPending,
 	StatusApproved,
 	StatusHeld,
-	StatusDepositPending,
 	StatusDepositPaid,
 	StatusConfirmed,
 }
@@ -212,18 +213,17 @@ type ListBookingsByArtistFilter struct {
 // reject unknown ?status= values with a clear error instead of silently
 // returning an empty list.
 var ValidBookingStatuses = map[string]bool{
-	StatusPending:        true,
-	StatusApproved:       true,
-	StatusHeld:           true,
-	StatusDepositPending: true,
-	StatusDepositPaid:    true,
-	StatusConfirmed:      true,
-	StatusCompleted:      true,
-	StatusCancelled:      true,
-	StatusExpired:        true,
-	StatusNoShow:         true,
-	StatusRefundDue:      true,
-	StatusRefunded:       true,
+	StatusPending:     true,
+	StatusApproved:    true,
+	StatusHeld:        true,
+	StatusDepositPaid: true,
+	StatusConfirmed:   true,
+	StatusCompleted:   true,
+	StatusCancelled:   true,
+	StatusExpired:     true,
+	StatusNoShow:      true,
+	StatusRefundDue:   true,
+	StatusRefunded:    true,
 }
 
 // SalonService holds booking-relevant fields from the services table.
@@ -556,7 +556,7 @@ type WaitlistEntryResponse struct {
 // overlap constraint anyway.
 var MovableStatuses = []string{
 	StatusPending, StatusApproved, StatusHeld,
-	StatusDepositPending, StatusDepositPaid, StatusConfirmed,
+	StatusDepositPaid, StatusConfirmed,
 }
 
 // isMovable reports whether a booking's status permits a bulk move.

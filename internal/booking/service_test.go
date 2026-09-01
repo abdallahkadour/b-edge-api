@@ -2133,6 +2133,8 @@ func TestHoldGuestSlot_SuspendedArtist_Blocked(t *testing.T) {
 // machine rather than by a failing test - see
 // B-Edge-Booking-State-Machine-Matrix-v1.md sections 5.1 and 5.2.
 
+func strPtrB(v string) *string { return &v }
+
 func confirmableBooking(status string, start time.Time, artistID uuid.UUID) *Booking {
 	tok := strings.Repeat("c", 64)
 	return &Booking{
@@ -2325,4 +2327,58 @@ func TestMarkRefunded_DoesNotMessageTheCustomer(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, repo.enqueuedNotifications)
+}
+
+// ── Cancel after the appointment has started (matrix §4.4) ───────────────────
+
+// Past the start time the honest outcomes are `completed` or `no_show`.
+// Recording an appointment that happened as "cancelled" also misreports
+// earnings. Complete and no-show already guard the same boundary from the
+// other side; cancel was the only one of the three that did not.
+func TestCancelBooking_ConfirmedAndStarted_Rejected(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusConfirmed, time.Now().Add(-30*time.Minute), artistID)
+	b.CustomerID = userID
+	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+	svc := newTestService(repo)
+
+	_, err := svc.CancelBooking(context.Background(), b.ID, userID, "customer", CancelBookingRequest{Reason: strPtrB("changed my mind")})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "BOOKING_ALREADY_STARTED", appErr.Code)
+}
+
+func TestCancelBooking_ConfirmedAndUpcoming_Allowed(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusConfirmed, time.Now().Add(48*time.Hour), artistID)
+	b.CustomerID = userID
+	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+	svc := newTestService(repo)
+
+	_, err := svc.CancelBooking(context.Background(), b.ID, userID, "customer", CancelBookingRequest{Reason: strPtrB("changed my mind")})
+
+	require.NoError(t, err)
+}
+
+// The guard is scoped to `confirmed` deliberately. A blanket "cannot cancel
+// after the start time" would strand `pending` and `deposit_paid` bookings
+// permanently: neither has an expiry sweep (only `held` and `approved` do),
+// `pending` cannot be approved once its time passes, and cancel is their only
+// disposal. This is the test that stops someone widening the guard later
+// without noticing it creates a dead end.
+func TestCancelBooking_UnconfirmedAndStarted_StillCancellable(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusApproved, StatusDepositPaid, StatusHeld} {
+		artistID, userID := uuid.New(), uuid.New()
+		b := confirmableBooking(status, time.Now().Add(-30*time.Minute), artistID)
+		b.CustomerID = userID
+		repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
+		svc := newTestService(repo)
+
+		_, err := svc.CancelBooking(context.Background(), b.ID, userID, "customer", CancelBookingRequest{Reason: strPtrB("no longer needed")})
+
+		require.NoError(t, err,
+			"%s has no expiry sweep - blocking cancel here would strand it forever", status)
+	}
 }

@@ -1187,6 +1187,25 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 		return nil, apperror.Forbidden("NOT_BOOKING_OWNER", "You do not have permission to cancel this booking")
 	}
 
+	// A confirmed booking whose appointment has already started cannot be
+	// cancelled. Past that moment the honest outcomes are `completed` or
+	// `no_show`, and both already guard on the same boundary from the other
+	// side - cancel was the only one of the three that did not care.
+	// Recording an appointment that happened as "cancelled" also
+	// misreports earnings.
+	//
+	// Scoped to `confirmed` DELIBERATELY, not applied to every status.
+	// Working through the consequences of a blanket guard: `pending` has no
+	// expiry sweep at all (only `held` and `approved` do), and cannot be
+	// approved once its start time passes - so blocking cancel there would
+	// make a stale pending booking permanently unresolvable. Cancel is its
+	// only disposal. Same for `deposit_paid`, which no sweep covers either.
+	// See B-Edge-Booking-State-Machine-Matrix-v1.md section 4.4.
+	if b.Status == StatusConfirmed && b.StartTime.Before(time.Now()) {
+		return nil, apperror.Conflict("BOOKING_ALREADY_STARTED",
+			"This appointment has already started. Mark it completed or a no-show instead of cancelling.")
+	}
+
 	// Determine if a refund is due
 	refundDue := false
 

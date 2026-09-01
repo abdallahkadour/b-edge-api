@@ -561,7 +561,13 @@ type ShiftPreviewRequest struct {
 	Date string `json:"date" validate:"required"`
 	// ShiftMinutes may be negative to pull a day earlier. Bounded so a
 	// mistyped value cannot fling a day into next week.
-	ShiftMinutes int `json:"shift_minutes" validate:"required,min=-240,max=240"`
+	//
+	// Zero is rejected, but NOT by `required` - that would conflate "you
+	// sent 0" with "you sent nothing" and produce a validation error whose
+	// message contradicts the min/max range advertised right here. A
+	// pointer plus an explicit check lets the two cases carry different,
+	// honest errors. Found by E2E-TEST-PLAN.md section 12.2 (finding 2).
+	ShiftMinutes *int `json:"shift_minutes" validate:"required,min=-240,max=240"`
 }
 
 // ShiftPreviewItem is one booking that would move.

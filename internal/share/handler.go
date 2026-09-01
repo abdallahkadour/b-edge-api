@@ -95,8 +95,11 @@ func (h *Handler) ArtistPreview(c *fiber.Ctx) error {
 // after the browser's refresh tick, so a human barely sees this page.
 // Crawlers run neither.
 func renderPreviewHTML(title, description, image, target string) string {
-	t := html.EscapeString(title)
-	d := html.EscapeString(description)
+	// Bidi controls are stripped BEFORE escaping, because they are not
+	// HTML-special and would otherwise pass straight through - see
+	// stripBidiControls for the spoofing this prevents.
+	t := html.EscapeString(stripBidiControls(title))
+	d := html.EscapeString(stripBidiControls(description))
 	i := html.EscapeString(image)
 	u := html.EscapeString(target)
 

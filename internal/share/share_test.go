@@ -217,3 +217,70 @@ func TestNewHandler_TrimsTrailingSlashAndTakesFirstOrigin(t *testing.T) {
 	assert.Equal(t, "https://bedge.app", h.clientURL)
 	assert.False(t, strings.HasSuffix(h.clientURL, "/"))
 }
+
+// ── Bidi control stripping (finding 1, 2026-09-01) ───────────────────────────
+
+// The exact payload that produced the finding: this renders in a WhatsApp
+// preview as "Book now https://evil.com" if U+202E survives.
+func TestStripBidiControls_RemovesRTLOverride(t *testing.T) {
+	got := stripBidiControls("Book now ‮moc.live//:sptth")
+
+	assert.NotContains(t, got, "‮", "the override must not survive into a meta tag")
+	assert.Equal(t, "Book now moc.live//:sptth", got,
+		"only the control character is removed; the visible text is left alone")
+}
+
+func TestStripBidiControls_RemovesAllOverridesAndIsolates(t *testing.T) {
+	for _, r := range []rune{
+		'‪', '‫', '‬', '‭', '‮', // embeddings, PDF, overrides
+		'⁦', '⁧', '⁨', '⁩', // isolates
+	} {
+		in := "a" + string(r) + "b"
+		assert.Equal(t, "ab", stripBidiControls(in),
+			"U+%04X must be stripped", r)
+	}
+}
+
+// Arabic renders correctly through the bidi algorithm alone, so stripping
+// controls must not touch the script itself.
+func TestStripBidiControls_LeavesArabicIntact(t *testing.T) {
+	const arabic = "صالون الجمال"
+	assert.Equal(t, arabic, stripBidiControls(arabic))
+
+	const mixed = "Rania صالون 2026"
+	assert.Equal(t, mixed, stripBidiControls(mixed))
+}
+
+// LRM and RLM are weak directional MARKS, not overrides, and are
+// legitimately used to disambiguate a phone number inside an Arabic
+// sentence. Stripping them would degrade exactly the Arabic typography this
+// product is supposed to be good at.
+func TestStripBidiControls_KeepsDirectionalMarks(t *testing.T) {
+	withLRM := "اتصل ‎+96170123456"
+	assert.Equal(t, withLRM, stripBidiControls(withLRM),
+		"U+200E is a hint, not an override - it must survive")
+
+	withRLM := "call ‏صالون"
+	assert.Equal(t, withRLM, stripBidiControls(withRLM))
+}
+
+func TestStripBidiControls_NoControls_Unchanged(t *testing.T) {
+	assert.Equal(t, "Best bridal makeup artist in Beirut.",
+		stripBidiControls("Best bridal makeup artist in Beirut."))
+	assert.Equal(t, "", stripBidiControls(""))
+}
+
+// End-to-end: the rendered document must not carry the override even
+// though html.EscapeString does not touch it.
+func TestRenderPreviewHTML_StripsBidiFromTitleAndDescription(t *testing.T) {
+	doc := renderPreviewHTML(
+		"Rania ‮eruces",
+		"Book now ‮moc.live//:sptth",
+		"https://example.com/i.jpg",
+		"https://example.com/book/rania",
+	)
+
+	assert.NotContains(t, doc, "‮",
+		"no bidi override may reach the rendered card")
+	assert.Contains(t, doc, "Book now moc.live//:sptth")
+}

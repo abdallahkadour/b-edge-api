@@ -1562,6 +1562,14 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 		return nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist profile not found")
 	}
 
+	// Zero gets its own error rather than falling out of `required`, whose
+	// message would contradict the min/max range on the field.
+	if req.ShiftMinutes == nil || *req.ShiftMinutes == 0 {
+		return nil, apperror.BadRequest("SHIFT_MINUTES_ZERO",
+			"shift_minutes must be a non-zero number of minutes between -240 and 240")
+	}
+	shiftMinutes := *req.ShiftMinutes
+
 	storeID, err := uuid.Parse(req.StoreID)
 	if err != nil {
 		return nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
@@ -1569,6 +1577,13 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 	date, err := time.Parse("2006-01-02", req.Date)
 	if err != nil {
 		return nil, apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
+	}
+	// Go's time.Parse happily accepts year 0, so "0000-01-01" reached the
+	// query and scanned a day two millennia ago. Harmless on a read-only
+	// endpoint, but there is no legitimate caller and no reason to serve it.
+	// Found by E2E-TEST-PLAN.md section 12.3 (finding 3).
+	if err := validateScheduleDate(date, time.Now()); err != nil {
+		return nil, err
 	}
 
 	store, err := s.repo.GetStore(ctx, storeID)
@@ -1643,9 +1658,28 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 		CloseAt:      window.CloseAt,
 		StoreOpen:    storeOpen,
 		BufferFor:    func(id uuid.UUID) int { return buffers[id] },
-		ShiftMinutes: req.ShiftMinutes,
+		ShiftMinutes: shiftMinutes,
 		Now:          time.Now(),
 	})
 	resp.Date = req.Date
 	return resp, nil
+}
+
+// scheduleDateWindowYears bounds how far a schedule operation may address.
+//
+// Two years either side covers rebuilding last season's history and booking
+// a wedding well ahead, while excluding the values that only ever arrive by
+// accident - a year-zero date from a broken picker, or a timestamp parsed as
+// a year.
+const scheduleDateWindowYears = 2
+
+// validateScheduleDate rejects dates outside a sane window.
+func validateScheduleDate(date, now time.Time) error {
+	earliest := now.AddDate(-scheduleDateWindowYears, 0, 0)
+	latest := now.AddDate(scheduleDateWindowYears, 0, 0)
+	if date.Before(earliest) || date.After(latest) {
+		return apperror.BadRequest("DATE_OUT_OF_RANGE",
+			fmt.Sprintf("Date must be within %d years of today", scheduleDateWindowYears))
+	}
+	return nil
 }

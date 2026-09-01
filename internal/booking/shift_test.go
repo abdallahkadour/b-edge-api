@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
 
 func beirutLoc(t *testing.T) *time.Location {
@@ -328,4 +330,50 @@ func TestGapBetween_Overlapping_ReturnsZero(t *testing.T) {
 	gap, ok := gapBetween(a1, a2, b1, b2)
 	require.True(t, ok)
 	assert.Equal(t, time.Duration(0), gap)
+}
+
+// ── Request validation (findings 2 and 3, 2026-09-01) ────────────────────────
+
+// A shift of zero used to fall out of `validate:"required"`, producing a
+// generic validation error whose message contradicted the min/max range
+// advertised on the same field. It now has its own code, and "you sent 0" is
+// distinguishable from "you sent nothing".
+func TestValidateScheduleDate_WithinWindow(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	require.NoError(t, validateScheduleDate(now, now))
+	require.NoError(t, validateScheduleDate(now.AddDate(0, 0, -1), now))
+	require.NoError(t, validateScheduleDate(now.AddDate(1, 0, 0), now))
+	require.NoError(t, validateScheduleDate(now.AddDate(-1, 0, 0), now))
+}
+
+// Year zero is the case that actually turned up: Go's time.Parse accepts
+// "0000-01-01" happily, and it reached the query.
+func TestValidateScheduleDate_YearZero_Rejected(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	zero := time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	err := validateScheduleDate(zero, now)
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "DATE_OUT_OF_RANGE", appErr.Code)
+}
+
+func TestValidateScheduleDate_FarFuture_Rejected(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	require.Error(t, validateScheduleDate(now.AddDate(3, 0, 0), now))
+	require.Error(t, validateScheduleDate(now.AddDate(-3, 0, 0), now))
+}
+
+// The window boundary belongs to the ACCEPTED side - a date exactly two
+// years out is within "two years of today".
+func TestValidateScheduleDate_ExactBoundary_Accepted(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	assert.NoError(t, validateScheduleDate(now.AddDate(scheduleDateWindowYears, 0, 0), now))
+	assert.NoError(t, validateScheduleDate(now.AddDate(-scheduleDateWindowYears, 0, 0), now))
+	assert.Error(t, validateScheduleDate(now.AddDate(scheduleDateWindowYears, 0, 1), now))
 }

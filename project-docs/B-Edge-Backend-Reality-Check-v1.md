@@ -1,4 +1,11 @@
 # B-Edge — Backend Reality Check v1
+
+> **Snapshot, not current state.** Figures below (domain counts, schema
+> version, table counts) were true when written. Verified against code on
+> 2026-09-02 the project has **32 migrations, 29 tables, 17 domains, 115
+> route registrations, 570 tests**. Read this for its analysis, not its
+> numbers; `CLAUDE.md` has the current figures.
+
 **What the schema ACTUALLY has vs. what the screens need**
 *Based on reading the real `001_initial_schema_up.sql` (not the docs) · June 2026*
 

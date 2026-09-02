@@ -1,5 +1,12 @@
 # B-Edge — Monetization Implementation Spec v1
 
+> **Snapshot, not current state.** Figures below (domain counts, schema
+> version, table counts) were true when written. Verified against code on
+> 2026-09-02 the project has **32 migrations, 29 tables, 17 domains, 115
+> route registrations, 570 tests**. Read this for its analysis, not its
+> numbers; `CLAUDE.md` has the current figures.
+
+
 > **Status: backend and all three UI screens are live (Aug 29, 2026).** Migrations
 > 023–025 (`plans`, `subscriptions`, `invoices`) are applied to the local dev DB,
 > and the full `internal/billing` domain is built and running: plan catalogue

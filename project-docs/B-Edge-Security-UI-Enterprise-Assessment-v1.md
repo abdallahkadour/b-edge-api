@@ -1,5 +1,12 @@
 # B-Edge — Security, UI & Enterprise-Readiness Assessment
 
+> **Snapshot, not current state.** Figures below (domain counts, schema
+> version, table counts) were true when written. Verified against code on
+> 2026-09-02 the project has **32 migrations, 29 tables, 17 domains, 115
+> route registrations, 570 tests**. Read this for its analysis, not its
+> numbers; `CLAUDE.md` has the current figures.
+
+
 > Purpose: a single reference for "where are we, and what would it take to go further" across three axes — security, UI/design quality, and enterprise-grade readiness. Written so a future session can pick up any one item without re-deriving the reasoning. This is a snapshot as of August 15, 2026; verify anything load-bearing against current code before acting on it, the same way this document itself was built by checking code, not memory.
 >
 > For day-to-day engineering context, read `CLAUDE-v6.md` first — this document is a focused synthesis of one slice of it (security + UI + "enterprise" gap analysis), not a replacement.

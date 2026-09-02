@@ -1,4 +1,25 @@
 # B-Edge — UI Specification v2
+
+
+> ## ⚠️ Endpoint names in this spec are STALE — verified 2026-09-02
+>
+> Nine endpoints named below do not exist under those paths. Eight were
+> renamed during the build; one was never built. Checked by matching every
+> `/api/v1/...` string in this file against the registered routes in Go
+> source.
+>
+> | This spec says | Actually |
+> |---|---|
+> | `GET /api/v1/artists/:slug` | Does not exist. **`GET /api/v1/artists/:id` accepts a handle *or* a UUID** — that is what makes `/book/rania` work. `GET /api/v1/discovery/artists/:id` is **UUID-only** and returns `INVALID_ID` for a handle. |
+> | `GET·POST·DELETE /api/v1/artists/me/block-dates` | `GET·POST /api/v1/artists/stores/:store_id/exceptions`, `DELETE .../exceptions/:date`. Per **store**, not per artist. |
+> | `GET /api/v1/bookings/:ref` | `GET /api/v1/bookings/:id` (UUID) |
+> | `PATCH /api/v1/bookings/:id/mark-deposit-received` | `PATCH /api/v1/bookings/:id/deposit-received` |
+> | `PATCH /api/v1/bookings/:id/mark-refunded` | `PATCH /api/v1/bookings/:id/refunded` — built 2026-09-01, closing a dead end this spec anticipated |
+> | `PATCH /api/v1/media/:id/set-cover` | `PATCH /api/v1/media/:id/cover` |
+> | `PATCH /api/v1/bookings/:id/decline` | **Never built.** There is no decline path — the artist cancels instead. |
+>
+> The screen designs and flows here are still useful. The endpoint names are not.
+
 **Complete Screen Inventory · API Dependencies · Navigation Flows · Backend Validation**
 *Prepared by Spark · June 2026 · Confidential*
 

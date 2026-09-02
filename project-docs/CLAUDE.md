@@ -32,7 +32,7 @@ Lebanon." Solo founder build.
 | Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
 | Migrations | **32** (latest `032_drop_deposit_pending_status`) |
 | Tables | **29** |
-| Route registrations | **110** |
+| Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · 111 documented in swagger |
 | Go tests | **570**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
@@ -112,6 +112,12 @@ Two suites are worth knowing before writing tests:
   `internal/pkg/bidi`. A bidi override is not markup, so no escaping catches
   it. Current surfaces: Open Graph tags, notification bodies, `.ics`
   SUMMARY/LOCATION, the Google Calendar deep link.
+- **Two artist-lookup endpoints, and only one accepts a handle.**
+  `GET /api/v1/artists/:id` resolves a **handle or a UUID** — this is what makes
+  `/book/rania` work, and the funnel calls it first specifically to get a real
+  UUID. `GET /api/v1/discovery/artists/:id` is **UUID-only** and answers
+  `INVALID_ID` for a handle. Passing a route param straight to discovery is the
+  easy mistake.
 - **Any code changing `bookings.start_time`/`end_time` must increment
   `calendar_sequence` in the same statement**, or a rescheduled booking creates
   a second event in the customer's calendar instead of moving the first.

@@ -1,5 +1,12 @@
 # B-Edge — Security Assessment &amp; Penetration Test Plan v1
 
+> **Snapshot, not current state.** Figures below (domain counts, schema
+> version, table counts) were true when written. Verified against code on
+> 2026-09-02 the project has **32 migrations, 29 tables, 17 domains, 115
+> route registrations, 570 tests**. Read this for its analysis, not its
+> numbers; `CLAUDE.md` has the current figures.
+
+
 > Written 2026-08-31. A threat matrix and executable test plan for the API
 > border, authentication boundaries, and transaction workflows.
 >

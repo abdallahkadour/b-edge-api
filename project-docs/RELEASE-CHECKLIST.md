@@ -17,7 +17,7 @@
 **Closed one thing this document did not list as a risk, because it did not
 exist yet when this was written:** `internal/billing` shipped on Aug 29 with
 **zero tests** — the only substantial domain without any, and the one
-deciding who gets locked out. It now has 59 service-layer tests, with
+deciding who gets locked out. It now has 44 service-layer tests (83 across the billing surface as of 2026-09-02), with
 `DeriveStatus` and `ensureInvoicesUpTo` at 100%. Subscriptions are the entire
 revenue model in a market without card rails, so this was disproportionately
 serious for its size.

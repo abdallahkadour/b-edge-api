@@ -1288,20 +1288,7 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 		}
 	}
 
-	// A cancellation just freed up this exact date for this artist/store/
-	// service - check whether anyone's waiting for it. Fires regardless of
-	// who cancelled (artist or customer): either way, a real slot opened
-	// up, and that's the only thing the waitlist cares about. Best-effort,
-	// matching every other notification tonight - a failure here must
-	// never fail the cancellation that already succeeded.
-	waitlistDate := time.Date(b.StartTime.Year(), b.StartTime.Month(), b.StartTime.Day(), 0, 0, 0, 0, time.UTC)
-	if err := s.repo.NotifyNextWaitlistEntry(ctx, b.ArtistID, b.StoreID, b.ServiceID, waitlistDate); err != nil {
-		s.log.Error("failed to notify next waitlist entry - cancellation succeeded",
-			zap.Error(err),
-			zap.String("artist_id", b.ArtistID.String()),
-			zap.String("service_id", b.ServiceID.String()),
-		)
-	}
+	s.cascadeWaitlist(ctx, b, "cancelled")
 
 	return toResponse(b), nil
 }
@@ -1456,6 +1443,13 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 		s.enqueueNotification(ctx, bookingID, b.CustomerID, "review_request", message)
 	}
 
+	// Completing early hands the unused cleanup back (migration 033), which
+	// reopens real time on the calendar. Fires unconditionally rather than
+	// only when the release was non-zero: deciding that here would mean
+	// re-deriving what the UPDATE actually did, and a cascade that finds
+	// nobody waiting is a cheap no-op.
+	s.cascadeWaitlist(ctx, b, "completed_early")
+
 	return toResponse(b), nil
 }
 
@@ -1499,6 +1493,12 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 	}
 
 	b.Status = StatusNoShow
+	// A no-show frees the slot: `no_show` is not a blocking status, so the
+	// time is immediately bookable again. It was the largest of the three
+	// silent gaps - the customer who did not turn up is exactly the case a
+	// waitlist exists to backfill.
+	s.cascadeWaitlist(ctx, b, "no_show")
+
 	return toResponse(b), nil
 }
 
@@ -1507,21 +1507,23 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 // ReleaseExpiredHolds releases all held bookings whose 10-minute window
 // has passed. Called by the background job every minute.
 func (s *Service) ReleaseExpiredHolds(ctx context.Context) (int64, error) {
-	count, err := s.repo.ReleaseExpiredHolds(ctx)
+	freed, err := s.repo.ReleaseExpiredHolds(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("release expired holds: %w", err)
 	}
-	return count, nil
+	s.cascadeFreedSlots(ctx, freed, "hold_expired")
+	return int64(len(freed)), nil
 }
 
 // ExpireDeadlineBookings expires all approved bookings whose deposit
 // deadline has passed. Called by the background job every minute.
 func (s *Service) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
-	count, err := s.repo.ExpireDeadlineBookings(ctx)
+	freed, err := s.repo.ExpireDeadlineBookings(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("expire deadline bookings: %w", err)
 	}
-	return count, nil
+	s.cascadeFreedSlots(ctx, freed, "deposit_deadline_lapsed")
+	return int64(len(freed)), nil
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -1556,6 +1558,62 @@ var apiPublicURL = func() string {
 	}
 	return "http://localhost:3000"
 }()
+
+// cascadeFreedSlots runs the waitlist cascade for every slot an expiry
+// sweep released.
+//
+// The sweeps run lazily on the read path of GetAvailableSlots, so this fires
+// during a read - consistent with the sweeps themselves already mutating
+// there, and it only does anything when rows genuinely changed. An empty
+// slice is the overwhelmingly common case and costs one length check.
+func (s *Service) cascadeFreedSlots(ctx context.Context, freed []FreedSlot, reason string) {
+	for _, f := range freed {
+		s.cascadeWaitlist(ctx, &Booking{
+			ArtistID:  f.ArtistID,
+			StoreID:   f.StoreID,
+			ServiceID: f.ServiceID,
+			StartTime: f.StartTime,
+		}, reason)
+	}
+}
+
+// cascadeWaitlist tells the next person in line that a slot opened.
+//
+// Called from every event that frees time on an artist's calendar, not just
+// cancellation. Until now `cancelled` was the ONLY caller, which left three
+// silent gaps - a no-show, a lapsed hold or deposit deadline, and (since
+// migration 033) an appointment finishing early and handing its cleanup
+// back. In every one of those a real slot opens and nobody waiting was ever
+// told, so the queue simply stalled until an unrelated cancellation
+// happened to occur for the same artist, store, service and date.
+//
+// `reason` is for the log only. It costs nothing and it is the difference
+// between "the waitlist fired" and knowing which path fired it, which is
+// most of the work when this misbehaves in production.
+//
+// Best-effort on purpose, like every other notification in this service: a
+// failure here must never fail the operation that already succeeded. The
+// booking was cancelled, or completed, or marked no-show - undoing that
+// because a queue lookup failed would be strictly worse than a missed
+// notification.
+func (s *Service) cascadeWaitlist(ctx context.Context, b *Booking, reason string) {
+	if b == nil {
+		return
+	}
+	// The waitlist is keyed to a DATE, not an instant - someone waiting for
+	// "a slot on the 14th" does not care which hour opened up.
+	date := time.Date(b.StartTime.Year(), b.StartTime.Month(), b.StartTime.Day(),
+		0, 0, 0, 0, time.UTC)
+
+	if err := s.repo.NotifyNextWaitlistEntry(ctx, b.ArtistID, b.StoreID, b.ServiceID, date); err != nil {
+		s.log.Error("failed to notify next waitlist entry - the freeing operation still succeeded",
+			zap.Error(err),
+			zap.String("reason", reason),
+			zap.String("artist_id", b.ArtistID.String()),
+			zap.String("service_id", b.ServiceID.String()),
+		)
+	}
+}
 
 // announceConfirmed tells the customer their booking is confirmed.
 //

@@ -219,11 +219,11 @@ type Repository interface {
 
 	// ReleaseExpiredHolds updates held bookings whose held_until has passed
 	// back to their released state. Called by background job every minute.
-	ReleaseExpiredHolds(ctx context.Context) (int64, error)
+	ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error)
 
 	// ExpireDeadlineBookings expires approved bookings whose deposit_deadline
 	// has passed without payment. Called by background job every minute.
-	ExpireDeadlineBookings(ctx context.Context) (int64, error)
+	ExpireDeadlineBookings(ctx context.Context) ([]FreedSlot, error)
 
 	// ExpireStalePendingBookings expires this artist's pending requests whose
 	// own start_time has already passed. Called lazily from the artist
@@ -1179,36 +1179,57 @@ func (r *pgRepo) MarkNoShow(ctx context.Context, id uuid.UUID) error {
 
 // ReleaseExpiredHolds releases held bookings whose 10-minute window has passed.
 // Called by background job every minute.
-func (r *pgRepo) ReleaseExpiredHolds(ctx context.Context) (int64, error) {
-	result, err := r.db.Exec(ctx, `
+func (r *pgRepo) ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error) {
+	// RETURNING rather than a bare Exec: the caller needs to know WHICH
+	// slots opened so it can tell anyone waiting for them. A row count
+	// cannot be cascaded from, which is why expiry was silently missing
+	// from the waitlist for as long as this returned one.
+	rows, err := r.db.Query(ctx, `
 		UPDATE bookings
 		SET status = $1, updated_at = NOW()
 		WHERE status = $2
 		AND held_until < NOW()
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL
+		RETURNING artist_id, store_id, service_id, start_time`,
 		StatusExpired, StatusHeld,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("release expired holds: %w", err)
+		return nil, fmt.Errorf("release expired holds: %w", err)
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	return scanFreedSlots(rows)
+}
+
+// scanFreedSlots collects the rows an expiry sweep released.
+func scanFreedSlots(rows pgx.Rows) ([]FreedSlot, error) {
+	var out []FreedSlot
+	for rows.Next() {
+		var f FreedSlot
+		if err := rows.Scan(&f.ArtistID, &f.StoreID, &f.ServiceID, &f.StartTime); err != nil {
+			return nil, fmt.Errorf("scan freed slot: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // ExpireDeadlineBookings expires approved bookings whose deposit deadline has passed.
 // Called by background job every minute.
-func (r *pgRepo) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
-	result, err := r.db.Exec(ctx, `
+func (r *pgRepo) ExpireDeadlineBookings(ctx context.Context) ([]FreedSlot, error) {
+	rows, err := r.db.Query(ctx, `
 		UPDATE bookings
 		SET status = $1, updated_at = NOW()
 		WHERE status = $2
 		AND deposit_deadline < NOW()
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL
+		RETURNING artist_id, store_id, service_id, start_time`,
 		StatusExpired, StatusApproved,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("expire deadline bookings: %w", err)
+		return nil, fmt.Errorf("expire deadline bookings: %w", err)
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	return scanFreedSlots(rows)
 }
 
 // ExpireStalePendingBookings expires pending requests whose own appointment

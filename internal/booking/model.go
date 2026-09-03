@@ -272,6 +272,19 @@ type TimeSlot struct {
 	EarlyBirdFee decimal.Decimal `json:"early_bird_fee,omitempty"`
 }
 
+// FreedSlot is a booking that an expiry sweep released, reduced to just
+// what the waitlist cascade needs.
+//
+// The sweeps used to return only a row count, which meant the two paths that
+// free the most slots - a lapsed hold and a lapsed deposit deadline - could
+// not tell anyone. A count cannot be cascaded from.
+type FreedSlot struct {
+	ArtistID  uuid.UUID
+	StoreID   uuid.UUID
+	ServiceID uuid.UUID
+	StartTime time.Time
+}
+
 // TimeRange was an untyped blocked window, replaced by Interval in
 // occupancy.go. Removed rather than deprecated: it had exactly one caller,
 // and leaving a second way to say "a span of time" next to a typed one is

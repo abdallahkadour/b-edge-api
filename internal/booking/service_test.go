@@ -95,10 +95,10 @@ type mockRepo struct {
 	notificationContextErr                error
 	enqueuedNotifications                 []enqueuedNotification
 	markNoShowErr                         error
-	releaseExpiredHoldsCount              int64
+	releaseExpiredHoldsFreed              []FreedSlot
 	releaseExpiredHoldsErr                error
 	releaseExpiredHoldsCalled             bool
-	expireDeadlineBookingsCount           int64
+	expireDeadlineBookingsFreed           []FreedSlot
 	expireDeadlineBookingsErr             error
 	expireDeadlineBookingsCalled          bool
 	expireStalePendingCount               int64
@@ -117,6 +117,7 @@ type mockRepo struct {
 	getWaitlistByArtistEntries  []*WaitlistEntryResponse
 	getWaitlistByArtistErr      error
 	notifyNextWaitlistCalled    bool
+	notifyNextWaitlistCount     int
 	notifyNextWaitlistArtistID  uuid.UUID
 	notifyNextWaitlistStoreID   uuid.UUID
 	notifyNextWaitlistServiceID uuid.UUID
@@ -235,6 +236,7 @@ func (m *mockRepo) GetWaitlistByArtist(_ context.Context, _ uuid.UUID) ([]*Waitl
 }
 func (m *mockRepo) NotifyNextWaitlistEntry(_ context.Context, artistID, storeID, serviceID uuid.UUID, date time.Time) error {
 	m.notifyNextWaitlistCalled = true
+	m.notifyNextWaitlistCount++
 	m.notifyNextWaitlistArtistID = artistID
 	m.notifyNextWaitlistStoreID = storeID
 	m.notifyNextWaitlistServiceID = serviceID
@@ -244,13 +246,13 @@ func (m *mockRepo) NotifyNextWaitlistEntry(_ context.Context, artistID, storeID,
 func (m *mockRepo) MarkNoShow(_ context.Context, _ uuid.UUID) error {
 	return m.markNoShowErr
 }
-func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) (int64, error) {
+func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) ([]FreedSlot, error) {
 	m.releaseExpiredHoldsCalled = true
-	return m.releaseExpiredHoldsCount, m.releaseExpiredHoldsErr
+	return m.releaseExpiredHoldsFreed, m.releaseExpiredHoldsErr
 }
-func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) (int64, error) {
+func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) ([]FreedSlot, error) {
 	m.expireDeadlineBookingsCalled = true
-	return m.expireDeadlineBookingsCount, m.expireDeadlineBookingsErr
+	return m.expireDeadlineBookingsFreed, m.expireDeadlineBookingsErr
 }
 func (m *mockRepo) ExpireStalePendingBookings(_ context.Context, artistID uuid.UUID) (int64, error) {
 	m.expireStalePendingCalled = true

@@ -26,6 +26,7 @@ package booking
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -371,4 +372,99 @@ func TestGolden_BufferMustFitBeforeClosing(t *testing.T) {
 		"the loop bounds on the appointment ending by close, not the cleanup")
 	assert.Equal(t, 29, len(slots),
 		"an empty day is unaffected by the buffer - there is nothing to be separated from")
+}
+
+// ── Waitlist cascade (Sprint 7 T7.3) ─────────────────────────────────────────
+//
+// Until now `cancelled` was the only event that told the waitlist a slot had
+// opened. These pin the three that were silently missing.
+
+// waitlistRepo returns a repo with one confirmed booking that can be freed.
+func waitlistRepo(t *testing.T, status string) (*mockRepo, *Booking) {
+	t.Helper()
+	artistID := uuid.New()
+	b := &Booking{
+		ID: uuid.New(), ArtistID: artistID, CustomerID: uuid.New(),
+		StoreID: uuid.New(), ServiceID: uuid.New(),
+		Status:    status,
+		StartTime: time.Now().Add(-2 * time.Hour),
+		EndTime:   time.Now().Add(-1 * time.Hour),
+	}
+	return &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID,
+		getServiceSvc:               &SalonService{DurationMin: 60},
+	}, b
+}
+
+// A no-show frees the slot - `no_show` is not a blocking status - and was
+// the largest of the three gaps: the customer who did not turn up is exactly
+// the case a waitlist exists to backfill.
+func TestWaitlist_NoShowCascades(t *testing.T) {
+	repo, b := waitlistRepo(t, StatusConfirmed)
+	svc := newTestService(repo)
+
+	_, err := svc.MarkNoShow(context.Background(), b.ID, uuid.New())
+
+	require.NoError(t, err)
+	assert.True(t, repo.notifyNextWaitlistCalled,
+		"a no-show frees the slot and must tell anyone waiting for it")
+}
+
+// Completing hands back any unused cleanup (migration 033), reopening real
+// time on the calendar.
+func TestWaitlist_CompletionCascades(t *testing.T) {
+	repo, b := waitlistRepo(t, StatusConfirmed)
+	svc := newTestService(repo)
+
+	_, err := svc.CompleteBooking(context.Background(), b.ID, uuid.New())
+
+	require.NoError(t, err)
+	assert.True(t, repo.notifyNextWaitlistCalled)
+}
+
+// Both expiry sweeps free slots, and both used to return only a row count -
+// which cannot be cascaded from. That is why expiry was silently missing.
+func TestWaitlist_ExpirySweepsCascadePerFreedSlot(t *testing.T) {
+	freed := []FreedSlot{
+		{ArtistID: uuid.New(), StoreID: uuid.New(), ServiceID: uuid.New(), StartTime: time.Now()},
+		{ArtistID: uuid.New(), StoreID: uuid.New(), ServiceID: uuid.New(), StartTime: time.Now()},
+	}
+
+	holds := &mockRepo{releaseExpiredHoldsFreed: freed}
+	n, err := newTestService(holds).ReleaseExpiredHolds(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n, "the count is now derived from what was actually freed")
+	assert.Equal(t, 2, holds.notifyNextWaitlistCount, "one cascade per freed slot")
+
+	deadlines := &mockRepo{expireDeadlineBookingsFreed: freed}
+	n, err = newTestService(deadlines).ExpireDeadlineBookings(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.Equal(t, 2, deadlines.notifyNextWaitlistCount)
+}
+
+// Nothing expired is the overwhelmingly common case - the sweeps run on
+// every availability query - and must cost nothing.
+func TestWaitlist_NothingFreedDoesNotCascade(t *testing.T) {
+	repo := &mockRepo{}
+
+	n, err := newTestService(repo).ReleaseExpiredHolds(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.False(t, repo.notifyNextWaitlistCalled)
+}
+
+// A waitlist failure must never fail the operation that already succeeded.
+// The booking was marked no-show; undoing that because a queue lookup broke
+// would be strictly worse than a missed notification.
+func TestWaitlist_CascadeFailureDoesNotFailTheOperation(t *testing.T) {
+	repo, b := waitlistRepo(t, StatusConfirmed)
+	repo.notifyNextWaitlistErr = errors.New("queue unreachable")
+	svc := newTestService(repo)
+
+	_, err := svc.MarkNoShow(context.Background(), b.ID, uuid.New())
+
+	require.NoError(t, err, "the no-show still succeeded")
 }

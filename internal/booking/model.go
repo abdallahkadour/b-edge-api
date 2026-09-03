@@ -259,16 +259,10 @@ type TimeSlot struct {
 	EarlyBirdFee decimal.Decimal `json:"early_bird_fee,omitempty"`
 }
 
-// TimeRange is an internal helper representing a blocked time window.
-type TimeRange struct {
-	Start time.Time
-	End   time.Time
-}
-
-// Overlaps returns true if this TimeRange overlaps with another.
-func (r TimeRange) Overlaps(other TimeRange) bool {
-	return r.Start.Before(other.End) && other.Start.Before(r.End)
-}
+// TimeRange was an untyped blocked window, replaced by Interval in
+// occupancy.go. Removed rather than deprecated: it had exactly one caller,
+// and leaving a second way to say "a span of time" next to a typed one is
+// how the typing gets bypassed by whoever reaches for the shorter name.
 
 // ── Request structs ───────────────────────────────────────────────────────────
 

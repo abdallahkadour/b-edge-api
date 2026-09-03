@@ -268,9 +268,17 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 		return nil, fmt.Errorf("get available slots: get bookings: %w", err)
 	}
 
-	var blocked []TimeRange
+	// The artist's occupied time, as a typed interval set rather than a flat
+	// list of ranges. See occupancy.go for why kinds exist before anything
+	// produces more than one of them.
+	//
+	// GetArtistBookingsForDate has no store filter, so this already includes
+	// bookings at OTHER stores - step 5 adds travel buffers AROUND them, it
+	// does not add the bookings themselves. Filtering this query by store
+	// would silently stop cross-store bookings blocking their own span.
+	occupied := &Occupancy{}
 	for _, b := range existingBookings {
-		blocked = append(blocked, TimeRange{Start: b.StartTime, End: b.EndTime})
+		occupied.AddRange(b.StartTime, b.EndTime, KindService)
 	}
 
 	// ── Step 5: Travel buffer for cross-store bookings ────────────────────
@@ -300,21 +308,17 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 			}
 		}
 
-		bufferDuration := time.Duration(bufferMins) * time.Minute
-
-		// Block: buffer before the cross-store booking starts
-		// (artist needs time to travel TO the other store)
-		blocked = append(blocked, TimeRange{
-			Start: csb.StartTime.Add(-bufferDuration),
-			End:   csb.StartTime,
-		})
-
-		// Block: buffer after the cross-store booking ends
-		// (artist needs time to travel BACK)
-		blocked = append(blocked, TimeRange{
-			Start: csb.EndTime,
-			End:   csb.EndTime.Add(bufferDuration),
-		})
+		// Travel time either side: out to the other store, and back.
+		//
+		// Expressed as KindTravel intervals rather than anonymous ranges.
+		// This is the proof the abstraction holds - an already-shipped
+		// complication that has to fit without special-casing. A zero
+		// buffer produces zero-length intervals, which Add drops, so no
+		// caller needs to guard the common case.
+		for _, tv := range TravelIntervals(csb.StartTime, csb.EndTime,
+			time.Duration(bufferMins)*time.Minute) {
+			occupied.Add(tv)
+		}
 	}
 
 	// ── Step 6: Early bird config ─────────────────────────────────────────
@@ -335,17 +339,13 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	for current.Add(serviceDuration).Before(closeTime) || current.Add(serviceDuration).Equal(closeTime) {
 		slotEnd := current.Add(serviceDuration)
 
-		candidate := TimeRange{Start: current, End: slotEnd}
-		overlap := false
+		candidate := Interval{Start: current, End: slotEnd, Kind: KindService}
 
-		for _, b := range blocked {
-			if candidate.Overlaps(b) {
-				overlap = true
-				break
-			}
-		}
-
-		if !overlap {
+		// BlocksArtist, not OverlapsAny: the question here is whether the
+		// ARTIST can take this slot. The two are identical today because
+		// every kind produced blocks her, and they diverge the moment a
+		// processing gap exists - time the chair is busy and she is not.
+		if !occupied.BlocksArtist(candidate) {
 			slot := &TimeSlot{
 				StartTime: current,
 				EndTime:   slotEnd,

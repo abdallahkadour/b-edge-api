@@ -39,6 +39,7 @@ resolved, it is an intention.
 | **D14** | **`deposit_pending` dropped from the schema; `refunded` kept.** The first had no writer and no rows, ever. The second got one when the refund dead end was closed. | Migration 032 · matrix §4.3 | 2026-09-01 |
 | **D15** | **Cancel-after-start blocked for `confirmed` only** — not as a blanket rule. Only `held` and `approved` have an expiry sweep, so blocking cancel on `pending`/`deposit_paid` would strand them permanently. | `CancelBooking` guard · matrix §4.4 | 2026-09-01 |
 | **D7** | **Stripe: still unavailable in Lebanon — confirmed, and stays excluded.** But the *reason* recorded for the exclusion was wrong. See the note below: "no card rails in Lebanon" is not true, and the boundary moved rather than being confirmed. | This register §2.1 · new question D20 | 2026-09-02 |
+| **D20** | **Tap is out — they do not onboard Lebanese merchants.** Their own support documentation: *"We currently do not accept any new merchants from Egypt, Jordan, or Lebanon."* Payouts go only to GCC-domiciled businesses. **But the answer split the excluded scope in half** — see §2.2. | This register §2.2 · new question D21 | 2026-09-03 |
 
 ---
 
@@ -55,7 +56,7 @@ hour of engineering, and one (D20) on a single email.
 | **D5** | **Review attribution.** One review per visit; salon rating + primary-specialist rating; the tie-break for "primary" when a visit has several services (longest, or highest value). | Sprint 8 | **Proposal written 2026-09-03** — `B-Edge-D3-D5-Proposals-v1.md`. Only the tie-break was genuinely open. Awaiting a yes/no |
 | **D6** | **Arabic-first priority.** A prioritised sprint, or after Phase 3? | Sprint 11 | **Founder.** And **D4 forces it** — you cannot curate `name_ar` and then decide Arabic does not matter |
 | **D8** | **`TWILIO_WHATSAPP_FROM`.** `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` are set; the sender is not. | Customer login, booking approvals/confirmations/cancellations, review requests, the calendar link, bulk-shift notifications | **Procurement.** Founder — targeted end of week 2026-09-06 |
-| **D20** | **Is B-Edge eligible for Tap Payments' Marketplace product in Lebanon?** One email decides whether card-on-file, automated cancellation fees and multi-merchant payouts reopen — see D7. Tap's docs do not publish country coverage for the marketplace product and say to contact them for eligibility. | Sprints not yet written: card-on-file, cancellation-fee capture, artist payouts | **Founder, ~15 minutes.** One email to Tap. Highest value-per-minute item on this list |
+| **D21** | **Does Areeba support split / marketplace payouts to sub-merchants?** The narrow remainder of D20. Card-on-file is settled (yes, via Areeba); paying artists out of a platform-collected charge is not. One email to Areeba. | Artist payouts only — *not* card-on-file or cancellation fees, which D20 unblocked | **Founder, ~15 minutes.** One email |
 | **D9** | **Do resources / split bookings have demonstrated demand** from paying salons? | Sprints 12–13 | **Founder.** Needs market evidence |
 | **D16** | **Final launch prices.** Six plans are seeded (`starter` $7 … `multi` $50, plus `comped`), but they are a proposal. Nothing is blocked — plans are rows, so launch prices are a seed edit and later changes are a form. | Nothing technically | **Founder** |
 | **D17** | **Trial length, and does it start at signup or at approval?** `subscriptions.trial_ends_at` exists and is settable, but no trial is configured and **no subscription currently has one** — all six live subscriptions are `comped`. | Self-service onboarding | **Founder.** The monetization spec §7.3 recommends starting at approval |
@@ -112,16 +113,57 @@ is fifteen minutes of founder time for a potentially large change in scope.
 
 Nothing should be built against this until D20 comes back.
 
+
+### 2.2 D20 in full — half the excluded scope was never actually blocked
+
+**Tap: no.** Their support documentation is explicit — *"We currently do not
+accept any new merchants from Egypt, Jordan, or Lebanon."* Payouts are made
+only to businesses domiciled in GCC countries. Their `/en-lb` landing page
+advertising Lebanese acceptance refers to accepting payments *from* Lebanon,
+not to onboarding Lebanese merchants. No email needed; the question is closed.
+
+**But answering it split the excluded scope in two, and only one half is
+actually blocked.**
+
+| Capability | Status |
+|---|---|
+| **Card-on-file / tokenization / recurring charges** | **Available.** Areeba is Beirut-based, founded 2017, onboards Lebanese merchants, and offers tokenization (storing a card as an encrypted token for later charges) and scheduled recurring billing. |
+| **Split / marketplace payouts to sub-merchants** | **Unconfirmed.** Tap has it and will not take us. Areeba markets to marketplaces but split payouts specifically could not be confirmed. → **D21** |
+
+So **automated cancellation-fee capture and card-on-file deposits are not
+blocked by the market.** They have been excluded since 2026-08-30 on a
+premise — "Lebanon has no card rails" — that was never true, and neither D7
+nor this document is claiming otherwise now.
+
+**What has not changed, and should temper any enthusiasm:**
+
+1. **Settlement under capital controls.** Whether money reaches a usable
+   Lebanese account is a banking question, not a processor one, and remains
+   the likeliest practical blocker.
+2. **Adoption.** Roughly 60–70% of Lebanese e-commerce is still cash on
+   delivery. Card rails existing is not customers using them.
+3. **Onboarding cost.** Areeba's onboarding is reported to take longer and
+   require more paperwork than the GCC processors.
+4. **The OMT/Whish flow stays either way.** It is the majority path and one of
+   the few genuinely defensible things about this product. Nothing here argues
+   for replacing it — only that a card option is *possible* alongside it.
+
+**Nothing should be built on this yet.** It reopens a planning question, not a
+sprint.
+
 ---
 
 ## 3. Explicitly not decisions
 
 Recorded so they stop being re-raised as open questions:
 
-- **Multi-merchant payouts, card-on-file, automated cancellation-fee capture.**
-  Still excluded — but **the stated reason was wrong**, see §2.1. Lebanon does
-  have card rails; what it may not have is marketplace eligibility and workable
-  settlement. Excluded pending **D20**, not excluded on principle.
+- **Multi-merchant payouts.** Still excluded, now for the *right* reason: the
+  processor that has the capability (Tap) will not onboard Lebanese merchants,
+  and the one that will (Areeba) has unconfirmed split support — **D21**.
+- ~~**Card-on-file, automated cancellation-fee capture.**~~ **No longer
+  excluded** (§2.2). Areeba offers tokenization and recurring charges to
+  Lebanese merchants. Blocked on a product decision and settlement questions,
+  not on market availability.
 - **Waitlist slot reservation.** Deferred until the GIST exclusion-constraint
   question settles in Sprint 13. Migration 016's header explains why.
 - **Repository-layer tests.** No database test infrastructure exists
@@ -136,11 +178,12 @@ Recorded so they stop being re-raised as open questions:
 one with a lead time measured in days rather than minutes, and it is not
 engineering work, so it can run in parallel with everything else.
 
-**D20 replaces D7 as the free one** — and it is now the highest
-value-per-minute item here. Fifteen minutes and one email to Tap decides
-whether card-on-file, automated cancellation fees and artist payouts reopen.
-D7 itself is answered (§2.1): Stripe is still out, but the reason recorded for
-the exclusion was wrong, and the real blocker is unknown until Tap replies.
+**D7 and D20 are both answered** (§2.1, §2.2), and between them they moved a
+scope boundary that had stood since 2026-08-30 on a false premise. Stripe is
+out. Tap is out. But **card-on-file and automated cancellation fees are not
+blocked at all** — Areeba offers tokenization and recurring charges to
+Lebanese merchants. Only artist payouts remain genuinely unresolved, which is
+**D21**, and it is now the free one: one email, fifteen minutes.
 
 **D3 and D5 are now proposals, not blanks** — `B-Edge-D3-D5-Proposals-v1.md`.
 Each ends with a single line to accept or reject. D5 turned out to be nearly

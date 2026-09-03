@@ -59,13 +59,27 @@ planning — it is the load-bearing assumption here.
 > Connect's shape. Areeba, PayTabs and Bank of Beirut's gateway also operate
 > there.
 >
-> That does **not** reopen the scope on its own. Tap's marketplace product is
-> eligibility-gated with no published country coverage, settlement into
-> Lebanese banks under capital controls is a separate and likelier blocker,
-> and 60–70% of Lebanese e-commerce is still cash on delivery. The boundary
-> holds — but "Lebanon has no card rails" must stop being cited as the reason,
-> because it is false and it suppressed a question worth asking. That question
-> is register **D20**: one email to Tap.
+> **Followed up 2026-09-03 (register D20), and the scope splits in two.**
+> Tap is out: their support documentation says *"We currently do not accept any
+> new merchants from Egypt, Jordan, or Lebanon"*, and they pay out only to
+> GCC-domiciled businesses.
+>
+> But **Areeba is Beirut-based, onboards Lebanese merchants, and offers
+> tokenization and recurring charges.** So of the three capabilities this
+> section excluded:
+>
+> | | |
+> |---|---|
+> | Card-on-file | **not blocked** |
+> | Automated cancellation-fee capture | **not blocked** |
+> | Multi-merchant / split payouts | still blocked — Tap has it and will not take us, Areeba's split support is unconfirmed (register **D21**) |
+>
+> Two of the three were excluded for four days on a premise that was never
+> true. What remains true: settlement under capital controls is a banking
+> question and the likelier practical blocker, most Lebanese e-commerce is
+> still cash on delivery, and the OMT/Whish flow stays regardless — it is the
+> majority path and a real differentiator. A card option would sit *alongside*
+> it, not replace it.
 
 ---
 

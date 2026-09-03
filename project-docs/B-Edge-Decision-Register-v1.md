@@ -50,9 +50,9 @@ hour of engineering, and one (D20) on a single email.
 
 | # | Decision | Blocks | Settled by |
 |---|---|---|---|
-| **D3** | **Discount precedence.** Deposit vs balance, stacking, percentage-before-fixed ordering, interaction with `stores.early_bird_fee` (the only existing price modifier, and it is a *sur*charge), refunds. Subscription invoices in scope or not. | Sprint 9 — the whole discount engine | **Engineering can propose.** Competitor practice gives a defensible default; founder signs off |
+| **D3** | **Discount precedence.** Deposit vs balance, stacking, percentage-before-fixed ordering, interaction with `stores.early_bird_fee` (the only existing price modifier, and it is a *sur*charge), refunds. Subscription invoices in scope or not. | Sprint 9 — the whole discount engine | **Proposal written 2026-09-03** — `B-Edge-D3-D5-Proposals-v1.md`. Awaiting a yes/no |
 | **D4** | **Service catalogue content.** ~40–80 services with durations, prices, categories and `name_ar`. | Sprint 4 entirely | **Founder / Rania only.** Domain knowledge. **Longest lead time in the plan — start it before anything else on this list** |
-| **D5** | **Review attribution.** One review per visit; salon rating + primary-specialist rating; the tie-break for "primary" when a visit has several services (longest, or highest value). | Sprint 8 | **Engineering can propose** from competitor practice |
+| **D5** | **Review attribution.** One review per visit; salon rating + primary-specialist rating; the tie-break for "primary" when a visit has several services (longest, or highest value). | Sprint 8 | **Proposal written 2026-09-03** — `B-Edge-D3-D5-Proposals-v1.md`. Only the tie-break was genuinely open. Awaiting a yes/no |
 | **D6** | **Arabic-first priority.** A prioritised sprint, or after Phase 3? | Sprint 11 | **Founder.** And **D4 forces it** — you cannot curate `name_ar` and then decide Arabic does not matter |
 | **D8** | **`TWILIO_WHATSAPP_FROM`.** `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` are set; the sender is not. | Customer login, booking approvals/confirmations/cancellations, review requests, the calendar link, bulk-shift notifications | **Procurement.** Founder — targeted end of week 2026-09-06 |
 | **D20** | **Is B-Edge eligible for Tap Payments' Marketplace product in Lebanon?** One email decides whether card-on-file, automated cancellation fees and multi-merchant payouts reopen — see D7. Tap's docs do not publish country coverage for the marketplace product and say to contact them for eligibility. | Sprints not yet written: card-on-file, cancellation-fee capture, artist payouts | **Founder, ~15 minutes.** One email to Tap. Highest value-per-minute item on this list |
@@ -142,9 +142,10 @@ whether card-on-file, automated cancellation fees and artist payouts reopen.
 D7 itself is answered (§2.1): Stripe is still out, but the reason recorded for
 the exclusion was wrong, and the real blocker is unknown until Tap replies.
 
-**D3 and D5 do not need to start from blank.** Both have defensible defaults
-from what Fresha, Booksy and GlossGenius actually do; the founder's job there
-is approving a proposal, not authoring one.
+**D3 and D5 are now proposals, not blanks** — `B-Edge-D3-D5-Proposals-v1.md`.
+Each ends with a single line to accept or reject. D5 turned out to be nearly
+settled already: the feasibility assessment §2.2 had recommended everything
+except the primary-stylist tie-break.
 
 **D19 deserves more attention than its size suggests.** Every other money
 decision assumes a human is reliably clicking Confirm.

@@ -47,6 +47,26 @@ payouts should be treated as a *scope boundary*, not a backlog. Re-verify Stripe
 Lebanon status directly against their supported-countries list before any payments
 planning — it is the load-bearing assumption here.
 
+> **Re-verified 2026-09-02 (register D7), and this section's reasoning was
+> half wrong.** Stripe's Lebanon status is unchanged — 44 supported countries,
+> Lebanon not among them, UAE the only MENA entry. But the inference above,
+> that "neither do the alternatives those platforms depend on", only checked
+> the processors those platforms happen to use. It did not check MENA-native
+> ones.
+>
+> **Tap Payments serves Lebanon**, and publishes both card-on-file tokenization
+> and a Marketplace API with split payouts and sub-merchant KYC — Stripe
+> Connect's shape. Areeba, PayTabs and Bank of Beirut's gateway also operate
+> there.
+>
+> That does **not** reopen the scope on its own. Tap's marketplace product is
+> eligibility-gated with no published country coverage, settlement into
+> Lebanese banks under capital controls is a separate and likelier blocker,
+> and 60–70% of Lebanese e-commerce is still cash on delivery. The boundary
+> holds — but "Lebanon has no card rails" must stop being cited as the reason,
+> because it is false and it suppressed a question worth asking. That question
+> is register **D20**: one email to Tap.
+
 ---
 
 ## 1. Feature feasibility &amp; complexity matrix

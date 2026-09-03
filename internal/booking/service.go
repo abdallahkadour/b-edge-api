@@ -279,6 +279,13 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	occupied := &Occupancy{}
 	for _, b := range existingBookings {
 		occupied.AddRange(b.StartTime, b.EndTime, KindService)
+		// Cleanup after the appointment, as its own typed interval rather
+		// than a longer service span. Kept separate because the two mean
+		// different things: the customer is present for one and not the
+		// other, and only the buffer can be released early. BlockedUntil is
+		// the authority - it equals EndTime once a buffer has been handed
+		// back, and Add drops the resulting empty interval.
+		occupied.AddRange(b.EndTime, b.BlockedUntil, KindBuffer)
 	}
 
 	// ── Step 5: Travel buffer for cross-store bookings ────────────────────
@@ -339,7 +346,15 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	for current.Add(serviceDuration).Before(closeTime) || current.Add(serviceDuration).Equal(closeTime) {
 		slotEnd := current.Add(serviceDuration)
 
-		candidate := Interval{Start: current, End: slotEnd, Kind: KindService}
+		// The candidate reserves its own cleanup as well. Without this a
+		// slot could be offered that leaves no turnaround before the next
+		// appointment - the buffer would protect every booking except the
+		// one being made, which is the case it exists for.
+		candidate := Interval{
+			Start: current,
+			End:   slotEnd.Add(time.Duration(service.BufferMin) * time.Minute),
+			Kind:  KindService,
+		}
 
 		// BlocksArtist, not OverlapsAny: the question here is whether the
 		// ARTIST can take this slot. The two are identical today because
@@ -419,6 +434,12 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 	}
 
 	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
+	// The span actually reserved on the calendar: the appointment plus any
+	// cleanup. end_time stays the customer-facing finish; blocked_until is
+	// what the exclusion constraint ranges over. Both the buffer and the
+	// span are snapshotted, so changing the service's buffer later cannot
+	// re-plan a booking already agreed. See migration 033.
+	blockedUntil := endTime.Add(time.Duration(service.BufferMin) * time.Minute)
 
 	// Set held_until - slot is reserved for 10 minutes during checkout
 	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
@@ -432,6 +453,8 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		ServiceID:       serviceID,
 		StartTime:       startTime.UTC(),
 		EndTime:         endTime.UTC(),
+		BlockedUntil:    blockedUntil.UTC(),
+		BufferMin:       service.BufferMin,
 		HeldUntil:       &heldUntil,
 		Status:          StatusHeld,
 		OriginalPrice:   service.Price,
@@ -521,6 +544,12 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 	}
 
 	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
+	// The span actually reserved on the calendar: the appointment plus any
+	// cleanup. end_time stays the customer-facing finish; blocked_until is
+	// what the exclusion constraint ranges over. Both the buffer and the
+	// span are snapshotted, so changing the service's buffer later cannot
+	// re-plan a booking already agreed. See migration 033.
+	blockedUntil := endTime.Add(time.Duration(service.BufferMin) * time.Minute)
 	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
 
 	b := &Booking{
@@ -532,6 +561,8 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		ServiceID:      serviceID,
 		StartTime:      startTime.UTC(),
 		EndTime:        endTime.UTC(),
+		BlockedUntil:   blockedUntil.UTC(),
+		BufferMin:      service.BufferMin,
 		HeldUntil:      &heldUntil,
 		Status:         StatusHeld,
 		OriginalPrice:  service.Price,

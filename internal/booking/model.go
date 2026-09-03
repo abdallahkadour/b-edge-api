@@ -121,7 +121,17 @@ type Booking struct {
 	// from ReviewToken, which is minted at completion - a calendar entry is
 	// for an appointment that has not happened yet, so the two can never
 	// share a lifecycle. See migration 031.
-	CalendarToken      *string    `db:"calendar_token"`
+	CalendarToken *string `db:"calendar_token"`
+	// BufferMin is cleanup time snapshotted from the service when this
+	// booking was made, frozen so a later configuration change cannot
+	// re-plan a booking already agreed. See migration 033.
+	BufferMin int `db:"buffer_min"`
+	// BlockedUntil is the end of the span this booking reserves on the
+	// artist's calendar, cleanup included. The exclusion constraint ranges
+	// over THIS rather than EndTime, so cleanup is guarded by the database
+	// rather than by an application rule a race could walk through. Set to
+	// now on early completion to hand the remaining buffer back.
+	BlockedUntil       time.Time  `db:"blocked_until"`
 	Channel            string     `db:"channel"`
 	SpecialRequests    *string    `db:"special_requests"`
 	CancellationReason *string    `db:"cancellation_reason"`
@@ -228,10 +238,13 @@ var ValidBookingStatuses = map[string]bool{
 
 // SalonService holds booking-relevant fields from the services table.
 type SalonService struct {
-	ID                   uuid.UUID       `db:"id"`
-	SalonID              uuid.UUID       `db:"salon_id"`
-	Name                 string          `db:"name"`
-	DurationMin          int             `db:"duration_min"`
+	ID          uuid.UUID `db:"id"`
+	SalonID     uuid.UUID `db:"salon_id"`
+	Name        string    `db:"name"`
+	DurationMin int       `db:"duration_min"`
+	// BufferMin is cleanup time reserved AFTER the appointment. Never shown
+	// to the customer - they did not buy the cleanup. See migration 033.
+	BufferMin            int             `db:"buffer_min"`
 	ActiveDurationMin    *int            `db:"active_duration_min"`
 	Price                decimal.Decimal `db:"price"`
 	DepositAmount        decimal.Decimal `db:"deposit_amount"`

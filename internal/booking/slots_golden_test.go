@@ -283,3 +283,92 @@ func TestGolden_ServiceLongerThanTradingDay(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, slots)
 }
+
+// ── Service buffer (Sprint 6, migration 033) ──────────────────────────────────
+
+// A buffer reserves cleanup time AFTER each appointment. With a 30-minute
+// buffer on a 60-minute service, consecutive bookings can start no closer
+// than 90 minutes apart.
+//
+// The candidate reserves its own buffer too, which is the case that matters:
+// without it the buffer would protect every booking except the one being
+// made.
+func TestGolden_BufferSeparatesConsecutiveSlots(t *testing.T) {
+	repo := goldenRepo()
+	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	repo.getArtistBookingsBookings = []*Booking{{
+		StartTime:    beirutTime(2027, time.March, 1, 11, 0),
+		EndTime:      beirutTime(2027, time.March, 1, 12, 0),
+		BlockedUntil: beirutTime(2027, time.March, 1, 12, 30), // 30min cleanup
+	}}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
+
+	require.NoError(t, err)
+	got := goldenOf(t, slots)
+	assert.Contains(t, got, "09:30-10:30",
+		"ends 10:30, its own buffer runs to 11:00, touching the booking - allowed")
+	assert.NotContains(t, got, "09:45-10:45",
+		"its buffer would run to 11:15, into the booking")
+	assert.Contains(t, got, "12:30-13:30", "the first slot after the cleanup ends")
+	assert.NotContains(t, got, "12:00-13:00", "starts inside the cleanup window")
+}
+
+// A released buffer reopens the slot immediately. CompleteBooking sets
+// blocked_until back to end_time (or now), and slot generation reads
+// blocked_until rather than recomputing from buffer_min - so the release is
+// visible on the very next availability query, with no scheduler.
+func TestGolden_ReleasedBufferReopensTheSlot(t *testing.T) {
+	repo := goldenRepo()
+	repo.getServiceSvc = &SalonService{DurationMin: 60}
+	repo.getArtistBookingsBookings = []*Booking{{
+		StartTime: beirutTime(2027, time.March, 1, 11, 0),
+		EndTime:   beirutTime(2027, time.March, 1, 12, 0),
+		// Buffer handed back: blocked_until collapsed to end_time.
+		BlockedUntil: beirutTime(2027, time.March, 1, 12, 0),
+	}}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
+
+	require.NoError(t, err)
+	assert.Contains(t, goldenOf(t, slots), "12:00-13:00",
+		"with the buffer released the slot is immediately bookable again")
+}
+
+// T6.5 regression guard: the buffer must never reach the customer. A slot's
+// advertised end is the appointment's end, not the end of cleanup - they did
+// not buy the cleanup and must not be shown it.
+func TestGolden_CustomerNeverSeesTheBuffer(t *testing.T) {
+	repo := goldenRepo()
+	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
+
+	require.NoError(t, err)
+	require.NotEmpty(t, slots)
+	for _, s := range slots {
+		assert.Equal(t, 60*time.Minute, s.EndTime.Sub(s.StartTime),
+			"a slot must advertise the service duration, never duration+buffer")
+	}
+	assert.Contains(t, goldenOf(t, slots), "09:00-10:00")
+}
+
+// With a buffer, the last bookable slot moves earlier: the appointment plus
+// its cleanup must both fit before closing.
+func TestGolden_BufferMustFitBeforeClosing(t *testing.T) {
+	repo := goldenRepo()
+	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	svc := newTestService(repo)
+
+	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
+
+	require.NoError(t, err)
+	got := goldenOf(t, slots)
+	assert.Contains(t, got, "16:00-17:00",
+		"the loop bounds on the appointment ending by close, not the cleanup")
+	assert.Equal(t, 29, len(slots),
+		"an empty day is unaffected by the buffer - there is nothing to be separated from")
+}

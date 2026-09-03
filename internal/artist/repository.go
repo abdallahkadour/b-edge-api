@@ -373,7 +373,7 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 func (r *pgRepo) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, salon_id, category_id, name, name_ar, description,
-		       duration_min, active_duration_min, price,
+		       duration_min, buffer_min, active_duration_min, price,
 		       deposit_amount, deposit_deadline_hours,
 		       is_active, is_custom, created_at, updated_at
 		FROM services
@@ -392,7 +392,7 @@ func (r *pgRepo) GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServic
 	s := &SalonServiceRecord{}
 	err := r.db.QueryRow(ctx, `
 		SELECT id, salon_id, category_id, name, name_ar, description,
-		       duration_min, active_duration_min, price,
+		       duration_min, buffer_min, active_duration_min, price,
 		       deposit_amount, deposit_deadline_hours,
 		       is_active, is_custom, created_at, updated_at
 		FROM services
@@ -400,7 +400,7 @@ func (r *pgRepo) GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServic
 		id,
 	).Scan(
 		&s.ID, &s.SalonID, &s.CategoryID, &s.Name, &s.NameAr, &s.Description,
-		&s.DurationMin, &s.ActiveDurationMin, &s.Price,
+		&s.DurationMin, &s.BufferMin, &s.ActiveDurationMin, &s.Price,
 		&s.DepositAmount, &s.DepositDeadlineHours,
 		&s.IsActive, &s.IsCustom, &s.CreatedAt, &s.UpdatedAt,
 	)
@@ -417,18 +417,18 @@ func (r *pgRepo) CreateService(ctx context.Context, s *SalonServiceRecord) error
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO services (
 			id, salon_id, category_id, name, name_ar, description,
-			duration_min, active_duration_min, price,
+			duration_min, buffer_min, active_duration_min, price,
 			deposit_amount, deposit_deadline_hours,
 			is_active, is_custom
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9,
-			$10, $11,
-			$12, $13
+			$7, $8, $9, $10,
+			$11, $12,
+			$13, $14
 		)
 		RETURNING created_at, updated_at`,
 		s.ID, s.SalonID, s.CategoryID, s.Name, s.NameAr, s.Description,
-		s.DurationMin, s.ActiveDurationMin, s.Price,
+		s.DurationMin, s.BufferMin, s.ActiveDurationMin, s.Price,
 		s.DepositAmount, s.DepositDeadlineHours,
 		s.IsActive, s.IsCustom,
 	).Scan(&s.CreatedAt, &s.UpdatedAt)
@@ -445,13 +445,14 @@ func (r *pgRepo) UpdateService(ctx context.Context, id uuid.UUID, req UpdateServ
 		    name_ar        = COALESCE($2, name_ar),
 		    description    = COALESCE($3, description),
 		    duration_min   = COALESCE($4, duration_min),
+		    buffer_min     = COALESCE($9, buffer_min),
 		    price          = COALESCE($5, price),
 		    deposit_amount = COALESCE($6, deposit_amount),
 		    is_active      = COALESCE($7, is_active),
 		    updated_at     = NOW()
 		WHERE id = $8`,
 		req.Name, req.NameAr, req.Description, req.DurationMin,
-		req.Price, req.DepositAmount, req.IsActive, id,
+		req.Price, req.DepositAmount, req.IsActive, id, req.BufferMin,
 	)
 	if err != nil {
 		return fmt.Errorf("update service: %w", err)
@@ -608,7 +609,7 @@ func scanServices(rows pgx.Rows) ([]*SalonServiceRecord, error) {
 		s := &SalonServiceRecord{}
 		if err := rows.Scan(
 			&s.ID, &s.SalonID, &s.CategoryID, &s.Name, &s.NameAr, &s.Description,
-			&s.DurationMin, &s.ActiveDurationMin, &s.Price,
+			&s.DurationMin, &s.BufferMin, &s.ActiveDurationMin, &s.Price,
 			&s.DepositAmount, &s.DepositDeadlineHours,
 			&s.IsActive, &s.IsCustom, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {

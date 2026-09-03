@@ -274,7 +274,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
 		&b.DepositReference,
-		&b.ReviewToken, &b.CalendarToken,
+		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil,
 		&b.Channel,
 		&b.SpecialRequests,
 		&b.CancellationReason,
@@ -296,6 +296,7 @@ const bookingSelectCols = `
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price,
 	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token, calendar_token,
+	buffer_min, blocked_until,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
@@ -309,6 +310,7 @@ const enrichedSelectCols = `
 	b.start_time, b.end_time, b.held_until, b.status,
 	b.original_price, b.discount_amount, b.final_price,
 	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.review_token, b.calendar_token,
+	b.buffer_min, b.blocked_until,
 	b.channel, b.special_requests, b.cancellation_reason,
 	b.cancelled_at, b.completed_at, b.no_show_at,
 	b.created_at, b.updated_at, b.deleted_at,
@@ -342,6 +344,7 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
 		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.ReviewToken, &e.CalendarToken,
+		&e.BufferMin, &e.BlockedUntil,
 		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
 		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
@@ -534,13 +537,13 @@ func (r *pgRepo) GetBusinessHoursException(ctx context.Context, storeID uuid.UUI
 func (r *pgRepo) GetService(ctx context.Context, serviceID uuid.UUID) (*SalonService, error) {
 	s := &SalonService{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, salon_id, name, duration_min, active_duration_min,
+		SELECT id, salon_id, name, duration_min, buffer_min, active_duration_min,
 		       price, deposit_amount, deposit_deadline_hours, is_active
 		FROM services
 		WHERE id = $1 AND is_active = TRUE`,
 		serviceID,
 	).Scan(
-		&s.ID, &s.SalonID, &s.Name, &s.DurationMin, &s.ActiveDurationMin,
+		&s.ID, &s.SalonID, &s.Name, &s.DurationMin, &s.BufferMin, &s.ActiveDurationMin,
 		&s.Price, &s.DepositAmount, &s.DepositDeadlineHours, &s.IsActive,
 	)
 	if err != nil {
@@ -634,18 +637,18 @@ func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking) error {
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO bookings (
 			id, salon_id, store_id, artist_id, customer_id, service_id,
-			start_time, end_time, held_until, status,
+			start_time, end_time, blocked_until, buffer_min, held_until, status,
 			original_price, discount_amount, final_price,
 			deposit_amount, deposit_deadline, channel, special_requests
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13,
-			$14, $15, $16, $17
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15,
+			$16, $17, $18, $19
 		)
 		RETURNING created_at, updated_at`,
 		b.ID, b.SalonID, b.StoreID, b.ArtistID, b.CustomerID, b.ServiceID,
-		b.StartTime, b.EndTime, b.HeldUntil, b.Status,
+		b.StartTime, b.EndTime, b.BlockedUntil, b.BufferMin, b.HeldUntil, b.Status,
 		b.OriginalPrice, b.DiscountAmount, b.FinalPrice,
 		b.DepositAmount, b.DepositDeadline, b.Channel, b.SpecialRequests,
 	).Scan(&b.CreatedAt, &b.UpdatedAt)
@@ -1123,6 +1126,19 @@ func (r *pgRepo) CompleteBooking(ctx context.Context, id uuid.UUID) (string, err
 		SET status = $1,
 		    completed_at = NOW(),
 		    review_token = $2,
+		    -- Hand back any cleanup time not actually used. GREATEST keeps
+		    -- blocked_until >= end_time, which the CHECK constraint
+		    -- requires and which is also just true: finishing early cannot
+		    -- make the appointment itself shorter.
+		    --
+		    -- This is what separates a buffer from padding. Without it the
+		    -- slot stays reserved for cleanup that already happened, which
+		    -- is the pessimistic-reserve failure the feasibility assessment
+		    -- warns about - the artist is punished for being efficient.
+		    -- With it, an appointment ending twenty minutes early reopens
+		    -- twenty minutes immediately, on the read path, with no
+		    -- scheduler involved.
+		    blocked_until = GREATEST(end_time, LEAST(blocked_until, NOW())),
 		    updated_at = NOW()
 		WHERE id = $3
 		AND status = $4
@@ -1233,6 +1249,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice,
 			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken, &b.CalendarToken,
+			&b.BufferMin, &b.BlockedUntil,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,
 			&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt,

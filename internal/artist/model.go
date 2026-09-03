@@ -111,13 +111,16 @@ type Store struct {
 
 // SalonServiceRecord represents a service offered by a salon from the services table.
 type SalonServiceRecord struct {
-	ID                   uuid.UUID       `db:"id"                     json:"id"`
-	SalonID              uuid.UUID       `db:"salon_id"               json:"salon_id"`
-	CategoryID           *uuid.UUID      `db:"category_id"            json:"category_id,omitempty"`
-	Name                 string          `db:"name"                   json:"name"`
-	NameAr               *string         `db:"name_ar"                json:"name_ar,omitempty"`
-	Description          *string         `db:"description"            json:"description,omitempty"`
-	DurationMin          int             `db:"duration_min"           json:"duration_min"`
+	ID          uuid.UUID  `db:"id"                     json:"id"`
+	SalonID     uuid.UUID  `db:"salon_id"               json:"salon_id"`
+	CategoryID  *uuid.UUID `db:"category_id"            json:"category_id,omitempty"`
+	Name        string     `db:"name"                   json:"name"`
+	NameAr      *string    `db:"name_ar"                json:"name_ar,omitempty"`
+	Description *string    `db:"description"            json:"description,omitempty"`
+	DurationMin int        `db:"duration_min"           json:"duration_min"`
+	// BufferMin is cleanup reserved AFTER the appointment. Artist-facing
+	// only - the customer PWA must never render it. See migration 033.
+	BufferMin            int             `db:"buffer_min"             json:"buffer_min"`
 	ActiveDurationMin    *int            `db:"active_duration_min"    json:"active_duration_min,omitempty"`
 	Price                decimal.Decimal `db:"price"                  json:"price"`
 	DepositAmount        decimal.Decimal `db:"deposit_amount"         json:"deposit_amount"`
@@ -172,6 +175,7 @@ type CreateServiceRequest struct {
 	NameAr               *string `json:"name_ar"                validate:"omitempty,max=200"`
 	Description          *string `json:"description"`
 	DurationMin          int     `json:"duration_min"           validate:"required,min=15,max=480"`
+	BufferMin            int     `json:"buffer_min"             validate:"omitempty,min=0,max=120"`
 	ActiveDurationMin    *int    `json:"active_duration_min"    validate:"omitempty,min=15"`
 	Price                string  `json:"price"                  validate:"required"`
 	DepositAmount        string  `json:"deposit_amount"         validate:"required"`
@@ -185,6 +189,7 @@ type UpdateServiceRequest struct {
 	NameAr               *string `json:"name_ar"                validate:"omitempty,max=200"`
 	Description          *string `json:"description"`
 	DurationMin          *int    `json:"duration_min"           validate:"omitempty,min=15,max=480"`
+	BufferMin            *int    `json:"buffer_min"             validate:"omitempty,min=0,max=120"`
 	Price                *string `json:"price"                  validate:"omitempty"`
 	DepositAmount        *string `json:"deposit_amount"         validate:"omitempty"`
 	DepositDeadlineHours *int    `json:"deposit_deadline_hours" validate:"omitempty,min=1"`
@@ -290,6 +295,7 @@ type ServiceResponse struct {
 	NameAr               *string         `json:"name_ar,omitempty"`
 	Description          *string         `json:"description,omitempty"`
 	DurationMin          int             `json:"duration_min"`
+	BufferMin            int             `json:"buffer_min"`
 	ActiveDurationMin    *int            `json:"active_duration_min,omitempty"`
 	Price                decimal.Decimal `json:"price"`
 	DepositAmount        decimal.Decimal `json:"deposit_amount"`

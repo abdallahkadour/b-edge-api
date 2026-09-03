@@ -243,6 +243,7 @@ func (s *Service) CreateService(ctx context.Context, salonID uuid.UUID, req Crea
 		NameAr:               req.NameAr,
 		Description:          req.Description,
 		DurationMin:          req.DurationMin,
+		BufferMin:            req.BufferMin,
 		ActiveDurationMin:    req.ActiveDurationMin,
 		Price:                price,
 		DepositAmount:        deposit,

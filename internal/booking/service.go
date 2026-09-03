@@ -1779,45 +1779,134 @@ func validationMessage(fe validator.FieldError) string {
 // The conflicts it surfaces (past closing, travel buffers) are exactly the
 // ones that would otherwise be discovered as a 409 after the artist had
 // already decided to go ahead.
+// PreviewShiftDay is a dry run: it resolves the day and reports what would
+// move, what would be skipped, and what blocks the shift, without writing.
 func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req ShiftPreviewRequest) (*ShiftPreviewResponse, error) {
+	resp, _, err := s.resolveShift(ctx, userID, req)
+	return resp, err
+}
+
+// ShiftDay applies a whole-day shift.
+//
+// All-or-nothing, gated on the same CanApply the preview reports: if
+// anything blocks the shift, nothing moves. A partial shift would leave the
+// day in an arrangement the artist never asked for and cannot easily reason
+// about - "move my afternoon back thirty minutes" either happened or it did
+// not.
+//
+// The day is RE-RESOLVED here rather than trusting a preview the client may
+// be holding from minutes ago. Between preview and apply a customer can
+// book, cancel, or pay a deposit, and applying a stale plan would move
+// bookings around a slot that is no longer free. The database would catch
+// the worst of it, but re-evaluating turns a constraint violation into an
+// honest "this changed, look again".
+func (s *Service) ShiftDay(ctx context.Context, userID uuid.UUID, req ShiftPreviewRequest) (*ShiftPreviewResponse, error) {
+	plan, artistID, err := s.resolveShift(ctx, userID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if !plan.CanApply {
+		// The response body still carries the blockers, so the caller gets
+		// the reason rather than a bare refusal.
+		return plan, apperror.Conflict("SHIFT_NOT_APPLICABLE",
+			"This shift cannot be applied - see blockers for why")
+	}
+
+	ids := make([]uuid.UUID, 0, len(plan.Movable))
+	for _, m := range plan.Movable {
+		ids = append(ids, m.BookingID)
+	}
+
+	if err := s.repo.ShiftBookings(ctx, ids, plan.ShiftMinutes); err != nil {
+		if errors.Is(err, ErrSlotUnavailable) {
+			// The evaluation said it fitted and the constraint disagreed,
+			// which means the day changed underneath us between resolving
+			// and writing. Report it as a conflict to retry, not a 500.
+			return nil, apperror.Conflict("SHIFT_CONFLICT",
+				"The schedule changed while this was being applied. Please review and try again.")
+		}
+		return nil, fmt.Errorf("shift day: %w", err)
+	}
+
+	s.announceShift(ctx, artistID, plan)
+	return plan, nil
+}
+
+// announceShift tells every moved customer their appointment time changed.
+//
+// Best-effort per booking, like every other notification here: the shift has
+// already been committed and cannot be undone because a message failed to
+// queue.
+//
+// The message states the new time in WORDS rather than relying on the
+// calendar link alone. A customer who added the appointment to their phone
+// but never opens the updated link keeps the old time, so the text has to
+// carry the change on its own - see migration 031's closing note.
+func (s *Service) announceShift(ctx context.Context, artistID uuid.UUID, plan *ShiftPreviewResponse) {
+	for _, m := range plan.Movable {
+		if !m.HasPhone {
+			continue // nothing to send to; the preview already surfaced this
+		}
+		msg := fmt.Sprintf(
+			"Hi %s! Your %s appointment has moved to %s. Sorry for the change - see you then!",
+			m.CustomerName, m.ServiceName, notificationTimeLabel(m.NewStart),
+		)
+		bookingID := m.BookingID
+		if err := s.repo.EnqueueNotification(ctx, &bookingID, uuid.Nil, "booking_rescheduled", msg); err != nil {
+			s.log.Error("failed to queue a reschedule notice - the shift still applied",
+				zap.Error(err),
+				zap.String("booking_id", bookingID.String()),
+			)
+		}
+	}
+}
+
+// resolveShift resolves a day and evaluates the shift, returning the plan
+// and the caller's artist ID.
+//
+// Shared by the preview and the apply so the two can never disagree about
+// what is movable. Duplicating it would mean the button that says "3 will
+// move" and the write that moves them are computed by different code.
+func (s *Service) resolveShift(ctx context.Context, userID uuid.UUID, req ShiftPreviewRequest) (*ShiftPreviewResponse, uuid.UUID, error) {
 	if err := s.validate.Struct(req); err != nil {
-		return nil, mapValidationError(err)
+		return nil, uuid.Nil, mapValidationError(err)
 	}
 
 	// Never trust a client-supplied artist ID - RequireRole("artist") proves
 	// the caller is AN artist, never that they are THIS artist.
 	artistID, err := s.repo.GetArtistIDByUserID(ctx, userID)
 	if err != nil {
-		return nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist profile not found")
+		return nil, uuid.Nil, apperror.NotFound("ARTIST_NOT_FOUND", "Artist profile not found")
 	}
 
 	// Zero gets its own error rather than falling out of `required`, whose
 	// message would contradict the min/max range on the field.
 	if req.ShiftMinutes == nil || *req.ShiftMinutes == 0 {
-		return nil, apperror.BadRequest("SHIFT_MINUTES_ZERO",
+		return nil, uuid.Nil, apperror.BadRequest("SHIFT_MINUTES_ZERO",
 			"shift_minutes must be a non-zero number of minutes between -240 and 240")
 	}
 	shiftMinutes := *req.ShiftMinutes
 
 	storeID, err := uuid.Parse(req.StoreID)
 	if err != nil {
-		return nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
+		return nil, uuid.Nil, apperror.BadRequest("INVALID_STORE_ID", "Invalid store ID")
 	}
 	date, err := time.Parse("2006-01-02", req.Date)
 	if err != nil {
-		return nil, apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
+		return nil, uuid.Nil, apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
 	}
 	// Go's time.Parse happily accepts year 0, so "0000-01-01" reached the
 	// query and scanned a day two millennia ago. Harmless on a read-only
 	// endpoint, but there is no legitimate caller and no reason to serve it.
 	// Found by E2E-TEST-PLAN.md section 12.3 (finding 3).
 	if err := validateScheduleDate(date, time.Now()); err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	store, err := s.repo.GetStore(ctx, storeID)
 	if err != nil {
-		return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		return nil, uuid.Nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
 	}
 
 	// Resolve the trading window through the shared opening-hours package,
@@ -1825,15 +1914,15 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 	// rather than re-deriving the same rules a third time.
 	exception, err := s.repo.GetBusinessHoursException(ctx, storeID, date)
 	if err != nil {
-		return nil, fmt.Errorf("preview shift day: get exception: %w", err)
+		return nil, uuid.Nil, fmt.Errorf("preview shift day: get exception: %w", err)
 	}
 	bh, err := s.repo.GetBusinessHours(ctx, storeID, int(date.Weekday()))
 	if err != nil {
-		return nil, fmt.Errorf("preview shift day: get hours: %w", err)
+		return nil, uuid.Nil, fmt.Errorf("preview shift day: get hours: %w", err)
 	}
 	window, storeOpen, err := openinghours.Resolve(store.Timezone, date, toDayHours(bh), toException(exception))
 	if err != nil {
-		return nil, fmt.Errorf("preview shift day: resolve hours: %w", err)
+		return nil, uuid.Nil, fmt.Errorf("preview shift day: resolve hours: %w", err)
 	}
 
 	// The store's own calendar day, not the server's.
@@ -1847,7 +1936,7 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 	// N+1 per booking just to render a preview.
 	all, err := s.repo.ListEnrichedBookingsForDay(ctx, artistID, dayStart, dayEnd)
 	if err != nil {
-		return nil, fmt.Errorf("preview shift day: list bookings: %w", err)
+		return nil, uuid.Nil, fmt.Errorf("preview shift day: list bookings: %w", err)
 	}
 
 	var sameStore, crossStore []*EnrichedBooking
@@ -1891,7 +1980,7 @@ func (s *Service) PreviewShiftDay(ctx context.Context, userID uuid.UUID, req Shi
 		Now:          time.Now(),
 	})
 	resp.Date = req.Date
-	return resp, nil
+	return resp, artistID, nil
 }
 
 // scheduleDateWindowYears bounds how far a schedule operation may address.

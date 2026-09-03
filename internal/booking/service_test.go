@@ -120,6 +120,10 @@ type mockRepo struct {
 	notifyNextWaitlistCount     int
 	staleWaitlistGroups         []WaitlistGroup
 	staleWaitlistErr            error
+	shiftedIDs                  []uuid.UUID
+	shiftedMinutes              int
+	shiftBookingsErr            error
+	enqueueNotificationErr      error
 	notifyNextWaitlistArtistID  uuid.UUID
 	notifyNextWaitlistStoreID   uuid.UUID
 	notifyNextWaitlistServiceID uuid.UUID
@@ -228,7 +232,7 @@ func (m *mockRepo) EnqueueNotification(_ context.Context, bookingID *uuid.UUID, 
 	m.enqueuedNotifications = append(m.enqueuedNotifications, enqueuedNotification{
 		BookingID: bookingID, UserID: userID, TemplateName: templateName, Message: message,
 	})
-	return nil
+	return m.enqueueNotificationErr
 }
 func (m *mockRepo) CreateWaitlistEntry(_ context.Context, _, _, _, _ uuid.UUID, _ time.Time) (uuid.UUID, error) {
 	return m.createWaitlistEntryID, m.createWaitlistEntryErr
@@ -247,6 +251,11 @@ func (m *mockRepo) NotifyNextWaitlistEntry(_ context.Context, artistID, storeID,
 }
 func (m *mockRepo) MarkNoShow(_ context.Context, _ uuid.UUID) error {
 	return m.markNoShowErr
+}
+func (m *mockRepo) ShiftBookings(_ context.Context, ids []uuid.UUID, minutes int) error {
+	m.shiftedIDs = ids
+	m.shiftedMinutes = minutes
+	return m.shiftBookingsErr
 }
 func (m *mockRepo) FindStaleWaitlistGroups(_ context.Context, _ time.Time) ([]WaitlistGroup, error) {
 	return m.staleWaitlistGroups, m.staleWaitlistErr

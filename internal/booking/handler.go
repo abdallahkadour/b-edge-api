@@ -2,6 +2,7 @@
 package booking
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -80,6 +81,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// before /:id would be needed only if it collided; "schedule" is a
 	// literal segment on a different path shape, so ordering is safe here.
 	b.Post("/schedule/shift-preview", handler.PreviewShiftDay)
+	b.Post("/schedule/shift", middleware.RequireRole("artist", "admin"), handler.ShiftDay)
 
 	// List endpoints
 	b.Get("/artist/:artist_id", middleware.RequireRole("artist", "admin"), handler.GetBookingsByArtist)
@@ -666,6 +668,45 @@ func parsePaginationParams(c *fiber.Ctx) (time.Time, int) {
 	}
 
 	return cursor, limit
+}
+
+// ShiftDay godoc
+// @Summary      Apply a whole-day schedule shift (artist only)
+// @Description  Moves every movable booking at one store on one date by the same
+// @Description  number of minutes. All-or-nothing: if anything blocks the shift,
+// @Description  nothing moves and the blockers are returned.
+// @Description  The day is re-resolved at apply time rather than trusting a
+// @Description  preview the client may be holding, so a booking made in between
+// @Description  is respected.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        body body ShiftPreviewRequest true "Store, date and shift_minutes"
+// @Success      200 {object} response.Body{data=ShiftPreviewResponse}
+// @Failure      409 {object} response.ErrorBody "SHIFT_NOT_APPLICABLE or SHIFT_CONFLICT"
+// @Router       /bookings/schedule/shift [post]
+func (h *Handler) ShiftDay(c *fiber.Ctx) error {
+	var req ShiftPreviewRequest
+	if err := c.BodyParser(&req); err != nil {
+		return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+	}
+
+	plan, err := h.svc.ShiftDay(c.Context(), middleware.UserIDFromContext(c), req)
+	if err != nil {
+		// A refusal still carries the plan, so the caller sees WHY rather
+		// than only that it failed.
+		var appErr *apperror.AppError
+		if plan != nil && errors.As(err, &appErr) && appErr.Code == "SHIFT_NOT_APPLICABLE" {
+			return c.Status(appErr.HTTPStatus).JSON(fiber.Map{
+				"data":  plan,
+				"error": fiber.Map{"code": appErr.Code, "message": appErr.Message},
+				"meta":  nil,
+			})
+		}
+		return err
+	}
+	return response.OK(c, plan)
 }
 
 // PreviewShiftDay godoc

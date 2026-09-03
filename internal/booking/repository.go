@@ -217,6 +217,10 @@ type Repository interface {
 
 	// ── Background jobs ─────────────────────────────────────────────────
 
+	// ShiftBookings moves a set of bookings by a fixed number of minutes,
+	// atomically. Returns ErrSlotUnavailable if the result would overlap.
+	ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int) error
+
 	// FindStaleWaitlistGroups returns the queues holding a `notified` entry
 	// whose confirm window has passed - the one case lazy cascading cannot
 	// reach. See waitlist_worker.go.
@@ -830,6 +834,64 @@ func (r *pgRepo) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([
 // NotifyNextWaitlistEntry: expire any stale notified entry for this exact
 // group, then notify the oldest waiting one, if any. See the Repository
 // interface doc comment and migration 016 for the lazy-expiry reasoning.
+// ShiftBookings moves every listed booking by the same number of minutes.
+//
+// THREE COLUMNS MOVE, NOT ONE. Both are stated as requirements in the
+// migrations that introduced them, and both fail silently rather than
+// loudly if missed:
+//
+//   - blocked_until (migration 033) is the span the exclusion constraint
+//     actually ranges over. Moving start/end without it would drag every
+//     booking into its own stale cleanup window and the constraint would
+//     reject the whole shift with a conflict that names no real overlap.
+//
+//   - calendar_sequence (migration 031) is what tells a calendar client an
+//     event MOVED rather than a second one appearing. Miss it and every
+//     customer who added the appointment to their phone ends up with two,
+//     at different times, with no indication which is real. Migration 031's
+//     header states the rule: "ANY code that changes a booking's start_time
+//     or end_time MUST also increment calendar_sequence in the same
+//     statement."
+//
+// ONE STATEMENT, NOT A LOOP. Migration 029 measured this against the real
+// database: with the constraint DEFERRABLE INITIALLY IMMEDIATE, a
+// single-statement bulk update succeeds because the check happens at
+// statement end, while the same work split across N statements FAILS -
+// shifting booking A into booking B's not-yet-vacated slot trips the guard
+// mid-transaction even though the committed state would be valid.
+//
+// SET CONSTRAINTS ... DEFERRED would also work and is deliberately NOT used:
+// it defers checking to commit, which widens the window in which an invalid
+// state exists inside the transaction. A single statement keeps the guard as
+// tight as it can be while still permitting the move.
+func (r *pgRepo) ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// make_interval rather than string concatenation: the text form depends
+	// on IntervalStyle, which is a session setting. Same reason migration
+	// 033 could not put this expression in an index.
+	_, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		SET start_time        = start_time    + make_interval(mins => $1),
+		    end_time          = end_time      + make_interval(mins => $1),
+		    blocked_until     = blocked_until + make_interval(mins => $1),
+		    calendar_sequence = calendar_sequence + 1,
+		    updated_at        = NOW()
+		WHERE id = ANY($2)`,
+		minutes, ids,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == exclusionViolationCode {
+			return ErrSlotUnavailable
+		}
+		return fmt.Errorf("shift bookings: %w", err)
+	}
+	return nil
+}
+
 // FindStaleWaitlistGroups returns every queue with an expired-but-uncascaded
 // `notified` entry.
 //

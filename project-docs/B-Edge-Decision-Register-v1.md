@@ -40,6 +40,9 @@ resolved, it is an intention.
 | **D15** | **Cancel-after-start blocked for `confirmed` only** — not as a blanket rule. Only `held` and `approved` have an expiry sweep, so blocking cancel on `pending`/`deposit_paid` would strand them permanently. | `CancelBooking` guard · matrix §4.4 | 2026-09-01 |
 | **D7** | **Stripe: still unavailable in Lebanon — confirmed, and stays excluded.** But the *reason* recorded for the exclusion was wrong. See the note below: "no card rails in Lebanon" is not true, and the boundary moved rather than being confirmed. | This register §2.1 · new question D20 | 2026-09-02 |
 | **D20** | **Tap is out — they do not onboard Lebanese merchants.** Their own support documentation: *"We currently do not accept any new merchants from Egypt, Jordan, or Lebanon."* Payouts go only to GCC-domiciled businesses. **But the answer split the excluded scope in half** — see §2.2. | This register §2.2 · new question D21 | 2026-09-03 |
+| **D22** | **Interval algebra modelled before the features that need it.** A booking owns a typed `Occupancy` set; half-open intervals matching the GIST constraint; `booking_intervals` child table chosen for Sprint 13 over replacing the parent constraint. | `internal/booking/occupancy.go` · `B-Edge-Interval-Algebra-Decision-v1.md` | 2026-09-03 |
+| **D23** | **Cleanup time is a stored `blocked_until` column, not a computed expression.** Forced: `timestamptz + interval` is only STABLE, so no index expression or generated column can carry it. The redundancy is what makes the buffer *releasable* on early completion. Ranges are still rejected — "ship the buffer, not the range". | Migration 033 header | 2026-09-03 |
+| **D24** | **Waitlist slot RESERVATION is not built.** Notifying someone a slot opened does not hold it for them; they race for it like anyone else. | This register §3 | 2026-09-03 |
 
 ---
 

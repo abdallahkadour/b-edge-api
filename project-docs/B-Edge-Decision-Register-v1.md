@@ -56,7 +56,7 @@ hour of engineering, and one (D20) on a single email.
 | **D5** | **Review attribution.** One review per visit; salon rating + primary-specialist rating; the tie-break for "primary" when a visit has several services (longest, or highest value). | Sprint 8 | **Proposal written 2026-09-03** — `B-Edge-D3-D5-Proposals-v1.md`. Only the tie-break was genuinely open. Awaiting a yes/no |
 | **D6** | **Arabic-first priority.** A prioritised sprint, or after Phase 3? | Sprint 11 | **Founder.** And **D4 forces it** — you cannot curate `name_ar` and then decide Arabic does not matter |
 | **D8** | **`TWILIO_WHATSAPP_FROM`.** `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` are set; the sender is not. | Customer login, booking approvals/confirmations/cancellations, review requests, the calendar link, bulk-shift notifications | **Procurement.** Founder — targeted end of week 2026-09-06 |
-| **D21** | **Does Areeba support split / marketplace payouts to sub-merchants?** The narrow remainder of D20. Card-on-file is settled (yes, via Areeba); paying artists out of a platform-collected charge is not. One email to Areeba. | Artist payouts only — *not* card-on-file or cancellation fees, which D20 unblocked | **Founder, ~15 minutes.** One email |
+| **D21** | **Does B-Edge ever want to collect customer money at all** — i.e. move from subscription to commission? **Not a payments question.** As posed originally ("does Areeba do splits?") it was the wrong question: B-Edge has no split to perform. See §2.3. | Every card-payment capability, including the two D20 appeared to unblock | **Founder.** A business-model decision, not an engineering or vendor one |
 | **D9** | **Do resources / split bookings have demonstrated demand** from paying salons? | Sprints 12–13 | **Founder.** Needs market evidence |
 | **D16** | **Final launch prices.** Six plans are seeded (`starter` $7 … `multi` $50, plus `comped`), but they are a proposal. Nothing is blocked — plans are rows, so launch prices are a seed edit and later changes are a form. | Nothing technically | **Founder** |
 | **D17** | **Trial length, and does it start at signup or at approval?** `subscriptions.trial_ends_at` exists and is settable, but no trial is configured and **no subscription currently has one** — all six live subscriptions are `comped`. | Self-service onboarding | **Founder.** The monetization spec §7.3 recommends starting at approval |
@@ -151,6 +151,60 @@ nor this document is claiming otherwise now.
 **Nothing should be built on this yet.** It reopens a planning question, not a
 sprint.
 
+
+### 2.3 D21 reframed — B-Edge has no split to perform
+
+D21 was originally *"does Areeba support split payouts to sub-merchants?"*
+Checking the codebase before drafting that email showed the question does not
+apply, and that **§2.2 above overstated what D20 unblocked.** Both are
+corrected here.
+
+**B-Edge never touches money.** Verified against the schema and source, not
+assumed:
+
+- **Zero** `payouts`, `transfers`, `ledger`, `settlements` or `balances`
+  tables.
+- **Zero** occurrences of `commission`, `platform_fee`, `take_rate` or
+  `payout` anywhere in `internal/`.
+- Deposits move **customer → artist directly** over OMT/Whish.
+  `bookings.deposit_reference` is documented in the schema as *"optional
+  artist-entered note … an OMT/Wish transaction code … not customer-facing"* —
+  the platform records that Rania says money arrived; it never receives it.
+- `internal/earnings` computes `SUM(final_price)` **for the artist**. It is her
+  revenue report, not a balance B-Edge owes her.
+- B-Edge's revenue is **subscriptions only** — $7 to $80 a month.
+
+Split payouts exist to solve Fresha's problem: the platform collects the
+customer's money, keeps a commission, and remits the rest. **B-Edge does not
+collect, so there is nothing to split.** The capability is missing from a
+model that has no use for it.
+
+**And the same reasoning narrows §2.2.** Card-on-file is genuinely available in
+Lebanon through Areeba — that part stands. But B-Edge *using* it requires
+answering who the merchant is, and both answers lead back here:
+
+| Merchant is… | Consequence |
+|---|---|
+| **B-Edge** | The platform now collects customer money and owes it onward — it is holding other people's funds, which is a regulatory question in Lebanon long before it is an engineering one |
+| **Each artist** | Every artist needs her own Areeba merchant account, and B-Edge automating charges against someone else's account is precisely the payment-facilitator role Areeba may not offer |
+
+So the honest position is narrower than §2.2 implied: **card-on-file is
+available in the market, and still unavailable to B-Edge's architecture
+without a deliberate change to what B-Edge is.**
+
+**The real question, and it is not about processors:** does B-Edge want to
+become a platform that holds and forwards money — a commission model — or stay
+subscription software that never touches a transaction?
+
+Staying subscription-only is the current design and a defensible one. It is
+why the OMT/Whish flow exists, it keeps B-Edge out of money transmission
+entirely, and it means the artist is paid the instant the customer transfers
+rather than on a payout cycle. Everything excluded under "payments" follows
+from that single choice, not from Lebanon's rails.
+
+**Nothing in the payments area should be planned until D21 is answered**, and
+the answer is a business decision.
+
 ---
 
 ## 3. Explicitly not decisions
@@ -160,10 +214,10 @@ Recorded so they stop being re-raised as open questions:
 - **Multi-merchant payouts.** Still excluded, now for the *right* reason: the
   processor that has the capability (Tap) will not onboard Lebanese merchants,
   and the one that will (Areeba) has unconfirmed split support — **D21**.
-- ~~**Card-on-file, automated cancellation-fee capture.**~~ **No longer
-  excluded** (§2.2). Areeba offers tokenization and recurring charges to
-  Lebanese merchants. Blocked on a product decision and settlement questions,
-  not on market availability.
+- **Card-on-file, automated cancellation-fee capture.** Available *in the
+  Lebanese market* (Areeba), but not available to B-Edge without deciding
+  whether the platform collects money — see §2.3. Excluded by B-Edge's own
+  architecture, which is a defensible choice, rather than by the market.
 - **Waitlist slot reservation.** Deferred until the GIST exclusion-constraint
   question settles in Sprint 13. Migration 016's header explains why.
 - **Repository-layer tests.** No database test infrastructure exists
@@ -178,12 +232,14 @@ Recorded so they stop being re-raised as open questions:
 one with a lead time measured in days rather than minutes, and it is not
 engineering work, so it can run in parallel with everything else.
 
-**D7 and D20 are both answered** (§2.1, §2.2), and between them they moved a
-scope boundary that had stood since 2026-08-30 on a false premise. Stripe is
-out. Tap is out. But **card-on-file and automated cancellation fees are not
-blocked at all** — Areeba offers tokenization and recurring charges to
-Lebanese merchants. Only artist payouts remain genuinely unresolved, which is
-**D21**, and it is now the free one: one email, fifteen minutes.
+**The payments thread is now one question, not four.** D7 and D20 are
+answered: Stripe is out, Tap is out, and Areeba does offer card-on-file to
+Lebanese merchants. But §2.3 shows the boundary was never really about
+processors — **B-Edge holds no money and has no payout ledger**, so a split
+payout has nothing to split and a stored card has no merchant to charge
+against. All of it collapses into **D21**: does B-Edge want to collect
+customer money at all? That is a business-model decision and needs no vendor
+research.
 
 **D3 and D5 are now proposals, not blanks** — `B-Edge-D3-D5-Proposals-v1.md`.
 Each ends with a single line to accept or reject. D5 turned out to be nearly

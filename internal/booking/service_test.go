@@ -118,6 +118,8 @@ type mockRepo struct {
 	getWaitlistByArtistErr      error
 	notifyNextWaitlistCalled    bool
 	notifyNextWaitlistCount     int
+	staleWaitlistGroups         []WaitlistGroup
+	staleWaitlistErr            error
 	notifyNextWaitlistArtistID  uuid.UUID
 	notifyNextWaitlistStoreID   uuid.UUID
 	notifyNextWaitlistServiceID uuid.UUID
@@ -245,6 +247,9 @@ func (m *mockRepo) NotifyNextWaitlistEntry(_ context.Context, artistID, storeID,
 }
 func (m *mockRepo) MarkNoShow(_ context.Context, _ uuid.UUID) error {
 	return m.markNoShowErr
+}
+func (m *mockRepo) FindStaleWaitlistGroups(_ context.Context, _ time.Time) ([]WaitlistGroup, error) {
+	return m.staleWaitlistGroups, m.staleWaitlistErr
 }
 func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) ([]FreedSlot, error) {
 	m.releaseExpiredHoldsCalled = true

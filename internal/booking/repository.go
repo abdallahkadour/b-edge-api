@@ -217,6 +217,11 @@ type Repository interface {
 
 	// ── Background jobs ─────────────────────────────────────────────────
 
+	// FindStaleWaitlistGroups returns the queues holding a `notified` entry
+	// whose confirm window has passed - the one case lazy cascading cannot
+	// reach. See waitlist_worker.go.
+	FindStaleWaitlistGroups(ctx context.Context, now time.Time) ([]WaitlistGroup, error)
+
 	// ReleaseExpiredHolds updates held bookings whose held_until has passed
 	// back to their released state. Called by background job every minute.
 	ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error)
@@ -825,6 +830,42 @@ func (r *pgRepo) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([
 // NotifyNextWaitlistEntry: expire any stale notified entry for this exact
 // group, then notify the oldest waiting one, if any. See the Repository
 // interface doc comment and migration 016 for the lazy-expiry reasoning.
+// FindStaleWaitlistGroups returns every queue with an expired-but-uncascaded
+// `notified` entry.
+//
+// DISTINCT because a group can only hold one notified entry at a time in
+// practice, but nothing in the schema enforces that, and returning a group
+// twice would make the caller cascade it twice - the second pass finding
+// nothing to expire and notifying a second person for a slot that now has
+// one taker.
+//
+// Ordered oldest-deadline-first so the people who have been waiting longest
+// on a stalled queue are unblocked first.
+func (r *pgRepo) FindStaleWaitlistGroups(ctx context.Context, now time.Time) ([]WaitlistGroup, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT artist_id, store_id, service_id, requested_date
+		FROM waitlist_entries
+		WHERE status = $1
+		AND confirm_deadline < $2
+		ORDER BY artist_id, store_id, service_id, requested_date`,
+		WaitlistStatusNotified, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find stale waitlist groups: %w", err)
+	}
+	defer rows.Close()
+
+	var out []WaitlistGroup
+	for rows.Next() {
+		var g WaitlistGroup
+		if err := rows.Scan(&g.ArtistID, &g.StoreID, &g.ServiceID, &g.Date); err != nil {
+			return nil, fmt.Errorf("scan waitlist group: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 func (r *pgRepo) NotifyNextWaitlistEntry(ctx context.Context, artistID, storeID, serviceID uuid.UUID, date time.Time) error {
 	// Step 1: expire a stale 'notified' entry for this exact group, if one
 	// exists and its window has passed. Harmless no-op if there isn't one.

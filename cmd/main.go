@@ -191,6 +191,11 @@ func main() {
 	// panicked once and silently stopped would leave notifications queuing
 	// forever with nothing to indicate why.
 	superviseWorker(ctx, "notification", notification.NewWorker(pool, logger), logger)
+	// Unstalls waitlist queues whose notified entry never confirmed. The
+	// only case the lazy cascade cannot reach, because its trigger is
+	// another slot opening - which is precisely what is not happening. See
+	// internal/booking/waitlist_worker.go.
+	superviseWorker(ctx, "waitlist", booking.NewWaitlistWorker(pool, logger), logger)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

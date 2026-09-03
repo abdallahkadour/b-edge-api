@@ -272,6 +272,19 @@ type TimeSlot struct {
 	EarlyBirdFee decimal.Decimal `json:"early_bird_fee,omitempty"`
 }
 
+// WaitlistGroup identifies one queue: everyone waiting for the same service,
+// with the same artist, at the same store, on the same date.
+//
+// The waitlist is keyed to a DATE rather than an instant - someone waiting
+// for "a slot on the 14th" does not care which hour opened up - so these
+// four fields are the whole identity of a queue.
+type WaitlistGroup struct {
+	ArtistID  uuid.UUID
+	StoreID   uuid.UUID
+	ServiceID uuid.UUID
+	Date      time.Time
+}
+
 // FreedSlot is a booking that an expiry sweep released, reduced to just
 // what the waitlist cascade needs.
 //

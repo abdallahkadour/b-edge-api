@@ -24,7 +24,7 @@ Lebanon." Solo founder build.
 
 ---
 
-## Where things actually stand — 2026-09-02
+## Where things actually stand — 2026-09-05
 
 | | |
 |---|---|
@@ -93,10 +93,12 @@ Two suites are worth knowing before writing tests:
   Adding a status or an action means adding a row or a column. Mutation-tested.
   The design doc is `B-Edge-Booking-State-Machine-Matrix-v1.md` (in
   `b-edge-web/project-docs/`).
-- **`E2E-TEST-PLAN.md`** (also in `b-edge-web/project-docs/`) — 14 suites plus
-  an adversarial pass. Suites 1–10 and 12–13 have been live-executed; 11 and
-  14.8 **cannot be automated** (they need a link pasted into WhatsApp and an
-  `.ics` imported on a real phone).
+- **`E2E-TEST-PLAN.md`** (also in `b-edge-web/project-docs/`) — 16 suites plus
+  an adversarial pass. Suites 1–10 and 12–16 have been executed at least once;
+  11 and 14.8 **cannot be automated** (they need a link pasted into WhatsApp
+  and an `.ics` imported on a real phone). Suite 10 is currently unrunnable for
+  a different reason: no artist in the roster has any portfolio photos, so
+  there is nothing to tag.
 
 ---
 
@@ -140,6 +142,11 @@ Two suites are worth knowing before writing tests:
   The package is a **whitelist** (`^\d{1,8}(\.\d{1,2})?$`), not a list of
   rejections; enumerating rejections is how `NaN` got in. Deliberate
   consequence: `"10.999"` is now a 400, not a silent `11.00`.
+
+  `B-Edge-Cross-Layer-Data-Flow-Audit-v1.md` is the full picture — why this is
+  structural rather than one bad endpoint, and why **scale can never be
+  defended at the database level** (the column coerces before any CHECK runs),
+  which makes this package the only defence rather than defence-in-depth.
 
 - **Security headers are middleware, registered second.** `SecurityHeaders()`
   in `internal/middleware/secheaders.go` runs before anything can return early,

@@ -19,6 +19,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/hash"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // resetTokenLength is the number of random bytes used to generate a password reset token.
@@ -68,7 +69,7 @@ func NewService(repo Repository, auditRepo ...audit.Repository) *Service {
 	}
 	return &Service{
 		repo:     repo,
-		validate: validator.New(),
+		validate: validation.New(),
 		audit:    a,
 	}
 }
@@ -515,20 +516,7 @@ func toUserInfo(u *User) UserInfo {
 // mapValidationError converts go-playground/validator errors
 // into a structured apperror with per-field details.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 // validationMessage returns a human-readable message for a validation failure.

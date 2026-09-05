@@ -5,6 +5,7 @@ package artist
 
 import (
 	"errors"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/optional"
 	"time"
 
 	"github.com/google/uuid"
@@ -162,11 +163,20 @@ type UpdateProfileRequest struct {
 	// alphanumeric + single hyphens, no leading/trailing hyphen) is checked
 	// in the service layer with a regex matching the DB CHECK constraint
 	// exactly - struct tags alone can't express that pattern cleanly.
-	Handle    *string `json:"handle"     validate:"omitempty,min=3,max=50"`
-	Bio       *string `json:"bio"        validate:"omitempty,max=500"`
-	BioAr     *string `json:"bio_ar"     validate:"omitempty,max=500"`
-	Instagram *string `json:"instagram"  validate:"omitempty,max=255"`
-	AvatarURL *string `json:"avatar_url" validate:"omitempty,max=500"`
+	Handle *string `json:"handle" validate:"omitempty,min=3,max=50"`
+
+	// The four below are optional.Field, not *string, because each is
+	// something an artist can legitimately DELETE after entering it - and a
+	// *string cannot express "clear this". Sending `{"bio":null}` used to be
+	// indistinguishable from omitting the key and silently did nothing.
+	// See internal/pkg/optional and audit risk R1.
+	//
+	// Handle stays a *string on purpose: it is an identity, not a detail.
+	// There is no "no handle" state to clear to.
+	Bio       optional.Field[string] `json:"bio"        validate:"omitempty,max=500"`
+	BioAr     optional.Field[string] `json:"bio_ar"     validate:"omitempty,max=500"`
+	Instagram optional.Field[string] `json:"instagram"  validate:"omitempty,max=255"`
+	AvatarURL optional.Field[string] `json:"avatar_url" validate:"omitempty,max=500"`
 }
 
 // CreateServiceRequest is the request body for POST /api/v1/artists/services.
@@ -185,15 +195,21 @@ type CreateServiceRequest struct {
 
 // UpdateServiceRequest is the request body for PATCH /api/v1/artists/services/:id.
 type UpdateServiceRequest struct {
-	Name                 *string `json:"name"                   validate:"omitempty,min=2,max=200"`
-	NameAr               *string `json:"name_ar"                validate:"omitempty,max=200"`
-	Description          *string `json:"description"`
-	DurationMin          *int    `json:"duration_min"           validate:"omitempty,min=15,max=480"`
-	BufferMin            *int    `json:"buffer_min"             validate:"omitempty,min=0,max=120"`
-	Price                *string `json:"price"                  validate:"omitempty"`
-	DepositAmount        *string `json:"deposit_amount"         validate:"omitempty"`
-	DepositDeadlineHours *int    `json:"deposit_deadline_hours" validate:"omitempty,min=1"`
-	IsActive             *bool   `json:"is_active"`
+	Name *string `json:"name" validate:"omitempty,min=2,max=200"`
+
+	// Clearable: an artist can remove an Arabic name or a description they
+	// previously wrote, and `*string` cannot express that - `{"name_ar":null}`
+	// was indistinguishable from omitting the key and silently did nothing.
+	// See internal/pkg/optional, audit risk R1. Name is NOT clearable: a
+	// service with no name is not a state worth having.
+	NameAr               optional.Field[string] `json:"name_ar"     validate:"omitempty,max=200"`
+	Description          optional.Field[string] `json:"description"`
+	DurationMin          *int                   `json:"duration_min"           validate:"omitempty,min=15,max=480"`
+	BufferMin            *int                   `json:"buffer_min"             validate:"omitempty,min=0,max=120"`
+	Price                *string                `json:"price"                  validate:"omitempty"`
+	DepositAmount        *string                `json:"deposit_amount"         validate:"omitempty"`
+	DepositDeadlineHours *int                   `json:"deposit_deadline_hours" validate:"omitempty,min=1"`
+	IsActive             *bool                  `json:"is_active"`
 }
 
 // CreateStoreRequest is the request body for POST /api/v1/artists/salon/stores -

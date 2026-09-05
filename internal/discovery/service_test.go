@@ -107,8 +107,8 @@ func TestListArtists_DefaultsLimit(t *testing.T) {
 // an older one is not.
 func TestListArtists_NewBadge(t *testing.T) {
 	now := time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC)
-	recent := now.Add(-5 * 24 * time.Hour)  // 5 days ago → new
-	old := now.Add(-90 * 24 * time.Hour)     // 90 days ago → not new
+	recent := now.Add(-5 * 24 * time.Hour) // 5 days ago → new
+	old := now.Add(-90 * 24 * time.Hour)   // 90 days ago → not new
 
 	repo := &mockRepo{
 		listCards: []*ArtistCardRow{

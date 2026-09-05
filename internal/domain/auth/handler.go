@@ -31,6 +31,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // refreshTokenCookie is the name of the httpOnly cookie used to store the refresh token.
@@ -94,7 +95,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 func (h *Handler) Register(c *fiber.Ctx) error {
 	var req RegisterRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	result, err := h.svc.Register(c.Context(), req)
@@ -122,7 +123,7 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 func (h *Handler) Login(c *fiber.Ctx) error {
 	var req LoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	result, err := h.svc.Login(c.Context(), req, c.IP())
@@ -200,7 +201,7 @@ func (h *Handler) Logout(c *fiber.Ctx) error {
 func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
 	var req ForgotPasswordRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	// Service is always silent - never reveals if email exists
@@ -222,7 +223,7 @@ func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
 func (h *Handler) ResetPassword(c *fiber.Ctx) error {
 	var req ResetPasswordRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	if err := h.svc.ResetPassword(c.Context(), req); err != nil {
@@ -245,7 +246,7 @@ func (h *Handler) ResetPassword(c *fiber.Ctx) error {
 func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 	var req ChangePasswordRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)

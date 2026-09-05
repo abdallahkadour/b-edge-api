@@ -16,6 +16,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // devBypassOTPCode lets any phone number skip real OTP verification, in
@@ -56,7 +57,7 @@ func NewService(repo Repository, log ...*zap.Logger) *Service {
 	if len(log) > 0 && log[0] != nil {
 		l = log[0]
 	}
-	return &Service{repo: repo, validate: validator.New(), log: l}
+	return &Service{repo: repo, validate: validation.New(), log: l}
 }
 
 // RequestOTP generates and queues a WhatsApp login code for a phone number.
@@ -301,18 +302,7 @@ func hashOTP(value string) string {
 // surfaces to the person filling in the form; a generic message here would
 // silently regress that fix for this one domain.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 func validationMessage(fe validator.FieldError) string {

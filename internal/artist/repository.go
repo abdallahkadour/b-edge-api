@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/optional"
 	"time"
 
 	"github.com/google/uuid"
@@ -269,16 +270,35 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 }
 
 func (r *pgRepo) UpdateArtistProfile(ctx context.Context, artistID uuid.UUID, req UpdateProfileRequest) error {
+	// Four clearable fields, one pattern.
+	//
+	// Every one of these was previously COALESCE($n, col), which cannot express
+	// "remove" - so avatar_url had grown its own workaround, using an empty
+	// string as a clear sentinel (`CASE WHEN $5 = ''`), and the frontend had a
+	// comment explaining why it sent '' rather than null. That was the third
+	// separate workaround for the same missing state, after clear_location on
+	// stores.
+	//
+	// optional.Field carries presence and value separately, so an explicit null
+	// now clears. optional.Text additionally folds '' and whitespace to NULL,
+	// which keeps the existing frontend working unchanged AND collapses the two
+	// spellings of empty that audit risk R2 describes. handle is not clearable:
+	// it is an identity, and "no handle" is not a state.
 	_, err := r.db.Exec(ctx, `
 		UPDATE artists
 		SET handle     = COALESCE($1, handle),
-		    bio        = COALESCE($2, bio),
-		    bio_ar     = COALESCE($3, bio_ar),
-		    instagram  = COALESCE($4, instagram),
-		    avatar_url = CASE WHEN $5 = '' THEN NULL ELSE COALESCE($5, avatar_url) END,
+		    bio        = CASE WHEN $2 THEN $3 ELSE bio END,
+		    bio_ar     = CASE WHEN $4 THEN $5 ELSE bio_ar END,
+		    instagram  = CASE WHEN $6 THEN $7 ELSE instagram END,
+		    avatar_url = CASE WHEN $8 THEN $9 ELSE avatar_url END,
 		    updated_at = NOW()
-		WHERE id = $6`,
-		req.Handle, req.Bio, req.BioAr, req.Instagram, req.AvatarURL, artistID,
+		WHERE id = $10`,
+		req.Handle,
+		req.Bio.IsSet(), optional.Text(req.Bio),
+		req.BioAr.IsSet(), optional.Text(req.BioAr),
+		req.Instagram.IsSet(), optional.Text(req.Instagram),
+		req.AvatarURL.IsSet(), optional.Text(req.AvatarURL),
+		artistID,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -439,20 +459,37 @@ func (r *pgRepo) CreateService(ctx context.Context, s *SalonServiceRecord) error
 }
 
 func (r *pgRepo) UpdateService(ctx context.Context, id uuid.UUID, req UpdateServiceRequest) error {
+	// COALESCE for fields that cannot be cleared, CASE WHEN for the two that
+	// can.
+	//
+	// COALESCE($n, col) reads as "keep the current value when the parameter is
+	// NULL", which is right for a field that is only ever set - but it makes
+	// NULL unusable as an instruction, so `{"name_ar":null}` meant "leave it
+	// alone" and there was no way to remove a value at all. The CASE WHEN pairs
+	// take the presence flag separately from the value, so an explicit null
+	// clears the column. See internal/pkg/optional and audit risk R1.
+	//
+	// deposit_deadline_hours was accepted by the request struct, validated, and
+	// then not written by this statement at all - a PATCH setting it returned
+	// 200 and changed nothing. Found 2026-09-05 while fixing the above.
 	_, err := r.db.Exec(ctx, `
 		UPDATE services
-		SET name           = COALESCE($1, name),
-		    name_ar        = COALESCE($2, name_ar),
-		    description    = COALESCE($3, description),
-		    duration_min   = COALESCE($4, duration_min),
-		    buffer_min     = COALESCE($9, buffer_min),
-		    price          = COALESCE($5, price),
-		    deposit_amount = COALESCE($6, deposit_amount),
-		    is_active      = COALESCE($7, is_active),
-		    updated_at     = NOW()
-		WHERE id = $8`,
-		req.Name, req.NameAr, req.Description, req.DurationMin,
-		req.Price, req.DepositAmount, req.IsActive, id, req.BufferMin,
+		SET name                   = COALESCE($1, name),
+		    name_ar                = CASE WHEN $2 THEN $3 ELSE name_ar END,
+		    description            = CASE WHEN $4 THEN $5 ELSE description END,
+		    duration_min           = COALESCE($6, duration_min),
+		    buffer_min             = COALESCE($7, buffer_min),
+		    price                  = COALESCE($8, price),
+		    deposit_amount         = COALESCE($9, deposit_amount),
+		    deposit_deadline_hours = COALESCE($10, deposit_deadline_hours),
+		    is_active              = COALESCE($11, is_active),
+		    updated_at             = NOW()
+		WHERE id = $12`,
+		req.Name,
+		req.NameAr.IsSet(), optional.Text(req.NameAr),
+		req.Description.IsSet(), optional.Text(req.Description),
+		req.DurationMin, req.BufferMin, req.Price, req.DepositAmount,
+		req.DepositDeadlineHours, req.IsActive, id,
 	)
 	if err != nil {
 		return fmt.Errorf("update service: %w", err)

@@ -30,10 +30,10 @@ Lebanon." Solo founder build.
 |---|---|
 | Go / Fiber | 1.26.3 / v2.52.13 |
 | Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
-| Migrations | **33** (latest `033_service_buffer`) |
+| Migrations | **34** (latest `034_money_not_nan`) |
 | Tables | **29** |
 | Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **102** paths in swagger |
-| Go tests | **645**, all passing |
+| Go tests | **653**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
 
@@ -43,7 +43,7 @@ onboarding, product, review, **share** — plus `domain/auth`, `config`,
 `middleware`.
 
 **Leaf packages** (`internal/pkg/`): apperror, **bidi**, hash, jwt, **money**,
-**openinghours**, response, **subscription**.
+**openinghours**, **optional**, response, **subscription**, **validation**.
 
 Bold entries are recent and are not described in any older doc.
 
@@ -155,6 +155,30 @@ Two suites are worth knowing before writing tests:
   merely strict. The two routes that serve HTML (`share`, `calendar`) narrow it
   themselves at the handler by exactly one directive each, so a new HTML
   endpoint fails closed instead of inheriting permission nobody granted.
+- **A field a user can CLEAR is `optional.Field[T]`, not `*string`.** A pointer
+  cannot distinguish an absent key from an explicit `null`, and the repository's
+  `COALESCE($n, col)` reads NULL as "keep the current value" - so `{"bio":null}`
+  used to return 200 and do nothing, and no nullable column could be emptied
+  through the API. The SQL pairs presence with value:
+  `bio = CASE WHEN $2 THEN $3 ELSE bio END`. `optional.Text` additionally folds
+  `""` and whitespace to NULL, so the two spellings of empty do not both reach
+  the database. Keep `COALESCE` for fields that are only ever set; it is only
+  wrong for clearable ones. Audit risk R1/R2.
+
+- **Validators come from `validation.New()`, never `validator.New()`.** The
+  constructor registers a tag-name func so field errors carry the JSON key
+  (`deposit_amount`) rather than the Go field name (`DepositAmount`), which is
+  what a frontend maps onto inputs, and a custom type func so `max=500` still
+  validates the value inside an `optional.Field` rather than the struct around
+  it - a rule applied to the wrapper matches nothing and silently never fails.
+  `mapValidationError` had ten copies that had already drifted into four
+  variants; they now all delegate to `validation.MapError`.
+
+- **Body-parse failures go through `validation.MapBodyError`.** A type mismatch
+  carries its field name in `json.UnmarshalTypeError` and becomes a 422 the form
+  can highlight; only genuinely unattributable failures (malformed syntax, empty
+  body) stay a 400.
+
 - User-supplied text rendered to a *different* person must go through
   `internal/pkg/bidi`. A bidi override is not markup, so no escaping catches
   it. Current surfaces: Open Graph tags, notification bodies, `.ics`

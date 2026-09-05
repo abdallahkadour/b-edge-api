@@ -4,6 +4,7 @@ package artist
 
 import (
 	"context"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/optional"
 	"os"
 	"testing"
 	"time"
@@ -408,7 +409,7 @@ func TestUpdateProfile_Success(t *testing.T) {
 	svc := newTestService(repo)
 
 	newBio := "Updated bio"
-	req := UpdateProfileRequest{Bio: &newBio}
+	req := UpdateProfileRequest{Bio: optional.From(newBio)}
 
 	result, err := svc.UpdateProfile(context.Background(), profile.ID, profile.UserID, req)
 
@@ -424,7 +425,7 @@ func TestUpdateProfile_NotOwner(t *testing.T) {
 	svc := newTestService(repo)
 
 	newBio := "Updated bio"
-	req := UpdateProfileRequest{Bio: &newBio}
+	req := UpdateProfileRequest{Bio: optional.From(newBio)}
 
 	// Different user ID - not the owner
 	result, err := svc.UpdateProfile(context.Background(), profile.ID, uuid.New(), req)

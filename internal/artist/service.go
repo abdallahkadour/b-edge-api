@@ -14,6 +14,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Service handles all artist business logic.
@@ -26,7 +27,7 @@ type Service struct {
 func NewService(repo Repository) *Service {
 	return &Service{
 		repo:     repo,
-		validate: validator.New(),
+		validate: validation.New(),
 	}
 }
 
@@ -585,31 +586,5 @@ func toServiceResponse(s *SalonServiceRecord) *ServiceResponse {
 }
 
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: fieldMessage(fe),
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
-}
-
-func fieldMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "min":
-		return fe.Field() + " must be at least " + fe.Param()
-	case "max":
-		return fe.Field() + " must be at most " + fe.Param() + " characters"
-	case "uuid":
-		return fe.Field() + " must be a valid UUID"
-	default:
-		return fe.Field() + " is invalid"
-	}
+	return validation.MapError(err)
 }

@@ -16,22 +16,22 @@ import (
 // ── Mock repository ───────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	createErr         error
-	byBookingReview   *Review
-	byBookingErr      error
-	byIDReview        *Review
-	byIDErr           error
-	byArtistReviews   []*Review
+	createErr               error
+	byBookingReview         *Review
+	byBookingErr            error
+	byIDReview              *Review
+	byIDErr                 error
+	byArtistReviews         []*Review
 	enrichedByArtistReviews []*EnrichedReviewResponse
-	byArtistErr       error
-	deleteErr         error
-	setVisibilityErr  error
-	bookingStatus     string
-	bookingCustomerID uuid.UUID
-	bookingArtistID   uuid.UUID
-	bookingErr        error
-	artistIDByUser    uuid.UUID
-	artistIDByUserErr error
+	byArtistErr             error
+	deleteErr               error
+	setVisibilityErr        error
+	bookingStatus           string
+	bookingCustomerID       uuid.UUID
+	bookingArtistID         uuid.UUID
+	bookingErr              error
+	artistIDByUser          uuid.UUID
+	artistIDByUserErr       error
 	// captured args for assertions
 	lastDeleteArtistID uuid.UUID
 	lastSetVisibility  *bool

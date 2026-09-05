@@ -28,9 +28,9 @@ var RevenueStatuses = []string{"completed", "no_show"}
 
 // earningsRow is the raw aggregate row returned from the summary query.
 type earningsRow struct {
-	TotalRevenue   decimal.Decimal `db:"total_revenue"`
-	TotalBookings  int             `db:"total_bookings"`
-	TotalDeposits  decimal.Decimal `db:"total_deposits"`
+	TotalRevenue  decimal.Decimal `db:"total_revenue"`
+	TotalBookings int             `db:"total_bookings"`
+	TotalDeposits decimal.Decimal `db:"total_deposits"`
 }
 
 // serviceEarningsRow is the raw row returned from the by-service query.

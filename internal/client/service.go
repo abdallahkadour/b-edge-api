@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Service handles all client CRM business logic.
@@ -22,7 +23,7 @@ type Service struct {
 func NewService(repo Repository) *Service {
 	return &Service{
 		repo:     repo,
-		validate: validator.New(),
+		validate: validation.New(),
 	}
 }
 
@@ -139,16 +140,5 @@ func (s *Service) resolveArtist(ctx context.Context, userID uuid.UUID) (uuid.UUI
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: fe.Field() + " is invalid",
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }

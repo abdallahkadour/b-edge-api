@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Service handles all media business logic.
@@ -25,7 +26,7 @@ type Service struct {
 func NewService(repo Repository) *Service {
 	return &Service{
 		repo:     repo,
-		validate: validator.New(),
+		validate: validation.New(),
 	}
 }
 
@@ -474,18 +475,7 @@ func (s *Service) resolveArtist(ctx context.Context, userID uuid.UUID) (uuid.UUI
 
 // mapValidationError converts go-playground/validator errors to apperror types.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 // validationMessage returns a human-readable message for a field validation failure.

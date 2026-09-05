@@ -248,11 +248,11 @@ type OrderItemResponse struct {
 // order is meaningless without its line items, so callers always get both
 // together rather than needing a second request.
 type OrderResponse struct {
-	ID               uuid.UUID           `json:"id"`
-	Status           string              `json:"status"`
-	TotalAmount      decimal.Decimal     `json:"total_amount"`
-	PaymentReference *string             `json:"payment_reference,omitempty"`
-	DeliveryNotes    *string             `json:"delivery_notes,omitempty"`
+	ID               uuid.UUID       `json:"id"`
+	Status           string          `json:"status"`
+	TotalAmount      decimal.Decimal `json:"total_amount"`
+	PaymentReference *string         `json:"payment_reference,omitempty"`
+	DeliveryNotes    *string         `json:"delivery_notes,omitempty"`
 	// DeliveryLat/DeliveryLng: omitted entirely for orders placed before
 	// this existed - the frontend falls back to "no location on file"
 	// rather than a misleading (0,0).

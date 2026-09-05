@@ -10,6 +10,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the client CRM domain.
@@ -110,7 +111,7 @@ func (h *Handler) UpsertNote(c *fiber.Ctx) error {
 
 	var req UpsertNoteRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	requesterUserID := middleware.UserIDFromContext(c)

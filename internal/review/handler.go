@@ -10,6 +10,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the review domain.
@@ -80,7 +81,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 func (h *Handler) CreateReview(c *fiber.Ctx) error {
 	var req CreateReviewRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	customerID := middleware.UserIDFromContext(c)
@@ -129,7 +130,7 @@ func (h *Handler) GetBookingContextByToken(c *fiber.Ctx) error {
 func (h *Handler) CreateReviewByToken(c *fiber.Ctx) error {
 	var req SubmitReviewByTokenRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	review, err := h.svc.CreateReviewByToken(c.Context(), c.Params("token"), req)

@@ -50,12 +50,12 @@ type mockRepo struct {
 	customerByIDErr error
 
 	// captured for assertions
-	enqueuedMessage  string
-	enqueuedPhone    string
+	enqueuedMessage    string
+	enqueuedPhone      string
 	phoneIneligible    bool
 	phoneEligibleErr   error
 	findOrCreateCalled bool
-	incrementCalled bool
+	incrementCalled    bool
 }
 
 func (m *mockRepo) CountRecentOTPs(_ context.Context, _ string, _ time.Time) (int, error) {

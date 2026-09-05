@@ -19,6 +19,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // toDayHours adapts this domain's BusinessHours row onto the shared
@@ -122,7 +123,7 @@ func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap
 	return &Service{
 		repo:      repo,
 		subReader: subReader,
-		validate:  validator.New(),
+		validate:  validation.New(),
 		log:       l,
 	}
 }
@@ -1760,20 +1761,7 @@ func zeroDecimal() decimal.Decimal {
 // mapValidationError converts go-playground/validator errors
 // into structured apperror types.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 // validationMessage returns a human-readable message for a field validation failure.

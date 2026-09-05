@@ -14,6 +14,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Service handles all billing business logic: the plan catalogue,
@@ -34,7 +35,7 @@ func NewService(repo Repository, auditRepo audit.Repository) *Service {
 	if auditRepo != nil {
 		a = auditRepo
 	}
-	return &Service{repo: repo, validate: validator.New(), audit: a}
+	return &Service{repo: repo, validate: validation.New(), audit: a}
 }
 
 // ListPublicPlans returns the plans shown on the public pricing page.
@@ -584,18 +585,7 @@ func parseNonNegativeDecimal(raw, field string) (decimal.Decimal, error) {
 // pattern established in product/review/customerauth, not a stripped-down
 // generic message.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 func validationMessage(fe validator.FieldError) string {

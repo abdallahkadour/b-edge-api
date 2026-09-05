@@ -14,6 +14,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the booking domain.
@@ -131,7 +132,7 @@ func (h *Handler) GetAvailableSlots(c *fiber.Ctx) error {
 func (h *Handler) HoldGuestSlot(c *fiber.Ctx) error {
 	var req HoldGuestSlotRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	res, err := h.svc.HoldGuestSlot(c.Context(), req)
@@ -164,7 +165,7 @@ func (h *Handler) SubmitGuestBooking(c *fiber.Ctx) error {
 
 	var req SubmitGuestBookingRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	booking, err := h.svc.SubmitGuestBooking(c.Context(), bookingID, req)
@@ -188,7 +189,7 @@ func (h *Handler) SubmitGuestBooking(c *fiber.Ctx) error {
 func (h *Handler) CreateBooking(c *fiber.Ctx) error {
 	var req CreateBookingRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	customerID := middleware.UserIDFromContext(c)
@@ -356,7 +357,7 @@ func (h *Handler) MarkRefunded(c *fiber.Ctx) error {
 	var req MarkRefundedRequest
 	if len(c.Body()) > 0 {
 		if err := c.BodyParser(&req); err != nil {
-			return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+			return validation.MapBodyError(err)
 		}
 	}
 
@@ -401,7 +402,7 @@ func (h *Handler) ConfirmDepositReceived(c *fiber.Ctx) error {
 	var req ConfirmDepositReceivedRequest
 	if len(c.Body()) > 0 {
 		if err := c.BodyParser(&req); err != nil {
-			return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+			return validation.MapBodyError(err)
 		}
 	}
 
@@ -587,7 +588,7 @@ func (h *Handler) GetArtistCalendar(c *fiber.Ctx) error {
 func (h *Handler) JoinWaitlist(c *fiber.Ctx) error {
 	var req JoinWaitlistRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	entryID, err := h.svc.JoinWaitlist(c.Context(), req)
@@ -689,7 +690,7 @@ func parsePaginationParams(c *fiber.Ctx) (time.Time, int) {
 func (h *Handler) ShiftDay(c *fiber.Ctx) error {
 	var req ShiftPreviewRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Could not parse request body")
+		return validation.MapBodyError(err)
 	}
 
 	plan, err := h.svc.ShiftDay(c.Context(), middleware.UserIDFromContext(c), req)
@@ -724,7 +725,7 @@ func (h *Handler) ShiftDay(c *fiber.Ctx) error {
 func (h *Handler) PreviewShiftDay(c *fiber.Ctx) error {
 	var req ShiftPreviewRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Invalid request body")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)

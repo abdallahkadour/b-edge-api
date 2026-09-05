@@ -321,32 +321,49 @@ name (§1.3).
 
 ## 5. Risk register
 
-| # | Risk | Severity | Status | Mitigation |
+| # | Risk | Severity | Status | Where |
 |---|---|---|---|---|
-| **R1** | `null` ≡ absent; nullable columns cannot be cleared through the API | **High** | **Open** | See §5.1 |
-| **R2** | `''` stored where `NULL` is meant; two spellings of "empty" | Medium | Open | Normalise `""` → `NULL` at the repository boundary for nullable text columns, or add `CHECK (col <> '')` so the ambiguity cannot exist |
-| **R3** | `NaN` reaching `NUMERIC` corrupts a row irrecoverably | **High** | **Fixed** 2026-09-05 | `internal/pkg/money` — 8 direct call sites across `artist`, `product` and `onboarding`, plus `billing`'s `parseNonNegativeDecimal`, now a one-line wrapper serving its own 4 callers. **Defence in depth still missing** — see §5.2 |
-| **R4** | Misspelled optional field silently ignored | Medium | Open | Consider `DisallowUnknownFields()` on write endpoints — but weigh it against §2.3; it would turn a forward-compatible client into a broken one |
-| **R5** | Two error shapes; 400 has no field attribution | Medium | Open | Map unmarshal type errors to a 422 with the field name recovered from `json.UnmarshalTypeError.Field` |
-| **R6** | `details[].field` is the Go name, not the JSON key | Low | Open | Emit the `json` tag name in `mapValidationError` |
-| **R7** | Client and server money validators can drift | Low | Guarded | Identical patterns; mirrored test tables in `money.util.spec.ts` and `money_test.go` |
-| **R8** | JS numbers lose precision above 2^53 | Low | Latent | Holds only while IDs stay UUIDs and money stays decimal strings. Any future integer ID or cents-as-int field reopens it |
+| **R1** | `null` ≡ absent; nullable columns cannot be cleared | **High** | **FIXED** 2026-09-05 | `internal/pkg/optional` |
+| **R2** | `''` stored where `NULL` is meant | Medium | **FIXED** | `optional.Text` folds empty and whitespace to `NULL` |
+| **R3** | `NaN` reaching `NUMERIC` corrupts a row irrecoverably | **High** | **FIXED** (both layers) | `internal/pkg/money` + migration 034 |
+| **R4** | Misspelled optional field silently ignored | Medium | **ACCEPTED** — see §5.3 | — |
+| **R5** | 400 has no field attribution | Medium | **FIXED** | `validation.MapBodyError` |
+| **R6** | `details[].field` is the Go name, not the JSON key | Low | **FIXED** | `validation.New` tag-name func |
+| **R7** | Client and server money validators can drift | Low | Guarded | mirrored test tables |
+| **R8** | JS numbers lose precision above 2^53 | Low | Latent | holds while IDs are UUIDs and money is a string |
+| **R9** | A request field accepted, validated, then dropped by the SQL | Medium | **FIXED** | `deposit_deadline_hours`; see §5.3 |
 
-### 5.1 Mitigating R1 — three options
+### 5.1 How R1 and R2 were fixed
 
-1. **`json.RawMessage` per optional field.** Fully expressive; distinguishes
-   absent / `null` / value. Verbose at every field.
-2. **An explicit clear flag per nullable field** — the `clear_location`
-   precedent. Honest and readable, and already proven in this codebase, but it
-   is one flag per field and does not scale past a handful.
-3. **A generic `Optional[T]` wrapper** with `Set`/`Null` booleans and a custom
-   `UnmarshalJSON`. One type, applied where clearing is genuinely needed.
+Three options were considered: `json.RawMessage` per field (expressive but
+pushes decoding into every service and gives the validator nothing to inspect),
+a per-field clear flag (the `clear_location` precedent — honest but one flag per
+field), or a generic wrapper. The wrapper won, applied narrowly.
 
-**Recommendation: (3), applied narrowly.** Do not retrofit every nullable
-field — most are never cleared in practice. Apply it where a user can
-legitimately remove a value they previously entered: `description`,
-`instagram`, `special_requests`. Leave `clear_location` alone; it works and
-rewriting it buys nothing.
+`internal/pkg/optional.Field[T]` keeps presence and value separate, so the
+repository can ask two different questions:
+
+```sql
+bio = CASE WHEN $2 THEN $3 ELSE bio END   -- $2 = IsSet, $3 = Text
+```
+
+`COALESCE($n, col)` remains correct for fields that are only ever set, and is
+kept for those. It is only wrong for fields a user can clear.
+
+**The project had already invented this workaround twice, differently.**
+`clear_location` on stores used a boolean flag. `avatar_url` used an empty
+string as a clear sentinel (`CASE WHEN $5 = ''`), and the frontend carried a
+comment explaining why it sent `''` rather than `null`. Neither was documented
+as a pattern, so the third field to need it would have grown a third mechanism.
+
+Applied to: `services.name_ar`, `services.description`, `artists.bio`,
+`artists.bio_ar`, `artists.instagram`, `artists.avatar_url`. **Not** applied to
+`handle` or `name` — an identity has no "cleared" state — and **not** to
+`clear_location`, which works and whose rewrite would buy nothing.
+
+`optional.Text` also closes R2 by folding `""` and whitespace to `NULL`, which
+has the useful side effect of keeping the existing `avatar_url: ''` client
+working unchanged while `null` starts working too.
 
 ### 5.2 Mitigating R3 in depth
 
@@ -396,6 +413,32 @@ Two things that follow, and both matter:
 Not applied here because it is a migration and this document is an audit;
 raised as the recommended follow-up.
 
+### 5.3 R4, and the finding underneath it
+
+**R4 is accepted, not fixed, and deliberately so.** Rejecting unknown fields
+(`DisallowUnknownFields`) would catch typos, but it also turns a
+forward-compatible client into a broken one: deploy the web app before the API
+and every request carrying a new field starts failing. Silently ignoring unknown
+fields is what makes mass assignment impossible (INJ-02), and that property is
+worth more than typo detection.
+
+**But the concrete harm attributed to R4 turned out not to be a JSON typo at
+all**, which is why it is worth separating. `PATCH
+/artists/salon/services/:id` with `{"deposit_deadline_hours":48}` returned
+`200` and changed nothing: the field was on the request struct, passed
+validation, and was then simply **absent from the UPDATE statement**. Nothing
+in the type system or the tests could see it.
+
+That is a worse class than a typo — the client spelled it correctly and was
+told it worked. Fixed, and the whole class was then swept: every
+`Update*Request` field was cross-checked against its repository's UPDATE, and
+`deposit_deadline_hours` was the only genuine case. The two other flagged
+fields (`clear_location`, `cancel`) are control flags rather than columns and
+are correct as they are.
+
+Logged as **R9**, because it deserves its own name rather than living inside
+R4's.
+
 ---
 
 ## 6. What is already right
@@ -417,5 +460,6 @@ Recorded so it is not "simplified" away by someone who has not read this far.
 
 ---
 
-*Verified against the running stack on 2026-09-05. Every table in §1.1, §2.2,
+*Audited and, where marked FIXED, re-verified against the running stack on
+2026-09-05. Every table in §1.1, §2.2,
 §2.4, §3.1 and §4 is measured output, not inference.*

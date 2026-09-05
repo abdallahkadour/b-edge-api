@@ -9,6 +9,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the product store.
@@ -97,7 +98,7 @@ func (h *Handler) ListPublicProducts(c *fiber.Ctx) error {
 func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	var req CreateProductRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -130,7 +131,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 
 	var req UpdateProductRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -178,7 +179,7 @@ func (h *Handler) ListMyProducts(c *fiber.Ctx) error {
 func (h *Handler) PlaceOrder(c *fiber.Ctx) error {
 	var req CreateOrderRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	order, err := h.svc.PlaceOrder(c.Context(), req)

@@ -11,6 +11,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the media domain.
@@ -134,7 +135,7 @@ func (h *Handler) GetMyPortfolio(c *fiber.Ctx) error {
 func (h *Handler) AddPhoto(c *fiber.Ctx) error {
 	var req AddMediaRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)
@@ -221,7 +222,7 @@ func (h *Handler) SetMediaServices(c *fiber.Ctx) error {
 
 	var req SetMediaServicesRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Invalid request body")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)
@@ -248,7 +249,7 @@ func (h *Handler) SetMediaServices(c *fiber.Ctx) error {
 func (h *Handler) Reorder(c *fiber.Ctx) error {
 	var req ReorderRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)
@@ -306,7 +307,7 @@ func (h *Handler) AddProductPhoto(c *fiber.Ctx) error {
 
 	var req AddMediaRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -368,7 +369,7 @@ func (h *Handler) ReorderProductPhotos(c *fiber.Ctx) error {
 
 	var req ReorderRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)

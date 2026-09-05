@@ -7,6 +7,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // refreshTokenCookie is the cookie name for the customer's refresh token
@@ -50,7 +51,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 func (h *Handler) RequestOTP(c *fiber.Ctx) error {
 	var req RequestOTPRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	if err := h.svc.RequestOTP(c.Context(), req); err != nil {
@@ -75,7 +76,7 @@ func (h *Handler) RequestOTP(c *fiber.Ctx) error {
 func (h *Handler) VerifyOTP(c *fiber.Ctx) error {
 	var req VerifyOTPRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	result, err := h.svc.VerifyOTP(c.Context(), req)

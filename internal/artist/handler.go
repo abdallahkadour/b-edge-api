@@ -12,6 +12,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the artist domain.
@@ -122,7 +123,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 func (h *Handler) CreateStore(c *fiber.Ctx) error {
 	var req CreateStoreRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -161,7 +162,7 @@ func (h *Handler) UpdateStore(c *fiber.Ctx) error {
 
 	var req UpdateStoreRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -282,7 +283,7 @@ func (h *Handler) UpdateProfile(c *fiber.Ctx) error {
 
 	var req UpdateProfileRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	userID := middleware.UserIDFromContext(c)
@@ -374,7 +375,7 @@ func (h *Handler) GetServicesBySalon(c *fiber.Ctx) error {
 func (h *Handler) CreateService(c *fiber.Ctx) error {
 	var req CreateServiceRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -408,7 +409,7 @@ func (h *Handler) UpdateService(c *fiber.Ctx) error {
 
 	var req UpdateServiceRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -495,7 +496,7 @@ func (h *Handler) SetBusinessHours(c *fiber.Ctx) error {
 
 	var req SetBusinessHoursRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)
@@ -555,7 +556,7 @@ func (h *Handler) CreateException(c *fiber.Ctx) error {
 
 	var req CreateExceptionRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	salonID := middleware.SalonIDFromContext(c)

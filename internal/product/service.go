@@ -11,6 +11,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Service handles all product-store business logic.
@@ -21,7 +22,7 @@ type Service struct {
 
 // NewService constructs a Service.
 func NewService(repo Repository) *Service {
-	return &Service{repo: repo, validate: validator.New()}
+	return &Service{repo: repo, validate: validation.New()}
 }
 
 // ── Products ──────────────────────────────────────────────────────────────
@@ -373,18 +374,7 @@ func (s *Service) transitionOrder(ctx context.Context, orderID, salonID uuid.UUI
 // pattern established in review/customerauth, not a stripped-down generic
 // message.
 func mapValidationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
-		return apperror.BadRequest("VALIDATION_ERROR", err.Error())
-	}
-	details := make([]apperror.FieldError, 0, len(ve))
-	for _, fe := range ve {
-		details = append(details, apperror.FieldError{
-			Field:   fe.Field(),
-			Message: validationMessage(fe),
-		})
-	}
-	return apperror.UnprocessableEntity("VALIDATION_ERROR", details)
+	return validation.MapError(err)
 }
 
 func validationMessage(fe validator.FieldError) string {

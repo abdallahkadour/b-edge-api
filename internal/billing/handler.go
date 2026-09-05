@@ -10,6 +10,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 // Handler handles all HTTP requests for the billing domain.
@@ -128,7 +129,7 @@ func (h *Handler) ListAllPlans(c *fiber.Ctx) error {
 func (h *Handler) CreatePlan(c *fiber.Ctx) error {
 	var req CreatePlanRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	plan, err := h.svc.CreatePlan(c.Context(), req)
@@ -154,7 +155,7 @@ func (h *Handler) UpdatePlan(c *fiber.Ctx) error {
 
 	var req UpdatePlanRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	plan, err := h.svc.UpdatePlan(c.Context(), code, req)
@@ -316,7 +317,7 @@ func (h *Handler) AdminVoidInvoice(c *fiber.Ctx) error {
 
 	var req VoidInvoiceRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	if err := h.svc.VoidInvoice(c.Context(), invoiceID, adminID, req, c.IP()); err != nil {
@@ -346,7 +347,7 @@ func (h *Handler) AdminUpdateSubscription(c *fiber.Ctx) error {
 
 	var req UpdateSubscriptionRequest
 	if err := c.BodyParser(&req); err != nil {
-		return apperror.BadRequest("INVALID_BODY", "Request body is invalid")
+		return validation.MapBodyError(err)
 	}
 
 	sub, err := h.svc.UpdateSubscription(c.Context(), subscriptionID, adminID, req, c.IP())

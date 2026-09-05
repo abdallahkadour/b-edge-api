@@ -35,15 +35,15 @@ type mockRepo struct {
 	updateProdErr error
 
 	// orders
-	order          *Order
-	orderItems     []*OrderItem
-	orderErr       error
-	createOrderErr error
+	order           *Order
+	orderItems      []*OrderItem
+	orderErr        error
+	createOrderErr  error
 	updateStatusErr error
-	ordersByCust   []*Order
+	ordersByCust    []*Order
 	ordersByCustErr error
-	enrichedOrders []*EnrichedOrderResponse
-	enrichedErr    error
+	enrichedOrders  []*EnrichedOrderResponse
+	enrichedErr     error
 
 	customerID  uuid.UUID
 	customerErr error

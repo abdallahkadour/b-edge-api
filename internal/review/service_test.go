@@ -29,6 +29,8 @@ type mockRepo struct {
 	bookingStatus           string
 	bookingCustomerID       uuid.UUID
 	bookingArtistID         uuid.UUID
+	bookingStoreID          *uuid.UUID
+	lastCreated             *Review
 	bookingErr              error
 	artistIDByUser          uuid.UUID
 	artistIDByUserErr       error
@@ -44,7 +46,10 @@ type mockRepo struct {
 	tokenContextErr error
 }
 
-func (m *mockRepo) CreateReview(_ context.Context, _ *Review) error { return m.createErr }
+func (m *mockRepo) CreateReview(_ context.Context, rev *Review) error {
+	m.lastCreated = rev
+	return m.createErr
+}
 func (m *mockRepo) GetReviewByBookingID(_ context.Context, _ uuid.UUID) (*Review, error) {
 	return m.byBookingReview, m.byBookingErr
 }
@@ -72,8 +77,16 @@ func (m *mockRepo) SetVisibility(_ context.Context, _ uuid.UUID, artistID uuid.U
 	m.lastSetVisibility = &visible
 	return m.setVisibilityErr
 }
-func (m *mockRepo) GetBookingStatus(_ context.Context, _ uuid.UUID) (string, uuid.UUID, uuid.UUID, error) {
-	return m.bookingStatus, m.bookingCustomerID, m.bookingArtistID, m.bookingErr
+func (m *mockRepo) GetBookingAttribution(_ context.Context, _ uuid.UUID) (*BookingAttribution, error) {
+	if m.bookingErr != nil {
+		return nil, m.bookingErr
+	}
+	return &BookingAttribution{
+		Status:     m.bookingStatus,
+		CustomerID: m.bookingCustomerID,
+		ArtistID:   m.bookingArtistID,
+		StoreID:    m.bookingStoreID,
+	}, nil
 }
 func (m *mockRepo) GetArtistIDByUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
 	return m.artistIDByUser, m.artistIDByUserErr
@@ -453,4 +466,105 @@ func TestGetPublicReviewsByArtist_RepoError_Propagates(t *testing.T) {
 	_, err := svc.GetPublicReviewsByArtist(context.Background(), uuid.New())
 
 	require.Error(t, err)
+}
+
+// ── Dual-layer reviews (Sprint 8) ─────────────────────────────────────────────
+
+func uuidPtr(u uuid.UUID) *uuid.UUID { return &u }
+func intPtr(i int) *int              { return &i }
+
+// TestCreateReview_SalonRating_IsPersistedWithTheVenue - the venue score and
+// the store it belongs to must both reach the row, or the second aggregate has
+// nothing to average.
+func TestCreateReview_SalonRating_IsPersistedWithTheVenue(t *testing.T) {
+	customer, artist, store := uuid.New(), uuid.New(), uuid.New()
+	repo := &mockRepo{
+		bookingStatus:     "completed",
+		bookingCustomerID: customer,
+		bookingArtistID:   artist,
+		bookingStoreID:    uuidPtr(store),
+		byBookingErr:      ErrReviewNotFound,
+	}
+
+	_, err := newTestService(repo).CreateReview(context.Background(), CreateReviewRequest{
+		BookingID:   uuid.New().String(),
+		Rating:      5,
+		SalonRating: intPtr(3),
+	}, customer)
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastCreated)
+	assert.Equal(t, 5, repo.lastCreated.Rating, "specialist score")
+	require.NotNil(t, repo.lastCreated.SalonRating)
+	assert.Equal(t, 3, *repo.lastCreated.SalonRating,
+		"venue score is independent of the specialist score and may disagree with it")
+	require.NotNil(t, repo.lastCreated.StoreID)
+	assert.Equal(t, store, *repo.lastCreated.StoreID,
+		"venue comes from the booking, never from the client")
+}
+
+// TestCreateReview_NoSalonRating_StaysNil is the survey-fatigue rule: the venue
+// question is optional, and an unanswered one must be NULL rather than zero - a
+// zero would drag the store average down for every specialist-only review.
+func TestCreateReview_NoSalonRating_StaysNil(t *testing.T) {
+	customer := uuid.New()
+	repo := &mockRepo{
+		bookingStatus:     "completed",
+		bookingCustomerID: customer,
+		bookingArtistID:   uuid.New(),
+		bookingStoreID:    uuidPtr(uuid.New()),
+		byBookingErr:      ErrReviewNotFound,
+	}
+
+	_, err := newTestService(repo).CreateReview(context.Background(), CreateReviewRequest{
+		BookingID: uuid.New().String(),
+		Rating:    4,
+	}, customer)
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastCreated)
+	assert.Nil(t, repo.lastCreated.SalonRating, "absent must stay NULL, never 0")
+}
+
+// TestCreateReview_SalonRating_OutOfRange_Rejected - the venue score obeys the
+// same 1-5 bound as the specialist score.
+func TestCreateReview_SalonRating_OutOfRange_Rejected(t *testing.T) {
+	customer := uuid.New()
+	for _, bad := range []int{0, 6, -1} {
+		repo := &mockRepo{
+			bookingStatus:     "completed",
+			bookingCustomerID: customer,
+			bookingArtistID:   uuid.New(),
+			byBookingErr:      ErrReviewNotFound,
+		}
+		_, err := newTestService(repo).CreateReview(context.Background(), CreateReviewRequest{
+			BookingID:   uuid.New().String(),
+			Rating:      4,
+			SalonRating: intPtr(bad),
+		}, customer)
+		assert.Error(t, err, "salon_rating %d should be rejected", bad)
+	}
+}
+
+// TestCreateReview_ArtistIsResolvedThroughPrimaryStylist - today the answer is
+// always the booking's own artist, but the call must route through the D5.1
+// rule so split bookings (Sprint 13) change one function rather than needing
+// the rule rediscovered at this call site.
+func TestCreateReview_ArtistIsResolvedThroughPrimaryStylist(t *testing.T) {
+	customer, artist := uuid.New(), uuid.New()
+	repo := &mockRepo{
+		bookingStatus:     "completed",
+		bookingCustomerID: customer,
+		bookingArtistID:   artist,
+		byBookingErr:      ErrReviewNotFound,
+	}
+
+	_, err := newTestService(repo).CreateReview(context.Background(), CreateReviewRequest{
+		BookingID: uuid.New().String(),
+		Rating:    5,
+	}, customer)
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.lastCreated)
+	assert.Equal(t, artist, repo.lastCreated.ArtistID)
 }

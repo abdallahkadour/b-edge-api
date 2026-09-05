@@ -50,15 +50,46 @@ type Review struct {
 	Comment    *string   `db:"comment"`
 	IsVisible  bool      `db:"is_visible"`
 	CreatedAt  time.Time `db:"created_at"`
+
+	// StoreID is the venue the visit happened at, copied from the booking.
+	// Nullable: reviews predating migration 035 have none.
+	StoreID *uuid.UUID `db:"store_id"`
+
+	// SalonRating rates the VENUE and is deliberately independent of Rating,
+	// which rates the specialist. Optional - a review that answers only the
+	// specialist question is complete, and forcing the second question is how
+	// response rates fall (assessment §2.2 on survey fatigue).
+	//
+	// Never derive one from the other. "Salon rating = average of its
+	// stylists" is the gaming vector §2.2 names: an owner inflates the venue
+	// by hiring one star.
+	SalonRating *int `db:"salon_rating"`
+}
+
+// BookingAttribution is what a review needs to know about the booking it is
+// rating: who may submit it, which specialist it scores, and which VENUE.
+//
+// StoreID is a pointer because bookings.store_id is nullable in principle,
+// and a review with no venue simply carries no salon rating rather than
+// failing - losing a specialist rating because the room is unknown would be
+// the worse outcome.
+type BookingAttribution struct {
+	Status     string
+	CustomerID uuid.UUID
+	ArtistID   uuid.UUID
+	StoreID    *uuid.UUID
 }
 
 // ── Request structs ───────────────────────────────────────────────────────────
 
 // CreateReviewRequest is the request body for POST /api/v1/reviews.
 type CreateReviewRequest struct {
-	BookingID string  `json:"booking_id" validate:"required,uuid"`
-	Rating    int     `json:"rating"     validate:"required,min=1,max=5"`
-	Comment   *string `json:"comment"    validate:"omitempty,max=1000"`
+	BookingID string `json:"booking_id" validate:"required,uuid"`
+	Rating    int    `json:"rating"     validate:"required,min=1,max=5"`
+	// SalonRating is OPTIONAL - omitting it submits a specialist-only review,
+	// which is a complete review. See Review.SalonRating.
+	SalonRating *int    `json:"salon_rating" validate:"omitempty,min=1,max=5"`
+	Comment     *string `json:"comment"      validate:"omitempty,max=1000"`
 }
 
 // SubmitReviewByTokenRequest is the request body for
@@ -67,8 +98,10 @@ type CreateReviewRequest struct {
 // including it in the body would be redundant and would let a caller send
 // a mismatched token/booking_id pair with no clear rule for which wins.
 type SubmitReviewByTokenRequest struct {
-	Rating  int     `json:"rating"  validate:"required,min=1,max=5"`
-	Comment *string `json:"comment" validate:"omitempty,max=1000"`
+	Rating int `json:"rating" validate:"required,min=1,max=5"`
+	// Optional, as on CreateReviewRequest.
+	SalonRating *int    `json:"salon_rating" validate:"omitempty,min=1,max=5"`
+	Comment     *string `json:"comment"      validate:"omitempty,max=1000"`
 }
 
 // ReviewBookingContext is the booking summary shown on the review-link
@@ -108,6 +141,11 @@ type ReviewResponse struct {
 	// has no way to know which state a review is actually in.
 	IsVisible bool      `json:"is_visible"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// SalonRating is omitted entirely when the reviewer did not answer the
+	// venue question - so a consumer renders "not rated" rather than a zero.
+	SalonRating *int       `json:"salon_rating,omitempty"`
+	StoreID     *uuid.UUID `json:"store_id,omitempty"`
 }
 
 // EnrichedReviewResponse is the PUBLIC-facing shape - it adds a display
@@ -129,3 +167,8 @@ type EnrichedReviewResponse struct {
 	ReviewResponse
 	ReviewerName string `json:"reviewer_name"`
 }
+
+// (SalonRating is inherited from ReviewResponse and populated by the same
+// query - the public list carries both scores so a customer can see the venue
+// and the specialist rated separately, which is the whole point of collecting
+// two numbers.)

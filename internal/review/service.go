@@ -58,16 +58,16 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 	}
 
 	// Step 1: Verify booking exists, is completed, and belongs to this customer
-	status, bookingCustomerID, artistID, err := s.repo.GetBookingStatus(ctx, bookingID)
+	booking, err := s.repo.GetBookingAttribution(ctx, bookingID)
 	if err != nil {
 		return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
 	}
 
-	if status != completedStatus {
+	if booking.Status != completedStatus {
 		return nil, apperror.Conflict("BOOKING_NOT_COMPLETED", "You can only review completed appointments")
 	}
 
-	if bookingCustomerID != customerID {
+	if booking.CustomerID != customerID {
 		return nil, apperror.Forbidden("NOT_BOOKING_OWNER", "You can only review your own appointments")
 	}
 
@@ -81,6 +81,15 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 	}
 
 	// Step 3: Create the review (repository also recomputes the artist rating)
+	// The specialist this rating belongs to. Today a booking has one artist,
+	// so PrimaryStylist returns it unchanged - it is called anyway so the D5.1
+	// rule has a single home and is not re-derived at the call site when split
+	// bookings land. See attribution.go.
+	artistID := booking.ArtistID
+	if primary, ok := PrimaryStylist([]ServiceLine{{ArtistID: booking.ArtistID}}); ok {
+		artistID = primary
+	}
+
 	rev := &Review{
 		ID:         uuid.New(),
 		BookingID:  bookingID,
@@ -88,7 +97,11 @@ func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, cus
 		ArtistID:   artistID,
 		Rating:     req.Rating,
 		Comment:    req.Comment,
-		IsVisible:  true,
+		// The venue half. Both are independent of the specialist score and
+		// either may be absent - see Review.SalonRating.
+		StoreID:     booking.StoreID,
+		SalonRating: req.SalonRating,
+		IsVisible:   true,
 	}
 
 	if err := s.repo.CreateReview(ctx, rev); err != nil {
@@ -136,9 +149,10 @@ func (s *Service) CreateReviewByToken(ctx context.Context, token string, req Sub
 	}
 
 	return s.CreateReview(ctx, CreateReviewRequest{
-		BookingID: bookingID.String(),
-		Rating:    req.Rating,
-		Comment:   req.Comment,
+		BookingID:   bookingID.String(),
+		Rating:      req.Rating,
+		SalonRating: req.SalonRating,
+		Comment:     req.Comment,
 	}, customerID)
 }
 
@@ -259,6 +273,11 @@ func toResponse(r *Review) *ReviewResponse {
 		Comment:    r.Comment,
 		IsVisible:  r.IsVisible,
 		CreatedAt:  r.CreatedAt,
+		// omitempty on both: a review that did not answer the venue question
+		// carries no salon_rating at all, so a consumer renders "not rated"
+		// rather than mistaking an absent score for a zero.
+		SalonRating: r.SalonRating,
+		StoreID:     r.StoreID,
 	}
 }
 

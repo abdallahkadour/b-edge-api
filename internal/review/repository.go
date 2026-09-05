@@ -49,9 +49,14 @@ type Repository interface {
 	// rating in the same transaction (the cache counts visible reviews only).
 	SetVisibility(ctx context.Context, reviewID uuid.UUID, artistID uuid.UUID, visible bool) error
 
-	// GetBookingStatus returns the status, customer_id, and artist_id of a booking.
+	// GetBookingAttribution returns everything a review needs to attribute
+	// itself: the booking's status, its customer, its artist and its VENUE.
+	//
+	// A struct rather than a fifth return value - four positional results were
+	// already at the edge of readable, and store_id arrived with dual-layer
+	// reviews (migration 035).
 	// Used to verify the booking is completed before allowing a review.
-	GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error)
+	GetBookingAttribution(ctx context.Context, bookingID uuid.UUID) (*BookingAttribution, error)
 
 	// GetBookingIDByReviewToken resolves a review-link token to its booking's
 	// ID and customer_id — the identity proof for the guest review flow,
@@ -109,6 +114,68 @@ func recomputeArtistRatingTx(ctx context.Context, tx pgx.Tx, artistID uuid.UUID)
 	return nil
 }
 
+// recomputeStoreRatingTx recalculates a store's cached venue rating from its
+// VISIBLE reviews that actually answered the venue question.
+//
+// Mirrors recomputeArtistRatingTx deliberately - same shape, same transaction
+// discipline, same COALESCE for the zero-reviews case - so neither half of the
+// dual-layer rating looks like the special case.
+//
+// TWO THINGS THIS MUST NOT BECOME
+//
+//  1. It must never read artists.rating. "Salon rating = the average of its
+//     stylists" is the gaming vector the assessment §2.2 names: an owner
+//     inflates the venue by hiring one star. The two scores are independent
+//     and are allowed to disagree.
+//  2. The `salon_rating IS NOT NULL` filter is load-bearing. The venue
+//     question is optional, so without it every specialist-only review would
+//     count as a zero against the store and a well-reviewed venue would trend
+//     to nothing as it collected more reviews.
+//
+// storeID is nullable on reviews: rows predating migration 035 have no venue,
+// and a nil store is simply nothing to recompute.
+func recomputeStoreRatingTx(ctx context.Context, tx pgx.Tx, storeID *uuid.UUID) error {
+	if storeID == nil {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE stores
+		SET rating = COALESCE(
+		        (SELECT AVG(salon_rating) FROM reviews
+		         WHERE store_id = $1 AND is_visible = TRUE AND salon_rating IS NOT NULL),
+		        0),
+		    review_count = (
+		        SELECT COUNT(*) FROM reviews
+		        WHERE store_id = $1 AND is_visible = TRUE AND salon_rating IS NOT NULL),
+		    updated_at = NOW()
+		WHERE id = $1`,
+		*storeID,
+	)
+	if err != nil {
+		return fmt.Errorf("recompute store rating: %w", err)
+	}
+	return nil
+}
+
+// storeIDForReviewTx reads which venue a review belongs to, inside the given
+// transaction.
+//
+// Needed because Delete and SetVisibility are handed an artistID but not a
+// storeID, and both change what the venue aggregate should say. Reading it
+// rather than widening those signatures keeps the change local - and for the
+// delete it must be read BEFORE the row goes.
+func storeIDForReviewTx(ctx context.Context, tx pgx.Tx, reviewID uuid.UUID) (*uuid.UUID, error) {
+	var storeID *uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT store_id FROM reviews WHERE id = $1`, reviewID).Scan(&storeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // already gone; nothing to recompute
+		}
+		return nil, fmt.Errorf("store id for review: %w", err)
+	}
+	return storeID, nil
+}
+
 // CreateReview inserts a new review row and recomputes the artist's cached rating
 // in one transaction. The UNIQUE constraint on booking_id enforces one review per
 // booking; a violation maps to ErrAlreadyReviewed.
@@ -120,10 +187,11 @@ func (r *pgRepo) CreateReview(ctx context.Context, rev *Review) error {
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO reviews (id, booking_id, customer_id, artist_id, rating, comment, is_visible)
-		VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+		INSERT INTO reviews (id, booking_id, customer_id, artist_id, rating, comment, is_visible, store_id, salon_rating)
+		VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8)
 		RETURNING created_at`,
 		rev.ID, rev.BookingID, rev.CustomerID, rev.ArtistID, rev.Rating, rev.Comment,
+		rev.StoreID, rev.SalonRating,
 	).Scan(&rev.CreatedAt)
 	if err != nil {
 		var pgErr interface{ SQLState() string }
@@ -134,6 +202,12 @@ func (r *pgRepo) CreateReview(ctx context.Context, rev *Review) error {
 	}
 
 	if err := recomputeArtistRatingTx(ctx, tx, rev.ArtistID); err != nil {
+		return err
+	}
+	// Both aggregates move in the same transaction as the row they summarise,
+	// so a reader can never see a review that its store's average does not
+	// account for.
+	if err := recomputeStoreRatingTx(ctx, tx, rev.StoreID); err != nil {
 		return err
 	}
 
@@ -147,13 +221,15 @@ func (r *pgRepo) CreateReview(ctx context.Context, rev *Review) error {
 func (r *pgRepo) GetReviewByBookingID(ctx context.Context, bookingID uuid.UUID) (*Review, error) {
 	rev := &Review{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at
+		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at,
+		       store_id, salon_rating
 		FROM reviews
 		WHERE booking_id = $1`,
 		bookingID,
 	).Scan(
 		&rev.ID, &rev.BookingID, &rev.CustomerID, &rev.ArtistID,
 		&rev.Rating, &rev.Comment, &rev.IsVisible, &rev.CreatedAt,
+		&rev.StoreID, &rev.SalonRating,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -168,13 +244,15 @@ func (r *pgRepo) GetReviewByBookingID(ctx context.Context, bookingID uuid.UUID) 
 func (r *pgRepo) GetReviewByID(ctx context.Context, reviewID uuid.UUID) (*Review, error) {
 	rev := &Review{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at
+		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at,
+		       store_id, salon_rating
 		FROM reviews
 		WHERE id = $1`,
 		reviewID,
 	).Scan(
 		&rev.ID, &rev.BookingID, &rev.CustomerID, &rev.ArtistID,
 		&rev.Rating, &rev.Comment, &rev.IsVisible, &rev.CreatedAt,
+		&rev.StoreID, &rev.SalonRating,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -195,7 +273,8 @@ func (r *pgRepo) GetReviewByID(ctx context.Context, reviewID uuid.UUID) (*Review
 // "show" half was unreachable in practice for any review actually hidden.
 func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*Review, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at
+		SELECT id, booking_id, customer_id, artist_id, rating, comment, is_visible, created_at,
+		       store_id, salon_rating
 		FROM reviews
 		WHERE artist_id = $1
 		ORDER BY created_at DESC`,
@@ -212,6 +291,7 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 		if err := rows.Scan(
 			&rev.ID, &rev.BookingID, &rev.CustomerID, &rev.ArtistID,
 			&rev.Rating, &rev.Comment, &rev.IsVisible, &rev.CreatedAt,
+			&rev.StoreID, &rev.SalonRating,
 		); err != nil {
 			return nil, fmt.Errorf("scan review: %w", err)
 		}
@@ -228,6 +308,7 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*EnrichedReviewResponse, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT r.id, r.booking_id, r.customer_id, r.artist_id, r.rating, r.comment, r.created_at,
+		       r.salon_rating,
 		       CASE
 		         WHEN split_part(u.name, ' ', 2) = '' THEN split_part(u.name, ' ', 1)
 		         ELSE split_part(u.name, ' ', 1) || ' ' || left(split_part(u.name, ' ', 2), 1) || '.'
@@ -249,6 +330,7 @@ func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.U
 		e := &EnrichedReviewResponse{}
 		if err := rows.Scan(
 			&e.ID, &e.BookingID, &e.CustomerID, &e.ArtistID, &e.Rating, &e.Comment, &e.CreatedAt,
+			&e.SalonRating,
 			&e.ReviewerName,
 		); err != nil {
 			return nil, fmt.Errorf("scan enriched review: %w", err)
@@ -267,11 +349,20 @@ func (r *pgRepo) DeleteReview(ctx context.Context, reviewID uuid.UUID, artistID 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Read the venue BEFORE deleting - afterwards there is no row to ask.
+	storeID, err := storeIDForReviewTx(ctx, tx, reviewID)
+	if err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM reviews WHERE id = $1`, reviewID); err != nil {
 		return fmt.Errorf("delete review: %w", err)
 	}
 
 	if err := recomputeArtistRatingTx(ctx, tx, artistID); err != nil {
+		return err
+	}
+	if err := recomputeStoreRatingTx(ctx, tx, storeID); err != nil {
 		return err
 	}
 
@@ -294,7 +385,17 @@ func (r *pgRepo) SetVisibility(ctx context.Context, reviewID uuid.UUID, artistID
 		return fmt.Errorf("set review visibility: %w", err)
 	}
 
+	storeID, err := storeIDForReviewTx(ctx, tx, reviewID)
+	if err != nil {
+		return err
+	}
+
 	if err := recomputeArtistRatingTx(ctx, tx, artistID); err != nil {
+		return err
+	}
+	// Hiding a review must drop it out of the venue average too, or moderating
+	// one score silently leaves the other overstating.
+	if err := recomputeStoreRatingTx(ctx, tx, storeID); err != nil {
 		return err
 	}
 
@@ -304,24 +405,24 @@ func (r *pgRepo) SetVisibility(ctx context.Context, reviewID uuid.UUID, artistID
 	return nil
 }
 
-// GetBookingStatus returns the status, customer_id, and artist_id of a booking.
-func (r *pgRepo) GetBookingStatus(ctx context.Context, bookingID uuid.UUID) (string, uuid.UUID, uuid.UUID, error) {
-	var status string
-	var customerID, artistID uuid.UUID
+// GetBookingAttribution returns the status, customer, artist and venue of a
+// booking. See the interface for why it is a struct.
+func (r *pgRepo) GetBookingAttribution(ctx context.Context, bookingID uuid.UUID) (*BookingAttribution, error) {
+	var a BookingAttribution
 	err := r.db.QueryRow(ctx, `
-		SELECT status, customer_id, artist_id
+		SELECT status, customer_id, artist_id, store_id
 		FROM bookings
 		WHERE id = $1
 		AND deleted_at IS NULL`,
 		bookingID,
-	).Scan(&status, &customerID, &artistID)
+	).Scan(&a.Status, &a.CustomerID, &a.ArtistID, &a.StoreID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", uuid.Nil, uuid.Nil, fmt.Errorf("booking not found")
+			return nil, fmt.Errorf("booking not found")
 		}
-		return "", uuid.Nil, uuid.Nil, fmt.Errorf("get booking status: %w", err)
+		return nil, fmt.Errorf("get booking attribution: %w", err)
 	}
-	return status, customerID, artistID, nil
+	return &a, nil
 }
 
 // GetBookingIDByReviewToken resolves a review-link token to the booking's ID

@@ -87,7 +87,8 @@ func concurrencyLimiter() fiber.Handler {
 }
 
 // Register attaches global middleware in the correct order:
-// recover → requestid → logger → cors → rate limiter → concurrency limiter.
+// recover → security headers → requestid → logger → cors → rate limiter →
+// concurrency limiter.
 // Auth middleware is applied per-route, not globally.
 func Register(app *fiber.App, logger *zap.Logger) {
 	// 1. Recover from panics - must be first so it wraps everything
@@ -100,13 +101,18 @@ func Register(app *fiber.App, logger *zap.Logger) {
 		EnableStackTrace: os.Getenv("APP_ENV") == "development",
 	}))
 
-	// 2. Assign X-Request-ID to every request
+	// 2. Security headers - set before anything can return early, so a 429
+	// from the rate limiter or a 503 from the concurrency limiter carries
+	// them too. See secheaders.go; closes CLIENT-04 of the security plan.
+	app.Use(SecurityHeaders())
+
+	// 3. Assign X-Request-ID to every request
 	app.Use(requestid.New())
 
-	// 3. Structured request logging via Zap
+	// 4. Structured request logging via Zap
 	app.Use(NewLogger(logger))
 
-	// 4. CORS - allow only the configured client origin
+	// 5. CORS - allow only the configured client origin
 	clientURL := os.Getenv("CLIENT_URL")
 	if clientURL == "" {
 		clientURL = "http://localhost:4200"
@@ -118,7 +124,7 @@ func Register(app *fiber.App, logger *zap.Logger) {
 		AllowCredentials: true,
 	}))
 
-	// 5. Rate limiter - 100 requests per 15 minutes per IP
+	// 6. Rate limiter - 100 requests per 15 minutes per IP
 	app.Use(limiter.New(limiter.Config{
 		Max:        maxRequestsPerWindow,
 		Expiration: rateLimitWindow,
@@ -134,9 +140,9 @@ func Register(app *fiber.App, logger *zap.Logger) {
 		},
 	}))
 
-	// 6. Concurrency limiter - protects the process itself from a genuine
+	// 7. Concurrency limiter - protects the process itself from a genuine
 	// traffic spike, independent of the per-IP rate limiter above. Placed
-	// last, after CORS (4), so a shed 503 still carries CORS headers -
+	// last, after CORS (5), so a shed 503 still carries CORS headers -
 	// without them the browser reports a CORS failure instead of letting
 	// the frontend read the real "busy" response.
 	app.Use(concurrencyLimiter())

@@ -31,6 +31,16 @@ func NewService(repo Repository) *Service {
 
 // GetPortfolio returns the public portfolio for any artist.
 // No authentication required - used by the customer PWA discovery screen.
+// errMediaNotFound is the single answer to "you may not have this
+// object", whether it does not exist or is not yours. A foreign object and a
+// nonexistent one must be indistinguishable, or the status code becomes an
+// oracle for enumerating real IDs (security test AUTH-02, 2026-09-05). One
+// constructor shared by both branches is what stops them drifting apart; see
+// the longer note on booking.errBookingNotFound.
+func errMediaNotFound() error {
+	return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+}
+
 func (s *Service) GetPortfolio(ctx context.Context, artistID uuid.UUID) (*PortfolioResponse, error) {
 	items, err := s.repo.ListByArtist(ctx, artistID)
 	if err != nil {
@@ -112,7 +122,7 @@ func (s *Service) SetMediaServices(ctx context.Context, userID, mediaID uuid.UUI
 	item, err := s.repo.GetByID(ctx, mediaID)
 	if err != nil {
 		if errors.Is(err, ErrMediaNotFound) {
-			return nil, apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+			return nil, errMediaNotFound()
 		}
 		return nil, fmt.Errorf("set media services: %w", err)
 	}
@@ -121,7 +131,7 @@ func (s *Service) SetMediaServices(ctx context.Context, userID, mediaID uuid.UUI
 	// enumerate other artists' media IDs by watching the status code -
 	// matching the ownership posture used on billing invoices.
 	if item.OwnerType != OwnerTypeArtist || item.OwnerID != artistID {
-		return nil, apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+		return nil, errMediaNotFound()
 	}
 
 	serviceIDs := make([]uuid.UUID, 0, len(req.ServiceIDs))
@@ -223,14 +233,14 @@ func (s *Service) DeletePhoto(ctx context.Context, userID uuid.UUID, mediaID uui
 	item, err := s.repo.GetByID(ctx, mediaID)
 	if err != nil {
 		if errors.Is(err, ErrMediaNotFound) {
-			return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+			return errMediaNotFound()
 		}
 		return fmt.Errorf("delete photo: get item: %w", err)
 	}
 
 	// Ownership check - artist can only delete their own photos
 	if item.OwnerID != artistID {
-		return apperror.Forbidden("FORBIDDEN", "You do not have permission to delete this photo")
+		return errMediaNotFound()
 	}
 
 	if err := s.repo.Delete(ctx, mediaID); err != nil {
@@ -251,13 +261,13 @@ func (s *Service) SetCover(ctx context.Context, userID uuid.UUID, mediaID uuid.U
 	item, err := s.repo.GetByID(ctx, mediaID)
 	if err != nil {
 		if errors.Is(err, ErrMediaNotFound) {
-			return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+			return errMediaNotFound()
 		}
 		return fmt.Errorf("set cover: get item: %w", err)
 	}
 
 	if item.OwnerID != artistID {
-		return apperror.Forbidden("FORBIDDEN", "You do not have permission to update this photo")
+		return errMediaNotFound()
 	}
 
 	if err := s.repo.SetCover(ctx, mediaID, artistID); err != nil {
@@ -379,12 +389,12 @@ func (s *Service) DeleteProductPhoto(ctx context.Context, mediaID, salonID uuid.
 	item, err := s.repo.GetByID(ctx, mediaID)
 	if err != nil {
 		if errors.Is(err, ErrMediaNotFound) {
-			return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+			return errMediaNotFound()
 		}
 		return fmt.Errorf("delete product photo: get item: %w", err)
 	}
 	if item.OwnerType != OwnerTypeProduct {
-		return apperror.NotFound("MEDIA_NOT_FOUND", "Photo not found")
+		return errMediaNotFound()
 	}
 
 	if err := s.verifyProductOwnership(ctx, item.OwnerID, salonID); err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 )
 
 // Service handles all billing business logic: the plan catalogue,
@@ -570,14 +571,12 @@ func (s *Service) UpdateSubscription(ctx context.Context, subscriptionID, adminI
 // pattern established in product.CreateProduct - a bad or negative amount
 // is a 400, never a panic or a silently-stored garbage value.
 func parseNonNegativeDecimal(raw, field string) (decimal.Decimal, error) {
-	value, err := decimal.NewFromString(raw)
-	if err != nil || value.IsNegative() {
-		return decimal.Zero, apperror.BadRequest(
-			"INVALID_"+strings.ToUpper(field),
-			field+" must be a valid non-negative amount",
-		)
-	}
-	return value, nil
+	// Kept as a named function because call sites read better with it, but
+	// the rules now live in one place for every domain. This used to be the
+	// strictest of five separate implementations; internal/pkg/money is
+	// stricter still, and two paths that had no validation at all now share
+	// it. See that package's header.
+	return money.Parse(raw, field)
 }
 
 // mapValidationError converts a validator error into a proper

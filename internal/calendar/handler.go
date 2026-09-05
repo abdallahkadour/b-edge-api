@@ -76,6 +76,14 @@ func (h *Handler) Page(c *fiber.Ctx) error {
 
 	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
 	c.Set(fiber.HeaderCacheControl, "no-store")
+
+	// Narrow the API-wide `default-src 'none'` (middleware/secheaders.go)
+	// by exactly one directive: this page's stylesheet is inline. It loads
+	// no scripts, no images and no fonts, so everything else stays denied.
+	c.Set("Content-Security-Policy",
+		"default-src 'none'; style-src 'unsafe-inline'; "+
+			"frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
 	return c.SendString(renderPage(view))
 }
 

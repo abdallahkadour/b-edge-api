@@ -85,6 +85,14 @@ var (
 	// used when resolving a requester's users.id to their artists.id for
 	// ownership checks (bookings.artist_id references artists.id, not users.id).
 	ErrArtistNotFound = errors.New("artist profile not found for user")
+
+	// ErrStoreNotFound lets GetAvailableSlots answer a bad store_id with a
+	// 404 instead of a 500. /bookings/slots is unauthenticated and takes
+	// store_id straight from the query string, so a wrong-but-well-formed
+	// UUID is an ordinary bad request, not a server fault. Before this the
+	// pgx no-rows error travelled up unmapped and every such call logged a
+	// critical error. Found while verifying the AUTH-02 fix, 2026-09-05.
+	ErrStoreNotFound = errors.New("store not found")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────

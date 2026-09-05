@@ -288,6 +288,51 @@ type ArtistResponse struct {
 
 // ServiceResponse is the safe representation of a service.
 // Money fields (price, deposit_amount) serialize as strings via decimal.Decimal.
+// PublicServiceResponse is a service as an unauthenticated customer sees it.
+//
+// Deliberately narrower than ServiceResponse, for the same reason
+// discovery.StoreCard is narrower than artist.Store: GET /artists/:id/services
+// has no JWT on it, and the artist-facing type carries fields that are
+// scheduling configuration rather than anything a customer buys.
+//
+// Dropped, and why:
+//
+//   - buffer_min          migration 033 is explicit - "Never shown to the
+//     customer... they did not buy the cleanup". It was
+//     nonetheless on this public route until 2026-09-05.
+//   - active_duration_min the split-booking internal (Sprint 13); describes
+//     where an artist is free mid-appointment.
+//   - salon_id            an internal identifier with no customer use. The
+//     customer PWA reads salon_id off STORES, never services.
+//   - is_active           the query already filters to active services, so
+//     the field could only ever say true.
+//
+// duration_min stays and remains the SERVICE duration, never duration+buffer.
+type PublicServiceResponse struct {
+	ID                   uuid.UUID       `json:"id"`
+	Name                 string          `json:"name"`
+	NameAr               *string         `json:"name_ar,omitempty"`
+	Description          *string         `json:"description,omitempty"`
+	DurationMin          int             `json:"duration_min"`
+	Price                decimal.Decimal `json:"price"`
+	DepositAmount        decimal.Decimal `json:"deposit_amount"`
+	DepositDeadlineHours int             `json:"deposit_deadline_hours"`
+}
+
+// toPublicServiceResponse narrows an artist-facing service for public use.
+func toPublicServiceResponse(s *ServiceResponse) PublicServiceResponse {
+	return PublicServiceResponse{
+		ID:                   s.ID,
+		Name:                 s.Name,
+		NameAr:               s.NameAr,
+		Description:          s.Description,
+		DurationMin:          s.DurationMin,
+		Price:                s.Price,
+		DepositAmount:        s.DepositAmount,
+		DepositDeadlineHours: s.DepositDeadlineHours,
+	}
+}
+
 type ServiceResponse struct {
 	ID                   uuid.UUID       `json:"id"`
 	SalonID              uuid.UUID       `json:"salon_id"`

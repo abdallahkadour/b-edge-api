@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 )
 
 type Service struct {
@@ -26,6 +27,15 @@ func (s *Service) Complete(ctx context.Context, userID uuid.UUID, req CompleteOn
 	}
 	if err := req.Validate(); err != nil {
 		return nil, apperror.BadRequest("VALIDATION_ERROR", err.Error())
+	}
+
+	// The repository INSERTs service_price as a bare string into a
+	// NUMERIC(10,2) column, so this is the only thing standing between a
+	// typed-in value and the row. Postgres accepts 'NaN'::numeric, which
+	// would leave a brand-new artist's very first service unreadable from
+	// the moment they finished onboarding. See internal/pkg/money, INJ-04.
+	if _, err := money.Parse(req.ServicePrice, "service_price"); err != nil {
+		return nil, err
 	}
 
 	artistID, err := s.repo.Complete(ctx, userID, req)

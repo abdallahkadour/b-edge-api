@@ -832,16 +832,21 @@ func TestCreatePlan_ZeroPrice_Accepted(t *testing.T) {
 	require.NoError(t, err, "a zero price is legitimate — comped and free tiers depend on it")
 }
 
-// CHARACTERIZATION: excess precision is accepted by Go and silently rounded
-// by Postgres. Every money column is NUMERIC(10,2), but
-// parseNonNegativeDecimal imposes no scale limit, so "19.999" is stored as
-// 20.00 with no error and no warning anywhere. An admin typing one digit too
-// many changes the price and is told nothing.
+// Excess precision is REJECTED. This test previously ran as
+// TestCreatePlan_ExcessPrecision_SilentlyAccepted and pinned the opposite
+// behaviour: "19.999" was accepted by Go and silently rounded to 20.00 by
+// NUMERIC(10,2), so an admin typing one digit too many changed the price and
+// was told nothing.
 //
-// Not fixed here — whether to reject or round in Go is a decision, and the
-// same helper is used by the product domain. Pinned so the behaviour is
-// known rather than discovered from a mispriced plan.
-func TestCreatePlan_ExcessPrecision_SilentlyAccepted(t *testing.T) {
+// That characterization test named the open decision - "whether to reject or
+// round in Go is a decision" - and the decision was made on 2026-09-05, when
+// the security pass (INJ-04) found the same permissiveness had let "NaN"
+// through two unvalidated paths and corrupt a row beyond repair. Rejecting is
+// now the rule everywhere, in internal/pkg/money.
+//
+// Deliberately a behaviour change: a client sending 3 decimal places now gets
+// a 400 where it used to get a silent round.
+func TestCreatePlan_ExcessPrecision_Rejected(t *testing.T) {
 	repo := &mockRepo{planByCode: &Plan{}}
 	svc := newTestService(repo, nil)
 	req := validPlanReq()
@@ -849,9 +854,24 @@ func TestCreatePlan_ExcessPrecision_SilentlyAccepted(t *testing.T) {
 
 	_, err := svc.CreatePlan(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, dec("19.999").Equal(repo.lastCreatedPlan.MonthlyPrice),
-		"CHARACTERIZATION: Go accepts 3dp unchanged; NUMERIC(10,2) will round it to 20.00 on write")
+	require.Error(t, err, "no silent rounding in the payer's favour")
+	assert.Contains(t, err.Error(), "monthly_price", "the error must name the offending field")
+}
+
+// TestCreatePlan_CorruptingValues_Rejected is the billing-domain guard for
+// the INJ-04 finding. "NaN" is the one that mattered: Postgres accepts
+// 'NaN'::numeric, and a stored NaN made every later read of the row fail.
+func TestCreatePlan_CorruptingValues_Rejected(t *testing.T) {
+	for _, raw := range []string{"NaN", "Infinity", "-1", "1e3", "+5", "999999999.99", ""} {
+		repo := &mockRepo{planByCode: &Plan{}}
+		svc := newTestService(repo, nil)
+		req := validPlanReq()
+		req.MonthlyPrice = raw
+
+		_, err := svc.CreatePlan(context.Background(), req)
+
+		require.Error(t, err, "expected %q to be rejected as a monthly_price", raw)
+	}
 }
 
 func TestUpdatePlan_PartialUpdate_PreservesUnsetFields(t *testing.T) {

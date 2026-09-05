@@ -1,7 +1,7 @@
 # B-Edge — engineering context
 
 > **Read this first in any new session.** Verified against the code on
-> 2026-09-02 — migrations, routes, `go.mod`, `package.json`, the live
+> 2026-09-05 — migrations, routes, `go.mod`, `package.json`, the live
 > database — not against memory or earlier docs.
 >
 > This file replaced a version dated May 2026 that described 9 tables, ~34
@@ -30,10 +30,10 @@ Lebanon." Solo founder build.
 |---|---|
 | Go / Fiber | 1.26.3 / v2.52.13 |
 | Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
-| Migrations | **32** (latest `032_drop_deposit_pending_status`) |
+| Migrations | **33** (latest `033_service_buffer`) |
 | Tables | **29** |
-| Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · 111 documented in swagger |
-| Go tests | **570**, all passing |
+| Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **102** paths in swagger |
+| Go tests | **645**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
 
@@ -42,7 +42,7 @@ client, customerauth, discovery, earnings, **inbox**, media, notification,
 onboarding, product, review, **share** — plus `domain/auth`, `config`,
 `middleware`.
 
-**Leaf packages** (`internal/pkg/`): apperror, **bidi**, hash, jwt,
+**Leaf packages** (`internal/pkg/`): apperror, **bidi**, hash, jwt, **money**,
 **openinghours**, response, **subscription**.
 
 Bold entries are recent and are not described in any older doc.
@@ -104,10 +104,50 @@ Two suites are worth knowing before writing tests:
 
 - Migrations are paired `.up`/`.down` with a prose header saying **why**.
   Migrations 010, 016, 029 and 031 are the standard to match.
-- Nothing ships without code + tests + `make swagger` and a committed `docs/`
-  diff.
-- Ownership failures return **404, not 403**, so IDs cannot be enumerated —
-  billing invoices, media, notifications, calendar links.
+- Nothing ships without code + tests + `make swagger`. Note that **`docs/` is
+  gitignored** (`.gitignore:12`), so there is no `docs/` diff to commit — an
+  older version of this rule said there was. Run `make swagger` anyway: the
+  generated spec is what the annotations are checked against, and a stale
+  `@Success` type is invisible until someone reads the wrong contract.
+- **Ownership failures return 404, not 403**, so IDs cannot be enumerated.
+  This was only half true until 2026-09-05: billing invoices and notifications
+  did it, while bookings, stores, services, products, orders, media and reviews
+  returned 403 — which told a caller the object was real. Security test AUTH-02
+  found it live.
+
+  The mechanism matters. Each domain has ONE `errXNotFound()` constructor and
+  **both** the not-found branch and the ownership branch return it, so status,
+  code and message are identical by construction. Do not hand-write a matching
+  `apperror.NotFound` beside an ownership check — two literals that happen to
+  agree is exactly how the original leak survived. `booking.errBookingNotFound`
+  carries the long note; `TestOwnershipAndAbsence_AreIndistinguishable` fails if
+  the branches ever diverge.
+
+  Still 403 on purpose, because they describe the CALLER rather than an object:
+  `NO_SALON`, `ACCOUNT_SUSPENDED`, `ACCOUNT_FROZEN`, `SUBSCRIPTION_SUSPENDED`,
+  `NOT_AN_ARTIST`, `ARTIST_NOT_ACCEPTING_BOOKINGS`, the middleware role gates,
+  and checks keyed on a **public** artist ID — a public ID has nothing to
+  enumerate.
+
+- **Every money string from a request body goes through `internal/pkg/money`.**
+  Never call `decimal.NewFromString` on user input directly. It accepts `"1e3"`
+  as a thousand and unlimited scale, and `NUMERIC(10,2)` then rounds silently;
+  worse, two paths had no validation at all and passed the raw string to SQL,
+  where Postgres accepts `'NaN'::numeric` — a stored NaN made every later read
+  of that row fail with a 500, poisoned `SUM(price)`, and could not be repaired
+  through the API. Security test INJ-04, 2026-09-05.
+
+  The package is a **whitelist** (`^\d{1,8}(\.\d{1,2})?$`), not a list of
+  rejections; enumerating rejections is how `NaN` got in. Deliberate
+  consequence: `"10.999"` is now a 400, not a silent `11.00`.
+
+- **Security headers are middleware, registered second.** `SecurityHeaders()`
+  in `internal/middleware/secheaders.go` runs before anything can return early,
+  so a 429 from the rate limiter and a 503 from the concurrency limiter carry
+  them too. The global CSP is `default-src 'none'` — accurate for JSON, not
+  merely strict. The two routes that serve HTML (`share`, `calendar`) narrow it
+  themselves at the handler by exactly one directive each, so a new HTML
+  endpoint fails closed instead of inheriting permission nobody granted.
 - User-supplied text rendered to a *different* person must go through
   `internal/pkg/bidi`. A bidi override is not markup, so no escaping catches
   it. Current surfaces: Open Graph tags, notification bodies, `.ics`
@@ -157,4 +197,4 @@ up.** Leave it alone.
 else in that folder. Many files there predate the current build and are marked
 as such; the index says which.
 
-*Last verified against code: 2026-09-02.*
+*Last verified against code: 2026-09-05.*

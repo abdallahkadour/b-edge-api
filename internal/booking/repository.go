@@ -498,7 +498,7 @@ func (r *pgRepo) GetStore(ctx context.Context, storeID uuid.UUID) (*Store, error
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("store not found: %w", err)
+			return nil, ErrStoreNotFound
 		}
 		return nil, fmt.Errorf("get store: %w", err)
 	}

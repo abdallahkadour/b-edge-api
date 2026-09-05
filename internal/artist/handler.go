@@ -216,7 +216,7 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 // @Tags         artists
 // @Produce      json
 // @Param        id path string true "Artist UUID"
-// @Success      200 {object} response.Body{data=[]ServiceResponse}
+// @Success      200 {object} response.Body{data=[]PublicServiceResponse}
 // @Failure      404 {object} response.ErrorBody
 // @Router       /artists/{id}/services [get]
 func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
@@ -233,7 +233,15 @@ func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
 		return err
 	}
 
-	return response.OK(c, services)
+	// Narrowed at the boundary rather than in the service, so the artist's
+	// own screens keep the full type and only this unauthenticated route
+	// sees the reduced one. See PublicServiceResponse.
+	public := make([]PublicServiceResponse, 0, len(services))
+	for _, svc := range services {
+		public = append(public, toPublicServiceResponse(svc))
+	}
+
+	return response.OK(c, public)
 }
 
 // GetMyProfile godoc

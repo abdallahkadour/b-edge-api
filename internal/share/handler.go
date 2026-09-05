@@ -82,6 +82,23 @@ func (h *Handler) ArtistPreview(c *fiber.Ctx) error {
 	}
 
 	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
+
+	// Narrow the API-wide `default-src 'none'` (middleware/secheaders.go)
+	// just enough for this page, and no further. The only thing it needs
+	// beyond nothing is its own inline redirect script.
+	//
+	// 'unsafe-inline' is unavoidable while the script interpolates the
+	// target URL: a hash cannot cover content that varies per request. It
+	// adds no new exposure - escaping via jsString is what actually defends
+	// INJ-03, and that is unchanged - it simply means CSP contributes no
+	// second layer here. The page also carries <meta http-equiv="refresh">,
+	// so the script could be dropped entirely and this tightened to
+	// 'none'; that is a behaviour change with tests attached, deliberately
+	// not made in passing.
+	c.Set("Content-Security-Policy",
+		"default-src 'none'; script-src 'unsafe-inline'; "+
+			"frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
 	return c.SendString(renderPreviewHTML(title, preview.Description(), image, target))
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 )
 
 // Service handles all product-store business logic.
@@ -29,14 +30,34 @@ func NewService(repo Repository) *Service {
 // from the artist's own JWT (middleware.SalonIDFromContext), never from the
 // request body, matching the multi-tenant isolation rule already
 // established for services.
+// errProductNotFound is the single answer to "you may not have this
+// object", whether it does not exist or is not yours. A foreign object and a
+// nonexistent one must be indistinguishable, or the status code becomes an
+// oracle for enumerating real IDs (security test AUTH-02, 2026-09-05). One
+// constructor shared by both branches is what stops them drifting apart; see
+// the longer note on booking.errBookingNotFound.
+func errProductNotFound() error {
+	return apperror.NotFound("PRODUCT_NOT_FOUND", "Product not found")
+}
+
+// errOrderNotFound is the single answer to "you may not have this
+// object", whether it does not exist or is not yours. A foreign object and a
+// nonexistent one must be indistinguishable, or the status code becomes an
+// oracle for enumerating real IDs (security test AUTH-02, 2026-09-05). One
+// constructor shared by both branches is what stops them drifting apart; see
+// the longer note on booking.errBookingNotFound.
+func errOrderNotFound() error {
+	return apperror.NotFound("ORDER_NOT_FOUND", "Order not found")
+}
+
 func (s *Service) CreateProduct(ctx context.Context, salonID uuid.UUID, req CreateProductRequest) (*ProductResponse, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
 	}
 
-	price, err := decimal.NewFromString(req.Price)
-	if err != nil || price.IsNegative() {
-		return nil, apperror.BadRequest("INVALID_PRICE", "Price must be a valid non-negative amount")
+	price, err := money.Parse(req.Price, "price")
+	if err != nil {
+		return nil, err
 	}
 
 	p := &Product{
@@ -68,19 +89,19 @@ func (s *Service) UpdateProduct(ctx context.Context, productID, salonID uuid.UUI
 	existing, err := s.repo.GetProductByID(ctx, productID)
 	if err != nil {
 		if errors.Is(err, ErrProductNotFound) {
-			return nil, apperror.NotFound("PRODUCT_NOT_FOUND", "Product not found")
+			return nil, errProductNotFound()
 		}
 		return nil, fmt.Errorf("update product: get: %w", err)
 	}
 	if existing.SalonID != salonID {
-		return nil, apperror.Forbidden("FORBIDDEN", ErrNotProductOwner.Error())
+		return nil, errProductNotFound()
 	}
 
-	if req.Price != nil {
-		price, err := decimal.NewFromString(*req.Price)
-		if err != nil || price.IsNegative() {
-			return nil, apperror.BadRequest("INVALID_PRICE", "Price must be a valid non-negative amount")
-		}
+	// Parsed for validation only - UpdateProduct binds req.Price's string
+	// directly, so this is the gate that stops a non-money value reaching
+	// the NUMERIC column.
+	if _, err := money.ParseOptional(req.Price, "price"); err != nil {
+		return nil, err
 	}
 
 	if err := s.repo.UpdateProduct(ctx, productID, req); err != nil {
@@ -207,7 +228,7 @@ func (s *Service) GetOrderByID(ctx context.Context, orderID, requesterID uuid.UU
 	order, items, err := s.repo.GetOrderByID(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, ErrOrderNotFound) {
-			return nil, apperror.NotFound("ORDER_NOT_FOUND", "Order not found")
+			return nil, errOrderNotFound()
 		}
 		return nil, fmt.Errorf("get order by id: %w", err)
 	}
@@ -217,7 +238,7 @@ func (s *Service) GetOrderByID(ctx context.Context, orderID, requesterID uuid.UU
 	isSalonOwner := requesterSalonID != nil && *requesterSalonID == order.SalonID
 
 	if !isCustomer && !isAdmin && !isSalonOwner {
-		return nil, apperror.Forbidden("FORBIDDEN", ErrNotOrderOwner.Error())
+		return nil, errOrderNotFound()
 	}
 
 	return toOrderResponse(order, items), nil
@@ -286,7 +307,7 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, requesterID uuid.UUI
 	order, _, err := s.repo.GetOrderByID(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, ErrOrderNotFound) {
-			return nil, apperror.NotFound("ORDER_NOT_FOUND", "Order not found")
+			return nil, errOrderNotFound()
 		}
 		return nil, fmt.Errorf("cancel order: get: %w", err)
 	}
@@ -295,7 +316,7 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, requesterID uuid.UUI
 	isAdmin := requesterRole == "admin"
 	isSalonOwner := requesterSalonID != nil && *requesterSalonID == order.SalonID
 	if !isCustomer && !isAdmin && !isSalonOwner {
-		return nil, apperror.Forbidden("FORBIDDEN", ErrNotOrderOwner.Error())
+		return nil, errOrderNotFound()
 	}
 
 	if !cancellableOrderStatuses[order.Status] {
@@ -325,12 +346,12 @@ func (s *Service) transitionOrder(ctx context.Context, orderID, salonID uuid.UUI
 	order, _, err := s.repo.GetOrderByID(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, ErrOrderNotFound) {
-			return nil, apperror.NotFound("ORDER_NOT_FOUND", "Order not found")
+			return nil, errOrderNotFound()
 		}
 		return nil, fmt.Errorf("transition order: get: %w", err)
 	}
 	if order.SalonID != salonID {
-		return nil, apperror.Forbidden("FORBIDDEN", ErrNotOrderOwner.Error())
+		return nil, errOrderNotFound()
 	}
 
 	if err := s.repo.UpdateOrderStatus(ctx, orderID, fromStatus, toStatus, paymentReference, cancellationReason); err != nil {

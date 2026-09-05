@@ -36,6 +36,16 @@ func NewService(repo Repository) *Service {
 //  3. One review per booking — cannot review twice
 //
 // On success the repository also recomputes the artist's cached rating.
+// errReviewNotFound is the single answer to "you may not have this
+// object", whether it does not exist or is not yours. A foreign object and a
+// nonexistent one must be indistinguishable, or the status code becomes an
+// oracle for enumerating real IDs (security test AUTH-02, 2026-09-05). One
+// constructor shared by both branches is what stops them drifting apart; see
+// the longer note on booking.errBookingNotFound.
+func errReviewNotFound() error {
+	return apperror.NotFound("REVIEW_NOT_FOUND", "Review not found")
+}
+
 func (s *Service) CreateReview(ctx context.Context, req CreateReviewRequest, customerID uuid.UUID) (*ReviewResponse, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
@@ -180,14 +190,14 @@ func (s *Service) DeleteReview(ctx context.Context, reviewID uuid.UUID, requeste
 	rev, err := s.repo.GetReviewByID(ctx, reviewID)
 	if err != nil {
 		if errors.Is(err, ErrReviewNotFound) {
-			return apperror.NotFound("REVIEW_NOT_FOUND", "Review not found")
+			return errReviewNotFound()
 		}
 		return fmt.Errorf("delete review: get review: %w", err)
 	}
 
 	// Only the customer who wrote it or an admin can delete
 	if requesterRole != "admin" && rev.CustomerID != requesterID {
-		return apperror.Forbidden("NOT_REVIEW_OWNER", "You do not have permission to delete this review")
+		return errReviewNotFound()
 	}
 
 	return s.repo.DeleteReview(ctx, reviewID, rev.ArtistID)
@@ -214,7 +224,7 @@ func (s *Service) setReviewVisibility(ctx context.Context, reviewID uuid.UUID, r
 	rev, err := s.repo.GetReviewByID(ctx, reviewID)
 	if err != nil {
 		if errors.Is(err, ErrReviewNotFound) {
-			return apperror.NotFound("REVIEW_NOT_FOUND", "Review not found")
+			return errReviewNotFound()
 		}
 		return fmt.Errorf("set review visibility: get review: %w", err)
 	}
@@ -224,13 +234,13 @@ func (s *Service) setReviewVisibility(ctx context.Context, reviewID uuid.UUID, r
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return apperror.Forbidden("FORBIDDEN", "You do not have permission to moderate this review")
+			return errReviewNotFound()
 		}
 		return fmt.Errorf("set review visibility: resolve artist: %w", err)
 	}
 
 	if rev.ArtistID != requesterArtistID {
-		return apperror.Forbidden("FORBIDDEN", "You do not have permission to moderate this review")
+		return errReviewNotFound()
 	}
 
 	return s.repo.SetVisibility(ctx, reviewID, rev.ArtistID, visible)

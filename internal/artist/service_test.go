@@ -555,6 +555,9 @@ func TestUpdateService_Success(t *testing.T) {
 	assert.NotNil(t, result)
 }
 
+// A service belonging to another salon is reported exactly as a nonexistent
+// one: 404 SERVICE_NOT_FOUND, not 403. Anything else lets a caller confirm
+// that an ID is real by the status code alone - security test AUTH-02.
 func TestUpdateService_WrongSalon(t *testing.T) {
 	existing := defaultSalonServiceRecord()
 	existing.SalonID = uuid.New() // belongs to a different salon
@@ -575,7 +578,8 @@ func TestUpdateService_WrongSalon(t *testing.T) {
 
 	var appErr *apperror.AppError
 	require.True(t, isAppError(err, &appErr))
-	assert.Equal(t, "FORBIDDEN", appErr.Code)
+	assert.Equal(t, "SERVICE_NOT_FOUND", appErr.Code)
+	assert.Equal(t, 404, appErr.HTTPStatus)
 }
 
 // ── DeleteService tests ───────────────────────────────────────────────────────

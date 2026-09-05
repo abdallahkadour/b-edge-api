@@ -137,6 +137,27 @@ func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap
 // CurrentPeriodEnd==nil case - this should not happen for any artist
 // approved after Aug 29, 2026 (see admin.Service.Approve), but stays
 // correct even if it does.
+// errBookingNotFound is the single answer to "you may not have this booking",
+// whether it does not exist or simply is not yours.
+//
+// # WHY THE TWO CASES MUST BE INDISTINGUISHABLE
+//
+// Until 2026-09-05 a foreign booking returned 403 and a nonexistent one 404.
+// That difference is an oracle: any artist token could enumerate real booking
+// IDs by watching the status code, learning which UUIDs are live without ever
+// reading one. Security test AUTH-02 found it; billing invoices already did
+// the right thing and were the model.
+//
+// It is a FUNCTION rather than two matching literals on purpose. The leak was
+// possible because the not-found branch and the ownership branch were written
+// separately and drifted; sharing one constructor makes drifting them again a
+// deliberate act rather than an oversight. For the same reason the message is
+// identical too - matching the status while differing in the body would leak
+// exactly as much.
+func errBookingNotFound() error {
+	return apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+}
+
 func (s *Service) checkArtistAcceptsNewBookings(ctx context.Context, artistID uuid.UUID) error {
 	sub, err := s.subReader.GetSubscriptionByArtistID(ctx, artistID)
 	if err != nil && !errors.Is(err, billing.ErrSubscriptionNotFound) {
@@ -188,6 +209,9 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	store, err := s.repo.GetStore(ctx, storeID)
 	if err != nil {
+		if errors.Is(err, ErrStoreNotFound) {
+			return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		}
 		return nil, fmt.Errorf("get available slots: get store: %w", err)
 	}
 
@@ -605,7 +629,7 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("submit guest booking: get booking: %w", err)
 	}
@@ -646,14 +670,14 @@ func (s *Service) SubmitBooking(ctx context.Context, bookingID uuid.UUID, custom
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("submit booking: get booking: %w", err)
 	}
 
 	// Only the customer who created the booking can submit it
 	if b.CustomerID != customerID {
-		return nil, apperror.Forbidden("NOT_BOOKING_OWNER", "You do not have permission to act on this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusHeld {
@@ -674,7 +698,7 @@ func (s *Service) GetBookingByID(ctx context.Context, bookingID uuid.UUID, reque
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("get booking by id: %w", err)
 	}
@@ -682,7 +706,7 @@ func (s *Service) GetBookingByID(ctx context.Context, bookingID uuid.UUID, reque
 	// Admins can see any booking.
 	// Artists and customers can only see bookings they are part of.
 	if requesterRole != "admin" && b.CustomerID != requesterID && b.ArtistID != requesterID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view this booking")
+		return nil, errBookingNotFound()
 	}
 
 	return toResponse(b), nil
@@ -744,7 +768,7 @@ func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUI
 	e, err := s.repo.GetEnrichedBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("get enriched booking by id: %w", err)
 	}
@@ -766,7 +790,7 @@ func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUI
 	}
 
 	if requesterRole != RoleAdmin && e.CustomerID != requesterID && !isArtist {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to view this booking")
+		return nil, errBookingNotFound()
 	}
 
 	return toEnrichedResponse(e), nil
@@ -874,7 +898,7 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("approve booking: get booking: %w", err)
 	}
@@ -884,14 +908,14 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to approve this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("approve booking: resolve artist: %w", err)
 	}
 
 	// Only the artist on the booking can approve it
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to approve this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusPending {
@@ -987,7 +1011,7 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, reque
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("confirm deposit: get booking: %w", err)
 	}
@@ -995,13 +1019,13 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, reque
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to confirm this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("confirm deposit: resolve artist: %w", err)
 	}
 
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to confirm this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusDepositPaid {
@@ -1040,7 +1064,7 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark deposit received: get booking: %w", err)
 	}
@@ -1048,13 +1072,13 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark deposit received: resolve artist: %w", err)
 	}
 
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusApproved {
@@ -1087,7 +1111,7 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("confirm deposit received: get booking: %w", err)
 	}
@@ -1095,13 +1119,13 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("confirm deposit received: resolve artist: %w", err)
 	}
 
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusApproved {
@@ -1152,7 +1176,7 @@ func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, request
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark refunded: get booking: %w", err)
 	}
@@ -1160,12 +1184,12 @@ func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, request
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark refunded: resolve artist: %w", err)
 	}
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusRefundDue {
@@ -1193,7 +1217,7 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("cancel booking: get booking: %w", err)
 	}
@@ -1215,7 +1239,7 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 	}
 
 	if !isCustomer && !isArtist && !isAdmin {
-		return nil, apperror.Forbidden("NOT_BOOKING_OWNER", "You do not have permission to cancel this booking")
+		return nil, errBookingNotFound()
 	}
 
 	// A confirmed booking whose appointment has already started cannot be
@@ -1395,7 +1419,7 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("complete booking: get booking: %w", err)
 	}
@@ -1403,13 +1427,13 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to complete this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("complete booking: resolve artist: %w", err)
 	}
 
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to complete this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusConfirmed {
@@ -1459,7 +1483,7 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 	b, err := s.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
 		if errors.Is(err, ErrBookingNotFound) {
-			return nil, apperror.NotFound("BOOKING_NOT_FOUND", "Booking not found")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark no show: get booking: %w", err)
 	}
@@ -1467,13 +1491,13 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
-			return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+			return nil, errBookingNotFound()
 		}
 		return nil, fmt.Errorf("mark no show: resolve artist: %w", err)
 	}
 
 	if b.ArtistID != requesterArtistID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to act on this booking")
+		return nil, errBookingNotFound()
 	}
 
 	if b.Status != StatusConfirmed {

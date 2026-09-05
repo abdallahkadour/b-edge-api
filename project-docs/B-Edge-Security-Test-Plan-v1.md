@@ -231,9 +231,9 @@ Severity is the rating **if the test fails**.
 | Test ID | Vulnerability / Scenario | Category | Severity | Procedure | Expected secure behaviour | Remediation guidance |
 |---|---|---|---|---|---|---|
 | **AUTH-01** | Cross-tenant IDOR, artist resources | BOLA | Critical | Authenticate as mkup1. For each artist endpoint taking an ID, substitute mkup2's booking, client, product, media, store, invoice and subscription IDs. | 403 or 404 with no object data. Identical response for foreign vs nonexistent. | Resolve `user_id → artists.id` server-side; never trust a client ID. Follow `GetArtistIDByUserID`. |
-| **AUTH-02** | Foreign-object status leak | BOLA | Medium | Compare responses for a nonexistent UUID vs a real foreign UUID, on every ID endpoint. | Byte-identical, including timing class. | Standardise on 404 for both, as billing invoices already do. |
+| **AUTH-02** | Foreign-object status leak | BOLA | Medium | Compare responses for a nonexistent UUID vs a real foreign UUID, on every ID endpoint. | Byte-identical, including timing class. **Failed 2026-09-05; fixed** for status/code/message — timing class still untested. | Standardise on 404 for both, as billing invoices already do. |
 | **AUTH-03** | Admin privilege escalation | BFLA | Critical | Call every `/api/v1/admin/*` route with an artist token; attempt `role:"admin"` at registration; attempt admin billing mutations as artist. | 403 on every admin route. Registration ignores `role`. | Keep `RequireRole("admin")` on the group; assert in tests, not by convention. |
-| **AUTH-04** | JWT algorithm confusion &amp; tampering | Auth | Critical | `jwt_tool` against a valid token: `alg:none`, HS/RS confusion, blank signature, tampered `role`/`user_id`, expired token. | Every variant rejected 401. | Pin the expected algorithm explicitly on verification; never trust the header's `alg`. |
+| **AUTH-04** | JWT algorithm confusion &amp; tampering | Auth | Critical | `jwt_tool` against a valid token: `alg:none`, HS/RS confusion, blank signature, tampered `role`/`user_id`, expired token. | Every variant rejected 401. **Verified 2026-09-05: passes.** | Pin the expected algorithm explicitly on verification; never trust the header's `alg`. |
 | **AUTH-05** | Token replay after logout | Auth | High | Capture tokens, log out, reuse access token and refresh cookie. | Refresh rejected immediately. Access token dies at ≤15 min. | Maintain a server-side revocation list for refresh tokens. |
 | **AUTH-06** | Refresh reuse detection | Auth | High | Refresh to get token B, then replay token A. | A rejected; ideally the whole family revoked as theft evidence. | Implement refresh-token families with reuse detection. |
 | **AUTH-07** | OTP brute force | Auth | Critical | Request an OTP, then attempt codes at volume from one and many IPs. | Lockout within a small attempt budget, keyed to phone not IP. | Cap attempts per code; invalidate the code on cap; add exponential backoff per phone. |
@@ -243,11 +243,11 @@ Severity is the rating **if the test fails**.
 | **INJ-01** | SQL injection sweep | Injection | Critical | SQLmap across `q`, `city`, `category`, dates and every path UUID. Manually review each `fmt.Sprintf` building SQL. | No injection. All values parameterised. | Keep `$n` placeholders; never interpolate user input, even "safe-looking" values. |
 | **INJ-02** | Mass assignment | Injection | High | Add `role`, `is_verified`, `rating`, `status`, `salon_id`, `plan_code`, `artist_id` to every PATCH/PUT body. | Silently ignored; no privileged field changes. | Bind to explicit request structs only; never decode into a DB model. |
 | **INJ-03** | SSTI / raw-HTML injection in share preview | Injection | High | Set bio to `{{7*7}}`, `${7*7}`, `</title><script>alert(1)</script>`, `"><img src=x onerror=alert(1)>`. `curl /a/:handle`; inspect raw bytes. | All escaped. No template evaluation. No tag breakout. | Keep `html.EscapeString` on every interpolated value; prefer `html/template` if this document grows. |
-| **INJ-04** | Money-value coercion | Injection | Medium | Submit prices with excess precision, `1e3`, `+5`, `Infinity`, `NaN`, and values over `NUMERIC(10,2)`. | 400 for all invalid forms; no silent rounding in the payer's favour. | Enforce 2-decimal scale in Go before the DB rounds it. |
+| **INJ-04** | Money-value coercion | Injection | Medium | Submit prices with excess precision, `1e3`, `+5`, `Infinity`, `NaN`, and values over `NUMERIC(10,2)`. | 400 for all invalid forms; no silent rounding in the payer's favour. **Failed 2026-09-05; fixed** — `internal/pkg/money`. | Enforce 2-decimal scale in Go before the DB rounds it. |
 | **CLIENT-01** | Stored XSS across UGC | XSS | High | Inject payloads into bio, service name, store name, review comment, `special_requests`, delivery notes, product description. View in both PWAs and `/a/:handle`. | Rendered as inert text everywhere. | Rely on Angular escaping; audit every `[innerHTML]`; escape at the share boundary. |
 | **CLIENT-02** | CSRF on cookie-authenticated refresh | CSRF | High | From an off-origin page, `fetch('/api/v1/auth/refresh', {credentials:'include'})` and an auto-submitting form. | Rejected. Cookie not sent cross-site. | `SameSite=Strict` (or `Lax`) on refresh cookies; consider a double-submit token. |
 | **CLIENT-03** | CORS bypass | CORS | High | `Origin: https://evil.test`, `Origin: null`, `https://bedge.app.evil.test`. | No `Access-Control-Allow-Origin` for any of them. | Exact-match the allowlist; never reflect the Origin header; reject `null`. |
-| **CLIENT-04** | **Missing security headers** | Headers | High | `curl -I` on any endpoint. Frame `/dashboard/*` cross-origin and attempt a click-through. | CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, HSTS all present. | **Known-failing.** Add Fiber's helmet middleware; start CSP in report-only. |
+| **CLIENT-04** | **Missing security headers** | Headers | High | `curl -I` on any endpoint. Frame `/dashboard/*` cross-origin and attempt a click-through. | CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, HSTS all present. | **Fixed 2026-09-05** — `internal/middleware/secheaders.go`, enforcing rather than report-only. |
 | **CLIENT-05** | Sensitive data in logs | Logging | Medium | Run a full auth + booking + payment flow; grep logs for OTP codes, tokens, phone numbers, payment references. | None present. | Redact `Authorization`, OTP and payment-reference fields at the logger. |
 | **EDGE-01** | Volumetric load resilience | DoS | High | K6 ramp against `/discovery/artists` to saturation. *Requires written authorisation.* | Graceful 503 shedding; no data loss; recovery without restart. | Deploy behind a CDN/WAF before launch; keep the concurrency limiter. |
 | **EDGE-02** | Slot-generation amplification | DoS | Medium | Concurrent `GET /bookings/slots` across many dates for one artist; compare CPU to a baseline endpoint. | No disproportionate cost. | Cache per (artist, store, date); consider auth or a tighter limit. |
@@ -289,20 +289,79 @@ result recorded against the same Test ID. A fix is not closed on assertion.
 
 ### 3.6 Known-failing before testing starts
 
-Stated up front so a tester is not surprised, and so these are not
-double-counted as discoveries:
+**Superseded 2026-09-05 by the first execution — see §5.** Items 1 and 2 were
+predictions; both were confirmed and both are now fixed. Kept as written so the
+predictions can be judged against what actually happened.
 
-1. **CLIENT-04 will fail.** No security-header middleware exists anywhere —
-   verified by grep, not inferred. Fixing this before the pass would make
-   the results more useful.
-2. **INJ-04 will likely fail** on excess precision: `parseNonNegativeDecimal`
-   accepts arbitrary scale into `NUMERIC(10,2)`. Already documented as a
-   characterization test in `internal/billing`.
+1. ~~**CLIENT-04 will fail.**~~ Confirmed, then **fixed** —
+   `internal/middleware/secheaders.go`.
+2. ~~**INJ-04 will likely fail** on excess precision.~~ Confirmed, and the real
+   defect was **worse than predicted** — see §5.1. **Fixed** —
+   `internal/pkg/money`.
 3. **EDGE-01 has no real mitigation** to find. There is no CDN or WAF. The
-   test measures the failure point rather than proving a defence.
-4. **AUTH-08 is the single highest-value test in this document.** It is one
-   environment variable between a development convenience and total customer
-   account compromise.
+   test measures the failure point rather than proving a defence. *Still true.*
+4. **AUTH-08 is the single highest-value test in this document.** *Executed
+   2026-09-05: **passes**. The check is an exact `== "development"` match and
+   fails closed, and `APP_ENV` is in `requiredEnvVars` so the server will not
+   boot without it. The same pattern holds in `hash.go` and
+   `middleware/register.go`. Residual risk is operational, not code.*
+
+---
+
+## 5. First execution — 2026-09-05
+
+Run against the local dev stack with the permanent roster. **42 checks passed,
+4 defects found, all 4 fixed the same day.** The harness was hand-written
+Python against the live API — no Burp, SQLmap or K6 available — and every
+finding was verified against the database rather than inferred from a status
+code.
+
+### 5.1 What was found
+
+| Test | Severity | Defect | Fix |
+|---|---|---|---|
+| **INJ-04** | **High** | `PATCH /artists/salon/services/:id` and onboarding's first-service INSERT passed `price` to SQL **unvalidated**. Postgres accepts `'NaN'::numeric`: the write committed while the response was a 500, every later read of that row then 500'd, `SUM(price)` returned `NaN`, and the row could not be repaired through the API. Create validated; update did not. | `internal/pkg/money` — one whitelist parser at all 8 money sites |
+| **AUTH-02** | Medium | Foreign object → 403, nonexistent → 404 on bookings, stores and services: an oracle for enumerating live IDs. | One `errXNotFound()` per domain, shared by both branches — 27 sites |
+| — | Low | `GET /artists/:id/services` (unauthenticated) returned `buffer_min`, `salon_id`, `is_active`; migration 033 says the buffer is never customer-facing. | `artist.PublicServiceResponse` |
+| — | Low | `GET /bookings/slots` with a nonexistent `store_id` → **500** (unmapped pgx no-rows). Found while verifying the AUTH-02 fix. | `booking.ErrStoreNotFound` → 404 |
+
+### 5.2 What passed
+
+AUTH-01 (no foreign data from any endpoint tested), AUTH-03, AUTH-04 (7 forged
+JWT variants including `alg:none` and HS/RS confusion — all 401), AUTH-08,
+AUTH-09, INJ-01, INJ-02, INJ-03, CLIENT-02, CLIENT-03, EDGE-04, **FRAUD-01**
+(8 concurrent holds on one slot → exactly one won, seven 409s: the GIST
+exclusion constraint doing precisely what migration 001 promised),
+**FRAUD-02** (client-supplied `price: 0.01` ignored; the server re-read 45.00),
+SPAM-05.
+
+### 5.3 Not executed — do not read these as passes
+
+- **AUTH-05 / AUTH-06 — inconclusive, not failing.** The refresh cookie sets
+  `Secure` unconditionally. Browsers exempt `localhost`; a scripted HTTP client
+  does not, so the cookie is never returned and every refresh answers 401.
+  **These cannot be tested over plain HTTP at all.** The flags themselves
+  (`HttpOnly; Secure; SameSite=Strict`) are correct, and are what makes
+  CLIENT-02 pass.
+- **AUTH-07 / SPAM-02** — would send real messages through the live Twilio
+  account. §3.3 already says to stub the sender first.
+- **EDGE-01 / EDGE-02** — load testing needs the written authorisation §3.3
+  requires.
+- **FRAUD-04 / FRAUD-05** — need a stock-limited product and a pending invoice
+  as fixtures; neither exists in the roster.
+- **FRAUD-06** — a process control over admin behaviour, not a testable
+  endpoint.
+- **CLIENT-05** — log review; not swept.
+
+### 5.4 For the next run
+
+1. Run it over **HTTPS**, or AUTH-05/06 stay untestable — currently the largest
+   genuine gap in this document's coverage.
+2. Stub Twilio; AUTH-07 and SPAM-02 then become runnable.
+3. Seed a stock-limited product and a pending invoice for FRAUD-04/05.
+4. Treat INJ-04 and AUTH-02 as **regression** tests now, not discoveries. Both
+   have unit-level guards: `internal/pkg/money`'s rejection table and
+   `TestOwnershipAndAbsence_AreIndistinguishable`.
 
 ---
 

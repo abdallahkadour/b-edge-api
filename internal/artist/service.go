@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 )
 
 // Service handles all artist business logic.
@@ -41,6 +42,22 @@ func NewService(repo Repository) *Service {
 // try-UUID-then-handle logic across multiple domains (artist, media) for
 // no benefit, since a customer's browser only needs the handle to resolve
 // once, at the first request.
+// errServiceNotFound and errStoreNotFound are the single answer to "you may
+// not have this object", whether it does not exist or is not yours.
+//
+// Until 2026-09-05 a foreign service or store returned 403 while a
+// nonexistent one returned 404, which let any artist token enumerate real
+// IDs by watching the status code (security test AUTH-02). Sharing one
+// constructor between both branches is what stops them drifting apart again;
+// see the longer note on booking.errBookingNotFound.
+func errServiceNotFound() error {
+	return apperror.NotFound("SERVICE_NOT_FOUND", "Service not found")
+}
+
+func errStoreNotFound() error {
+	return apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+}
+
 func (s *Service) ResolveArtistID(ctx context.Context, idOrHandle string) (uuid.UUID, error) {
 	if id, err := uuid.Parse(idOrHandle); err == nil {
 		// A syntactically valid UUID still needs a status check - it costs
@@ -216,14 +233,14 @@ func (s *Service) CreateService(ctx context.Context, salonID uuid.UUID, req Crea
 		return nil, mapValidationError(err)
 	}
 
-	price, err := decimal.NewFromString(req.Price)
-	if err != nil || price.IsNegative() {
-		return nil, apperror.BadRequest("INVALID_PRICE", "Price must be a valid positive number")
+	price, err := money.Parse(req.Price, "price")
+	if err != nil {
+		return nil, err
 	}
 
-	deposit, err := decimal.NewFromString(req.DepositAmount)
-	if err != nil || deposit.IsNegative() {
-		return nil, apperror.BadRequest("INVALID_DEPOSIT", "Deposit amount must be a valid positive number")
+	deposit, err := money.Parse(req.DepositAmount, "deposit_amount")
+	if err != nil {
+		return nil, err
 	}
 
 	var categoryID *uuid.UUID
@@ -265,17 +282,32 @@ func (s *Service) UpdateService(ctx context.Context, serviceID uuid.UUID, salonI
 		return nil, mapValidationError(err)
 	}
 
+	// Money is validated HERE and not further down, because the repository
+	// puts these strings into SQL untouched. Until 2026-09-05 this method
+	// checked neither, so `{"price":"NaN"}` reached Postgres - which accepts
+	// 'NaN'::numeric - and permanently broke every subsequent read of the
+	// row. See internal/pkg/money and security test INJ-04.
+	//
+	// The parsed values are intentionally discarded: the repository still
+	// binds req's strings. Parsing is the gate, not the conversion.
+	if _, err := money.ParseOptional(req.Price, "price"); err != nil {
+		return nil, err
+	}
+	if _, err := money.ParseOptional(req.DepositAmount, "deposit_amount"); err != nil {
+		return nil, err
+	}
+
 	// Verify service belongs to this salon
 	existing, err := s.repo.GetServiceByID(ctx, serviceID)
 	if err != nil {
 		if errors.Is(err, ErrServiceNotFound) {
-			return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found")
+			return nil, errServiceNotFound()
 		}
 		return nil, fmt.Errorf("update service: get service: %w", err)
 	}
 
 	if existing.SalonID != salonID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to update this service")
+		return nil, errServiceNotFound()
 	}
 
 	if err := s.repo.UpdateService(ctx, serviceID, req); err != nil {
@@ -294,13 +326,13 @@ func (s *Service) DeleteService(ctx context.Context, serviceID uuid.UUID, salonI
 	existing, err := s.repo.GetServiceByID(ctx, serviceID)
 	if err != nil {
 		if errors.Is(err, ErrServiceNotFound) {
-			return apperror.NotFound("SERVICE_NOT_FOUND", "Service not found")
+			return errServiceNotFound()
 		}
 		return fmt.Errorf("delete service: get service: %w", err)
 	}
 
 	if existing.SalonID != salonID {
-		return apperror.Forbidden("FORBIDDEN", "You do not have permission to delete this service")
+		return errServiceNotFound()
 	}
 
 	return s.repo.DeleteService(ctx, serviceID)
@@ -325,10 +357,10 @@ func (s *Service) assertStoreOwnership(ctx context.Context, storeID, salonID uui
 	if err != nil {
 		// Deliberately NotFound rather than Forbidden - the response must
 		// not confirm that a store UUID exists to someone who doesn't own it.
-		return apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		return errStoreNotFound()
 	}
 	if store.SalonID != salonID {
-		return apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		return errStoreNotFound()
 	}
 	return nil
 }
@@ -465,12 +497,9 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 	}
 
 	if req.EarlyBirdFee != nil {
-		fee, err := decimal.NewFromString(*req.EarlyBirdFee)
+		fee, err := money.Parse(*req.EarlyBirdFee, "early_bird_fee")
 		if err != nil {
-			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee must be a decimal amount, e.g. \"50.00\"")
-		}
-		if fee.IsNegative() {
-			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee cannot be negative")
+			return nil, err
 		}
 		if fee.GreaterThan(decimal.NewFromInt(10000)) {
 			return nil, apperror.BadRequest("INVALID_FEE", "early_bird_fee looks too large - check the amount")
@@ -494,15 +523,15 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 
 	store, err := s.repo.GetStoreByID(ctx, storeID)
 	if err != nil {
-		return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+		return nil, errStoreNotFound()
 	}
 	if store.SalonID != salonID {
-		return nil, apperror.Forbidden("FORBIDDEN", "You do not have permission to update this store")
+		return nil, errStoreNotFound()
 	}
 
 	if err := s.repo.UpdateStore(ctx, storeID, req); err != nil {
 		if errors.Is(err, ErrStoreNotFound) {
-			return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
+			return nil, errStoreNotFound()
 		}
 		return nil, fmt.Errorf("update store: %w", err)
 	}

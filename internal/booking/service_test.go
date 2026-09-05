@@ -2317,7 +2317,12 @@ func TestMarkRefunded_WrongStatus_Conflict(t *testing.T) {
 	}
 }
 
-func TestMarkRefunded_WrongArtist_Forbidden(t *testing.T) {
+// Renamed from TestMarkRefunded_WrongArtist_Forbidden. Another artist's
+// booking is now indistinguishable from one that does not exist: 404
+// BOOKING_NOT_FOUND, identical code and message to the not-found branch.
+// A 403 here told the caller the booking was real, which is all an attacker
+// needs to enumerate live IDs - security test AUTH-02, 2026-09-05.
+func TestMarkRefunded_WrongArtist_NotFound(t *testing.T) {
 	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), uuid.New())
 	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: uuid.New()}
 	svc := newTestService(repo)
@@ -2327,7 +2332,35 @@ func TestMarkRefunded_WrongArtist_Forbidden(t *testing.T) {
 	require.Error(t, err)
 	var appErr *apperror.AppError
 	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, 403, appErr.HTTPStatus)
+	assert.Equal(t, 404, appErr.HTTPStatus)
+	assert.Equal(t, "BOOKING_NOT_FOUND", appErr.Code)
+}
+
+// TestOwnershipAndAbsence_AreIndistinguishable is the regression guard for
+// AUTH-02 itself: it asserts the two branches produce the SAME error, rather
+// than each separately producing an expected one. Two tests that happened to
+// agree is how the original leak survived - this fails if they diverge.
+func TestOwnershipAndAbsence_AreIndistinguishable(t *testing.T) {
+	foreign := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), uuid.New())
+
+	// (a) the booking exists but belongs to another artist
+	ownedByOther := &mockRepo{getBookingByIDBooking: foreign, getArtistIDByUserIDArtistID: uuid.New()}
+	_, errForeign := newTestService(ownedByOther).MarkRefunded(context.Background(), foreign.ID, uuid.New(), nil)
+
+	// (b) no such booking at all
+	absent := &mockRepo{getBookingByIDErr: ErrBookingNotFound}
+	_, errAbsent := newTestService(absent).MarkRefunded(context.Background(), uuid.New(), uuid.New(), nil)
+
+	require.Error(t, errForeign)
+	require.Error(t, errAbsent)
+
+	var a, b2 *apperror.AppError
+	require.ErrorAs(t, errForeign, &a)
+	require.ErrorAs(t, errAbsent, &b2)
+
+	assert.Equal(t, b2.HTTPStatus, a.HTTPStatus, "status must not distinguish foreign from absent")
+	assert.Equal(t, b2.Code, a.Code, "error code must not distinguish foreign from absent")
+	assert.Equal(t, b2.Message, a.Message, "message must not distinguish foreign from absent")
 }
 
 // The customer was already told about the cancellation. A second message

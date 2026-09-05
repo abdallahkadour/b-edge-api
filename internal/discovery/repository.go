@@ -213,7 +213,8 @@ func (r *pgRepo) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Art
 // GetArtistStores returns the active stores an artist works at, ordered by city.
 func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*StoreRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT s.id, s.name, s.city, s.address, s.phone, s.timezone, s.latitude, s.longitude
+		SELECT s.id, s.name, s.city, s.address, s.phone, s.timezone, s.latitude, s.longitude,
+		       s.rating, s.review_count
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
 		WHERE ast.artist_id = $1
@@ -232,6 +233,7 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.City, &s.Address,
 			&s.Phone, &s.Timezone, &s.Latitude, &s.Longitude,
+			&s.Rating, &s.ReviewCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan store row: %w", err)
 		}

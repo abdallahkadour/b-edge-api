@@ -118,6 +118,7 @@ even though the answer is known, for the same reason.
 | T8.4 two independent aggregates | `recomputeArtistRatingTx` + `recomputeStoreRatingTx`, both in the write transaction |
 | T8.5 the form asks the venue question | `leave-review.page` — optional, clearable, absent when unanswered |
 | T8.6 both scores displayed | customer `reviews.page` and artist `reviews.component`, labelled |
+| *(beyond the plan)* venue score on the profile | `discovery.StoreCard.rating` + `review_count`, per store, omitted when unrated — §5 |
 
 Verified end to end against the running stack: a review submitted with
 specialist 5 and venue 3 produced `stores.rating = 3.00` and
@@ -143,10 +144,17 @@ discovered as a surprise.
   a single review.
 - **Editing a review after submission.** Raised in the D5 proposal as out of
   scope and still is; it needs its own decision.
-- **A venue score on the discovery card.** `stores.rating` exists and is
-  maintained, but no public endpoint exposes it yet. That is a display decision
-  with its own question — one store's rating, or an average across a salon's
-  stores? — and inventing an answer here would pre-empt it.
+- **A salon-level average across stores.** Decided against, 2026-09-06. The
+  venue score is published **per store** on `discovery.StoreCard` and is never
+  averaged across a salon's locations. Fresha and Booksy both rate the venue
+  per location, and more to the point, averaging Beirut Downtown with Tripoli
+  is the *dilution* failure of §2.2 one level up — the exact thing choosing the
+  store grain in migration 035 was meant to avoid. Undoing it at display time
+  would make the schema decision pointless.
+
+  `rating` is **omitted** from the card when `review_count` is 0, so an unrated
+  venue publishes no score rather than "0.00". Same rule as everywhere else in
+  this feature, and the same shape as `ReasonUnknown` rendering no badge.
 - **Backfilling `salon_rating` for old reviews.** Nobody was asked the
   question. Inventing an answer would corrupt the first aggregate this feature
   ever computes.

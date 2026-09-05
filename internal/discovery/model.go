@@ -78,6 +78,11 @@ type StoreRow struct {
 	Timezone  string    `db:"timezone"`
 	Latitude  *float64  `db:"latitude"`
 	Longitude *float64  `db:"longitude"`
+
+	// The VENUE rating - migration 035. Distinct from the artist's own rating
+	// and never derived from it; see B-Edge-Review-Attribution-Spec-v1.md.
+	Rating      decimal.Decimal `db:"rating"`
+	ReviewCount int             `db:"review_count"`
 }
 
 // DayHoursRow is one weekday's regular trading hours for a store.
@@ -159,6 +164,19 @@ type StoreCard struct {
 	Longitude *float64 `json:"longitude,omitempty"`
 	// OpenStatus is computed per request, never stored - see OpenStatus.
 	OpenStatus OpenStatus `json:"open_status"`
+
+	// Rating is the VENUE's own score, averaged over reviews that answered the
+	// optional salon question. Per store and never averaged across a salon's
+	// stores: Beirut Downtown and Tripoli are different rooms, and merging them
+	// is the dilution failure migration 035 chose the store grain to avoid.
+	//
+	// OMITTED when ReviewCount is 0, deliberately. A store nobody has rated is
+	// not a zero-star store, and the same rule holds everywhere in this feature
+	// - "not rated" and "rated badly" must never render the same. Consumers show
+	// no rating at all rather than an empty row of stars, exactly as an unknown
+	// OpenStatus renders no badge.
+	Rating      *decimal.Decimal `json:"rating,omitempty"`
+	ReviewCount int              `json:"review_count"`
 }
 
 // OpenReason explains why a store is or isn't currently trading, so the UI
@@ -244,7 +262,25 @@ func toStoreCard(r *StoreRow, days []*DayHoursRow, excs []*ExceptionRow, now tim
 		Latitude:   r.Latitude,
 		Longitude:  r.Longitude,
 		OpenStatus: deriveOpenStatus(r, days, excs, now),
+		// Absent, not zero, when nobody has rated the venue - see StoreCard.
+		Rating:      venueRating(r),
+		ReviewCount: r.ReviewCount,
 	}
+}
+
+// venueRating returns the store's score, or nil when there is nothing to show.
+//
+// The nil is the point. stores.rating defaults to 0 and stays there until the
+// first venue review lands, so returning it unconditionally would publish
+// "0.00" for every store that has simply never been rated - which reads as a
+// terrible venue rather than an unrated one, and would cost an artist real
+// bookings. Same reasoning as ReasonUnknown rendering no badge.
+func venueRating(r *StoreRow) *decimal.Decimal {
+	if r.ReviewCount == 0 {
+		return nil
+	}
+	rating := r.Rating
+	return &rating
 }
 
 // deriveOpenStatus resolves a store's trading state at now.

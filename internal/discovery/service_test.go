@@ -393,3 +393,41 @@ func TestBuildStoreCards_NoStores_ReturnsEmptyNotNil(t *testing.T) {
 	assert.NotNil(t, cards, "an empty slice, never nil — Go marshals nil as null")
 	assert.Empty(t, cards)
 }
+
+// ── Venue rating on the store card (Sprint 8) ────────────────────────────────
+
+// TestVenueRating_Unrated_IsAbsentNotZero is the rule that matters. stores.rating
+// defaults to 0 and stays there until the first venue review lands, so
+// publishing it unconditionally would show "0.00" for every store nobody has
+// rated - which reads as a terrible venue rather than an unrated one.
+func TestVenueRating_Unrated_IsAbsentNotZero(t *testing.T) {
+	row := &StoreRow{Rating: decimal.Zero, ReviewCount: 0}
+
+	assert.Nil(t, venueRating(row), "an unrated venue must publish no rating at all")
+}
+
+// TestVenueRating_Rated_IsPublished - and a real score is returned as-is.
+func TestVenueRating_Rated_IsPublished(t *testing.T) {
+	row := &StoreRow{Rating: decimal.RequireFromString("3.50"), ReviewCount: 2}
+
+	got := venueRating(row)
+
+	require.NotNil(t, got)
+	assert.True(t, got.Equal(decimal.RequireFromString("3.50")))
+}
+
+// TestVenueRating_GenuineZero_WithReviews_IsPublished guards the edge the
+// ReviewCount check creates: a venue really rated badly is not the same as an
+// unrated one, and must not be hidden by the same branch.
+//
+// Unreachable through the API today - salon_rating is CHECKed to 1..5 so the
+// average cannot be 0 while a review exists - but the branch should be correct
+// on its own terms rather than only by the constraint's grace.
+func TestVenueRating_GenuineZero_WithReviews_IsPublished(t *testing.T) {
+	row := &StoreRow{Rating: decimal.Zero, ReviewCount: 3}
+
+	got := venueRating(row)
+
+	require.NotNil(t, got, "a rated venue publishes its score even when the score is 0")
+	assert.True(t, got.IsZero())
+}

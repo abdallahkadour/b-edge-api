@@ -30,10 +30,10 @@ Lebanon." Solo founder build.
 |---|---|
 | Go / Fiber | 1.26.3 / v2.52.13 |
 | Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
-| Migrations | **36** (latest `036_targeted_indexes`) |
+| Migrations | **37** (latest `037_discounts`) |
 | Tables | **29** |
 | Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **102** paths in swagger |
-| Go tests | **676**, all passing |
+| Go tests | **692**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
 
@@ -42,9 +42,9 @@ client, customerauth, discovery, earnings, **inbox**, media, notification,
 onboarding, product, review, **share** — plus `domain/auth`, `config`,
 `middleware`.
 
-**Leaf packages** (`internal/pkg/`): apperror, **bidi**, **clientip**, hash,
-**httpcache**, jwt, **money**, **openinghours**, **optional**, response,
-**subscription**, **validation**.
+**Leaf packages** (`internal/pkg/`): apperror, **bidi**, **clientip**,
+**discount**, hash, **httpcache**, jwt, **money**, **openinghours**,
+**optional**, response, **subscription**, **validation**.
 
 Bold entries are recent and are not described in any older doc.
 

@@ -37,6 +37,7 @@ type mockRepo struct {
 	// orders
 	order           *Order
 	orderItems      []*OrderItem
+	batchItemCalls  int
 	orderErr        error
 	createOrderErr  error
 	updateStatusErr error
@@ -124,6 +125,17 @@ func (m *mockRepo) UpdateOrderStatus(_ context.Context, _ uuid.UUID, fromStatus,
 
 func (m *mockRepo) GetOrderItems(_ context.Context, _ uuid.UUID) ([]*OrderItem, error) {
 	return m.orderItems, nil
+}
+
+// Records how many times the batch query was issued, so a test can assert the
+// N+1 stays fixed rather than merely that the output is right.
+func (m *mockRepo) GetOrderItemsForOrders(_ context.Context, orderIDs []uuid.UUID) (map[uuid.UUID][]*OrderItem, error) {
+	m.batchItemCalls++
+	out := make(map[uuid.UUID][]*OrderItem, len(orderIDs))
+	for _, id := range orderIDs {
+		out[id] = m.orderItems
+	}
+	return out, nil
 }
 
 func (m *mockRepo) FindOrCreateCustomerByPhone(_ context.Context, _, _ string) (uuid.UUID, error) {
@@ -728,4 +740,39 @@ func TestPlaceOrder_CustomerResolutionFails_NoOrderCreated(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, repo.createdOrder, "no order may be persisted if the customer couldn't be resolved")
+}
+
+// TestListOrdersByCustomer_IssuesOneItemQuery is the regression guard for the
+// N+1 the database review found: this loop used to call GetOrderItems once per
+// order, so a customer with 30 orders cost 31 round trips to render "My
+// Orders". Asserting the CALL COUNT rather than the output is the point - the
+// output was always correct, which is why the problem survived.
+func TestListOrdersByCustomer_IssuesOneItemQuery(t *testing.T) {
+	customerID := uuid.New()
+	repo := &mockRepo{
+		ordersByCust: []*Order{
+			{ID: uuid.New(), CustomerID: customerID},
+			{ID: uuid.New(), CustomerID: customerID},
+			{ID: uuid.New(), CustomerID: customerID},
+		},
+		orderItems: []*OrderItem{{ID: uuid.New()}},
+	}
+
+	got, err := newTestService(repo).ListOrdersByCustomer(context.Background(), customerID)
+
+	require.NoError(t, err)
+	assert.Len(t, got, 3, "all orders still returned")
+	assert.Equal(t, 1, repo.batchItemCalls,
+		"one batched query regardless of order count - not one per order")
+}
+
+// TestListOrdersByCustomer_NoOrders_IssuesNoItemQuery - an empty list must not
+// send a query with an empty ANY($1).
+func TestListOrdersByCustomer_NoOrders_IssuesNoItemQuery(t *testing.T) {
+	repo := &mockRepo{ordersByCust: nil}
+
+	got, err := newTestService(repo).ListOrdersByCustomer(context.Background(), uuid.New())
+
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

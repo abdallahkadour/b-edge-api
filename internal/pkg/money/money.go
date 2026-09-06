@@ -40,6 +40,7 @@ package money
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/shopspring/decimal"
 
@@ -107,20 +108,7 @@ func ParseOptional(raw *string, field string) (*decimal.Decimal, error) {
 // field whose valid shape fits in one sentence.
 func invalid(field string) error {
 	return apperror.BadRequest(
-		"INVALID_"+upper(field),
+		"INVALID_"+strings.ToUpper(field),
 		field+" must be an amount with at most 2 decimal places, between 0 and 99999999.99",
 	)
-}
-
-// upper uppercases an ASCII field name for the error code. strings.ToUpper
-// would do, but field names here are ASCII snake_case by construction and
-// this keeps the package's only import list to decimal and apperror.
-func upper(s string) string {
-	out := []byte(s)
-	for i, c := range out {
-		if c >= 'a' && c <= 'z' {
-			out[i] = c - 32
-		}
-	}
-	return string(out)
 }

@@ -1764,20 +1764,6 @@ func mapValidationError(err error) error {
 	return validation.MapError(err)
 }
 
-// validationMessage returns a human-readable message for a field validation failure.
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "uuid":
-		return fe.Field() + " must be a valid UUID"
-	case "oneof":
-		return fe.Field() + " must be one of: " + fe.Param()
-	default:
-		return fe.Field() + " is invalid"
-	}
-}
-
 // ── Bulk schedule operations: preview ────────────────────────────────────────
 
 // PreviewShiftDay is a dry run of shifting every movable booking at one

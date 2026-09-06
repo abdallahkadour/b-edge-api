@@ -519,26 +519,6 @@ func mapValidationError(err error) error {
 	return validation.MapError(err)
 }
 
-// validationMessage returns a human-readable message for a validation failure.
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "email":
-		return "Invalid email format"
-	case "min":
-		return fe.Field() + " must be at least " + fe.Param() + " characters"
-	case "max":
-		return fe.Field() + " must be at most " + fe.Param() + " characters"
-	case "oneof":
-		return fe.Field() + " must be one of: " + fe.Param()
-	case "e164":
-		return "Phone number must be in international format e.g. +96170123456"
-	default:
-		return fe.Field() + " is invalid"
-	}
-}
-
 // hashPwd wraps hash.Password so test files in the same package
 // can hash passwords without importing the hash package directly.
 func hashPwd(plain string) (string, error) {

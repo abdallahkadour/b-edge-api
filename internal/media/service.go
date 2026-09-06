@@ -477,19 +477,3 @@ func (s *Service) resolveArtist(ctx context.Context, userID uuid.UUID) (uuid.UUI
 func mapValidationError(err error) error {
 	return validation.MapError(err)
 }
-
-// validationMessage returns a human-readable message for a field validation failure.
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "url":
-		return fe.Field() + " must be a valid URL"
-	case "max":
-		return fe.Field() + " is too long"
-	case "min":
-		return fe.Field() + " must have at least " + fe.Param() + " items"
-	default:
-		return fe.Field() + " is invalid"
-	}
-}

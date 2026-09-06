@@ -151,6 +151,31 @@ below-the-fold work inside a route:
 `@placeholder` with a fixed height is the important half — without it, deferring
 *creates* the layout shift it was meant to avoid.
 
+### Tried, measured, and REVERTED · 2026-09-06
+
+The map recommendation above was implemented and then backed out, because the
+measurement contradicted it:
+
+```
+without @defer   404.18 kB raw   93.23 kB transfer
+with    @defer   411.77 kB raw   95.66 kB transfer     +7.6 kB / +2.4 kB
+```
+
+**`@defer` pulls its runtime into the INITIAL bundle**, and the component it
+was deferring already lived in a lazy route chunk. So the cost is paid by every
+visitor on first load — including the many who never open an artist profile —
+to avoid parsing a small map component for those who do.
+
+That is a net loss for this codebase specifically, and the reason is
+structural: **100% of routes are already lazy**, so the coarse win is taken and
+`@defer` has little left to remove. It would pay for itself on a heavy
+below-the-fold component in a route people mostly do not scroll — a chart, a
+rich text editor — and there is no such component here today.
+
+Recorded rather than silently dropped: "add @defer" is a reasonable-looking
+suggestion that will come up again, and the answer is a number rather than an
+opinion.
+
 ---
 
 ## F3 — Lucide icons are imported one by one, which is correct · no action
@@ -173,23 +198,34 @@ accumulating-interval problem to find.
 
 ---
 
-## F5 — No performance budget in the build · **P2**
+## F5 — The performance budget is Angular's default, which guards nothing · **P2**
 
-`angular.json` sets no `budgets`. Bundle size is good *today* and nothing
-guards it. One incautious import (a date library, a chart package, a component
-kit) regresses it silently and nobody notices until a user on a slow network
-does.
+**Corrected 2026-09-06.** This section originally said `angular.json` sets no
+budgets. It does — Angular's scaffolded defaults, `500kB` warning and `1MB`
+error. That is not "no budget", it is a budget with **5× headroom over the
+actual 404 kB**, which will never fire before a serious regression has already
+shipped.
+
+A second correction found while fixing it: **Angular budgets compare RAW
+bundle size, not transfer size.** The first tightened values here were written
+against the 91 kB transfer figure and broke the build immediately:
+
+```
+✘ [ERROR] bundle initial exceeded maximum budget.
+          Budget 150.00 kB was not met by 254.10 kB with a total of 404.10 kB.
+```
 
 ```json
-// angular.json → projects.customer-pwa.architect.build.configurations.production
+// angular.json → …production.budgets   (RAW size; customer-pwa is 404 kB today)
 "budgets": [
-  { "type": "initial", "maximumWarning": "110kb", "maximumError": "150kb" },
-  { "type": "anyComponentStyle", "maximumWarning": "4kb" }
+  { "type": "initial", "maximumWarning": "450kB", "maximumError": "550kB" },
+  { "type": "anyComponentStyle", "maximumWarning": "4kB", "maximumError": "8kB" }
 ]
 ```
 
-Set against **transfer** size, with the warning just above today's 91.56 kB so
-it fires on a real regression rather than on noise.
+~12% warning headroom and ~35% error headroom: tight enough that a component
+kit or chart library trips it, loose enough that ordinary feature work does
+not. Verified — both apps build with zero budget warnings.
 
 ---
 

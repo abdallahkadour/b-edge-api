@@ -103,7 +103,10 @@ func (r *pgRepo) GetOrderItemsForOrders(ctx context.Context, orderIDs []uuid.UUI
 `ANY($1)` with a `uuid[]` is one round trip regardless of order count.
 `GetOrderItems` stays for the single-order read.
 
-**The same shape appears in the artist-side order list** — apply both together.
+**Correction, 2026-09-06:** this document originally claimed the same shape
+appears in the artist-side list. It does not — `ListOrdersBySalon` uses
+`GetEnrichedOrdersBySalon`, which already joins. There is exactly **one** N+1
+here, and it is fixed.
 
 ---
 

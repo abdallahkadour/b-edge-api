@@ -304,20 +304,3 @@ func hashOTP(value string) string {
 func mapValidationError(err error) error {
 	return validation.MapError(err)
 }
-
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "min":
-		return fe.Field() + " must be at least " + fe.Param()
-	case "max":
-		return fe.Field() + " must be at most " + fe.Param() + " characters"
-	case "len":
-		return fe.Field() + " must be exactly " + fe.Param() + " characters"
-	case "numeric":
-		return fe.Field() + " must contain only numbers"
-	default:
-		return fe.Field() + " is invalid"
-	}
-}

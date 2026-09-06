@@ -284,18 +284,3 @@ func toResponse(r *Review) *ReviewResponse {
 func mapValidationError(err error) error {
 	return validation.MapError(err)
 }
-
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "min":
-		return fe.Field() + " must be at least " + fe.Param()
-	case "max":
-		return fe.Field() + " must be at most " + fe.Param() + " characters"
-	case "uuid":
-		return fe.Field() + " must be a valid UUID"
-	default:
-		return fe.Field() + " is invalid"
-	}
-}

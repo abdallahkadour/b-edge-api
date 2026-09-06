@@ -49,6 +49,9 @@ type Repository interface {
 	// list endpoints (GetOrdersBySalon/GetOrdersByCustomer don't join them
 	// inline - see the service layer for why).
 	GetOrderItems(ctx context.Context, orderID uuid.UUID) ([]*OrderItem, error)
+	// GetOrderItemsForOrders batches the above for list endpoints - see its
+	// doc comment for why the single-order version stays.
+	GetOrderItemsForOrders(ctx context.Context, orderIDs []uuid.UUID) (map[uuid.UUID][]*OrderItem, error)
 
 	// FindOrCreateCustomerByPhone resolves identity by phone - the same
 	// "one phone number, one account" rule already established (migration
@@ -236,6 +239,49 @@ func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*Ord
 		return nil, nil, err
 	}
 	return o, items, nil
+}
+
+// GetOrderItemsForOrders loads the items for many orders in one query.
+//
+// Exists because ListOrdersByCustomer and ListOrdersBySalon both rendered an
+// order list by calling GetOrderItems once per order - a customer with 30
+// orders cost 31 round trips on "My Orders". order_items is indexed on
+// (order_id, created_at), so each of those queries was fast; the cost was
+// entirely in the round trips, which is why the fix is batching rather than
+// an index.
+//
+// Returns a map so the caller keeps its existing order (from the orders
+// query) rather than having to re-sort. An order with no items is simply
+// absent from the map, and a nil slice renders as an empty list.
+func (r *pgRepo) GetOrderItemsForOrders(ctx context.Context, orderIDs []uuid.UUID) (map[uuid.UUID][]*OrderItem, error) {
+	if len(orderIDs) == 0 {
+		return map[uuid.UUID][]*OrderItem{}, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT id, order_id, product_id, product_name, unit_price, quantity, subtotal
+		FROM order_items
+		WHERE order_id = ANY($1)
+		ORDER BY order_id, created_at ASC`,
+		orderIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get order items for orders: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID][]*OrderItem, len(orderIDs))
+	for rows.Next() {
+		item := &OrderItem{}
+		if err := rows.Scan(&item.ID, &item.OrderID, &item.ProductID, &item.ProductName, &item.UnitPrice, &item.Quantity, &item.Subtotal); err != nil {
+			return nil, fmt.Errorf("scan order item: %w", err)
+		}
+		result[item.OrderID] = append(result[item.OrderID], item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get order items for orders: rows: %w", err)
+	}
+	return result, nil
 }
 
 func (r *pgRepo) GetOrderItems(ctx context.Context, orderID uuid.UUID) ([]*OrderItem, error) {

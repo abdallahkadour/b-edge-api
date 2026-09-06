@@ -253,13 +253,23 @@ func (s *Service) ListOrdersByCustomer(ctx context.Context, customerID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("list orders by customer: %w", err)
 	}
+	// One query for every order's items, not one per order. This loop used to
+	// call GetOrderItems inside itself, so a customer with 30 orders cost 31
+	// round trips to render "My Orders".
+	ids := make([]uuid.UUID, len(orders))
+	for i, o := range orders {
+		ids[i] = o.ID
+	}
+	itemsByOrder, err := s.repo.GetOrderItemsForOrders(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list orders by customer: items: %w", err)
+	}
+
 	result := make([]*OrderResponse, 0, len(orders))
 	for _, o := range orders {
-		items, err := s.repo.GetOrderItems(ctx, o.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list orders by customer: items for %s: %w", o.ID, err)
-		}
-		result = append(result, toOrderResponse(o, items))
+		// A missing key is a nil slice, which renders as an empty item list -
+		// correct for an order whose items were somehow removed.
+		result = append(result, toOrderResponse(o, itemsByOrder[o.ID]))
 	}
 	return result, nil
 }
@@ -375,23 +385,4 @@ func (s *Service) transitionOrder(ctx context.Context, orderID, salonID uuid.UUI
 // message.
 func mapValidationError(err error) error {
 	return validation.MapError(err)
-}
-
-func validationMessage(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required":
-		return fe.Field() + " is required"
-	case "min":
-		return fe.Field() + " must be at least " + fe.Param()
-	case "max":
-		return fe.Field() + " must be at most " + fe.Param() + " characters"
-	case "uuid":
-		return fe.Field() + " must be a valid UUID"
-	case "url":
-		return fe.Field() + " must be a valid URL"
-	case "oneof":
-		return fe.Field() + " must be one of: " + fe.Param()
-	default:
-		return fe.Field() + " is invalid"
-	}
 }

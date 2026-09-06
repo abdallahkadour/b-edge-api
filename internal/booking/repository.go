@@ -91,7 +91,7 @@ type Repository interface {
 
 	// CreateBooking inserts a new booking. The GIST constraint is the final
 	// atomic guard - returns ErrSlotUnavailable on exclusion violation.
-	CreateBooking(ctx context.Context, b *Booking) error
+	CreateBooking(ctx context.Context, b *Booking, applied *AppliedDiscount) error
 
 	// GetBookingByID fetches a single booking by primary key.
 	// Returns ErrBookingNotFound if not found or soft deleted.
@@ -176,7 +176,7 @@ type Repository interface {
 	// customer to the real guest user and transitions held → pending, in one
 	// guarded UPDATE. Returns ErrBookingNotHeld if the booking is no longer a
 	// live held booking (already submitted or expired).
-	AttachGuestAndSubmit(ctx context.Context, bookingID, guestUserID uuid.UUID, specialRequests *string) error
+	AttachGuestAndSubmit(ctx context.Context, bookingID, guestUserID uuid.UUID, specialRequests *string, applied *AppliedDiscount) error
 
 	// ApproveBooking transitions pending → approved, sets the deposit
 	// deadline, and mints the calendar token, returning it. Approval is
@@ -279,6 +279,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.OriginalPrice,
 		&b.DiscountAmount,
 		&b.FinalPrice,
+		&b.DiscountCode,
 		&b.DepositAmount,
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
@@ -303,7 +304,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 const bookingSelectCols = `
 	id, salon_id, store_id, artist_id, customer_id, service_id,
 	start_time, end_time, held_until, status,
-	original_price, discount_amount, final_price,
+	original_price, discount_amount, final_price, discount_code,
 	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token, calendar_token,
 	buffer_min, blocked_until,
 	channel, special_requests, cancellation_reason,
@@ -642,30 +643,51 @@ func (r *pgRepo) GetArtistStoreBuffer(ctx context.Context, artistID uuid.UUID, f
 // NOTE: session_id is intentionally NOT inserted here - the bookings table has
 // no such column yet. See scanBooking for details. b.SessionID always remains
 // nil until migration 005 adds the column and this INSERT is updated alongside it.
-func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking) error {
-	err := r.db.QueryRow(ctx, `
+func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking, applied *AppliedDiscount) error {
+	// Transactional so a discount cannot outlive its booking or vice versa -
+	// see AppliedDiscount. With no discount this remains one statement.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create booking: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	err = tx.QueryRow(ctx, `
 		INSERT INTO bookings (
 			id, salon_id, store_id, artist_id, customer_id, service_id,
 			start_time, end_time, blocked_until, buffer_min, held_until, status,
 			original_price, discount_amount, final_price,
-			deposit_amount, deposit_deadline, channel, special_requests
+			deposit_amount, deposit_deadline, channel, special_requests,
+			discount_code
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11, $12,
 			$13, $14, $15,
-			$16, $17, $18, $19
+			$16, $17, $18, $19,
+			$20
 		)
 		RETURNING created_at, updated_at`,
 		b.ID, b.SalonID, b.StoreID, b.ArtistID, b.CustomerID, b.ServiceID,
 		b.StartTime, b.EndTime, b.BlockedUntil, b.BufferMin, b.HeldUntil, b.Status,
 		b.OriginalPrice, b.DiscountAmount, b.FinalPrice,
 		b.DepositAmount, b.DepositDeadline, b.Channel, b.SpecialRequests,
+		b.DiscountCode,
 	).Scan(&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		if isExclusionViolation(err) {
 			return ErrSlotUnavailable
 		}
 		return fmt.Errorf("create booking: %w", err)
+	}
+
+	if applied != nil {
+		if err := insertRedemptionTx(ctx, tx, applied, &b.ID, nil); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create booking: commit: %w", err)
 	}
 	return nil
 }
@@ -1033,25 +1055,90 @@ func (r *pgRepo) AttachGuestAndSubmit(
 	ctx context.Context,
 	bookingID, guestUserID uuid.UUID,
 	specialRequests *string,
+	applied *AppliedDiscount,
 ) error {
-	result, err := r.db.Exec(ctx, `
+	// A transaction because the discount half must not be able to survive
+	// without the booking half, or vice versa - see AppliedDiscount. Without a
+	// discount this is still one statement and the transaction costs nothing
+	// measurable.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("attach guest and submit: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// The price columns are only touched when a discount applied, so an
+	// ordinary guest booking is written by exactly the statement it always was.
+	var (
+		discountAmount any
+		finalPrice     any
+		discountCode   any
+	)
+	if applied != nil {
+		discountAmount, finalPrice, discountCode = applied.Amount, applied.FinalPrice, applied.Code
+	}
+
+	result, err := tx.Exec(ctx, `
 		UPDATE bookings
 		SET customer_id      = $2,
 		    special_requests = $3,
 		    status           = $4,
 		    held_until       = NULL,
+		    discount_amount  = COALESCE($6, discount_amount),
+		    final_price      = COALESCE($7, final_price),
+		    discount_code    = COALESCE($8, discount_code),
 		    updated_at       = NOW()
 		WHERE id         = $1
 		AND status       = $5
 		AND held_until   > NOW()
 		AND deleted_at IS NULL`,
 		bookingID, guestUserID, specialRequests, StatusPending, StatusHeld,
+		discountAmount, finalPrice, discountCode,
 	)
 	if err != nil {
 		return fmt.Errorf("attach guest and submit: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrBookingNotHeld
+	}
+
+	if applied != nil {
+		if err := insertRedemptionTx(ctx, tx, applied, &bookingID, nil); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("attach guest and submit: commit: %w", err)
+	}
+	return nil
+}
+
+// insertRedemptionTx records a code's use inside the caller's transaction.
+//
+// The partial unique index idx_discount_redemption_once is the real guard on
+// "once per customer": two concurrent checkouts both pass the eligibility
+// check, because neither has committed, and exactly one of them lands here
+// successfully. The loser gets ErrDiscountAlreadyRedeemed and the whole
+// booking rolls back, which is correct - they were quoted a price that
+// included a discount they cannot have.
+func insertRedemptionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	applied *AppliedDiscount,
+	bookingID, orderID *uuid.UUID,
+) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO discount_redemptions (discount_id, customer_id, booking_id, order_id, amount)
+		VALUES ($1, $2, $3, $4, $5)`,
+		applied.DiscountID, applied.CustomerID, bookingID, orderID, applied.Amount,
+	)
+	if err != nil {
+		var pgErr interface{ SQLState() string }
+		if errors.As(err, &pgErr) && pgErr.SQLState() == uniqueViolationCode {
+			return ErrDiscountAlreadyRedeemed
+		}
+		return fmt.Errorf("insert discount redemption: %w", err)
 	}
 	return nil
 }
@@ -1371,7 +1458,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 		if err := rows.Scan(
 			&b.ID, &b.SalonID, &b.StoreID, &b.ArtistID, &b.CustomerID, &b.ServiceID,
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
-			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice,
+			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice, &b.DiscountCode,
 			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken, &b.CalendarToken,
 			&b.BufferMin, &b.BlockedUntil,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,

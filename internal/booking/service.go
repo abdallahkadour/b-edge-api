@@ -16,6 +16,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
 
 // NewService creates a new booking Service.
@@ -31,6 +32,21 @@ import (
 // newTestService) for what is an observability addition. Omitting it
 // yields a no-op logger, so behaviour is unchanged for callers that don't
 // pass one - but the production wiring in RegisterRoutes does.
+// DiscountResolver prices a booking with an optional promo code.
+//
+// Declared here rather than importing promo.Service, for the same reason
+// SubscriptionStatusReader exists: booking states the one method it needs and
+// *promo.Service satisfies it structurally. The dependency stays
+// one-directional - booking knows about discounts, promo knows nothing about
+// bookings.
+type DiscountResolver interface {
+	Resolve(ctx context.Context, salonID, customerID uuid.UUID, code string,
+		base, surcharge, deposit decimal.Decimal) (*promo.Result, error)
+	// ReleaseForBooking implements D3.5 - a customer who did not break the
+	// booking keeps their code.
+	ReleaseForBooking(ctx context.Context, bookingID uuid.UUID) error
+}
+
 func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap.Logger) *Service {
 	l := zap.NewNop()
 	if len(log) > 0 && log[0] != nil {
@@ -42,6 +58,68 @@ func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap
 		validate:  validation.New(),
 		log:       l,
 	}
+}
+
+// discountAmountOf and discountCodeOf read an optional AppliedDiscount into
+// the two columns, so the booking literal stays readable instead of carrying
+// two nil checks inline.
+func discountAmountOf(a *AppliedDiscount) decimal.Decimal {
+	if a == nil {
+		return zeroDecimal()
+	}
+	return a.Amount
+}
+
+func discountCodeOf(a *AppliedDiscount) *string {
+	if a == nil {
+		return nil
+	}
+	code := a.Code
+	return &code
+}
+
+// WithDiscounts attaches a resolver. Separate from NewService so the dozen
+// existing call sites - including every test - keep working untouched.
+func (s *Service) WithDiscounts(r DiscountResolver) *Service {
+	s.discounts = r
+	return s
+}
+
+// applyDiscount prices a booking and returns the redemption to write with it.
+//
+// A REFUSED CODE IS NOT AN ERROR. A customer who mistypes a code still gets
+// their booking, at full price, rather than a failure they have to recover
+// from mid-checkout. Only an infrastructure failure propagates.
+func (s *Service) applyDiscount(
+	ctx context.Context,
+	salonID, customerID uuid.UUID,
+	code *string,
+	subtotal, deposit decimal.Decimal,
+) (decimal.Decimal, *AppliedDiscount, error) {
+	if s.discounts == nil || code == nil || *code == "" {
+		return subtotal, nil, nil
+	}
+
+	// subtotal already includes the early-bird surcharge, which is why it is
+	// passed as the base with a zero surcharge: D3.4 requires the discount to
+	// come off the price the customer was shown, and by this point that is
+	// exactly what subtotal is.
+	res, err := s.discounts.Resolve(ctx, salonID, customerID, *code,
+		subtotal, decimal.Zero, deposit)
+	if err != nil {
+		return subtotal, nil, fmt.Errorf("apply discount: %w", err)
+	}
+	if !res.Applied() {
+		return subtotal, nil, nil
+	}
+
+	return res.Breakdown.Final, &AppliedDiscount{
+		DiscountID: *res.DiscountID,
+		CustomerID: customerID,
+		Code:       res.Breakdown.AppliedCode,
+		Amount:     res.Breakdown.DiscountTotal,
+		FinalPrice: res.Breakdown.Final,
+	}, nil
 }
 
 // checkArtistAcceptsNewBookings enforces
@@ -152,6 +230,15 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 	// re-plan a booking already agreed. See migration 033.
 	blockedUntil := endTime.Add(time.Duration(service.BufferMin) * time.Minute)
 
+	// A logged-in customer is known here, so the code resolves before the row
+	// is built. finalPrice already carries the early-bird surcharge - D3.4
+	// requires the discount to come off the price the customer was shown.
+	finalPrice, applied, err := s.applyDiscount(ctx, service.SalonID, customerID,
+		req.DiscountCode, finalPrice, service.DepositAmount)
+	if err != nil {
+		return nil, err
+	}
+
 	// Set held_until - slot is reserved for 10 minutes during checkout
 	heldUntil := time.Now().UTC().Add(SlotHoldDuration)
 
@@ -169,14 +256,19 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		HeldUntil:       &heldUntil,
 		Status:          StatusHeld,
 		OriginalPrice:   service.Price,
-		DiscountAmount:  zeroDecimal(),
+		DiscountAmount:  discountAmountOf(applied),
+		DiscountCode:    discountCodeOf(applied),
 		FinalPrice:      finalPrice,
 		DepositAmount:   service.DepositAmount,
 		Channel:         req.Channel,
 		SpecialRequests: req.SpecialRequests,
 	}
 
-	if err := s.repo.CreateBooking(ctx, b); err != nil {
+	if err := s.repo.CreateBooking(ctx, b, applied); err != nil {
+		if errors.Is(err, ErrDiscountAlreadyRedeemed) {
+			return nil, apperror.Conflict("DISCOUNT_ALREADY_USED",
+				"You've already used that code. Please remove it and try again.")
+		}
 		if errors.Is(err, ErrSlotUnavailable) {
 			return nil, apperror.Conflict("SLOT_UNAVAILABLE", "This slot was just taken. Please choose another time.")
 		}
@@ -781,17 +873,27 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 			"This appointment has already started. Mark it completed or a no-show instead of cancelling.")
 	}
 
-	// Determine if a refund is due
+	// Determine if a refund is due, and - separately - whether the customer
+	// keeps their promo code.
+	//
+	// These two look identical and are NOT. refundDue additionally requires a
+	// positive deposit, because with nothing paid there is nothing to refund.
+	// D3.5's rule is about blame, not money: "a customer is not penalised for
+	// a booking they did not break". An artist cancelling a no-deposit booking
+	// owes no refund and must still hand the code back.
 	refundDue := false
+	blameless := false
 
 	if isArtist || isAdmin {
 		// Artist cancelling always triggers a refund
 		refundDue = b.DepositAmount.IsPositive()
+		blameless = true
 	} else if isCustomer {
 		// Customer cancelling: refund only if >24h before appointment
 		timeUntilAppointment := time.Until(b.StartTime)
 		if timeUntilAppointment > cancellationWindow {
 			refundDue = b.DepositAmount.IsPositive()
+			blameless = true
 		}
 	}
 
@@ -811,6 +913,22 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 		b.Status = StatusRefundDue
 	} else {
 		b.Status = StatusCancelled
+	}
+
+	// D3.5: hand the code back when the customer did not break the booking.
+	//
+	// Deliberately AFTER the cancel has committed and deliberately not fatal.
+	// The booking is already cancelled; failing the whole call because a
+	// promo row could not be updated would tell the customer their
+	// cancellation failed when it did not. A code that stays consumed is a
+	// small, recoverable unfairness - a cancellation that appears to have
+	// failed is not.
+	if blameless && s.discounts != nil && b.DiscountCode != nil {
+		if err := s.discounts.ReleaseForBooking(ctx, bookingID); err != nil {
+			s.log.Error("could not release discount redemption",
+				zap.String("booking_id", bookingID.String()),
+				zap.Error(err))
+		}
 	}
 
 	// Only notify if the ARTIST cancelled - a customer who just cancelled

@@ -93,6 +93,13 @@ var (
 	// pgx no-rows error travelled up unmapped and every such call logged a
 	// critical error. Found while verifying the AUTH-02 fix, 2026-09-05.
 	ErrStoreNotFound = errors.New("store not found")
+
+	// ErrDiscountAlreadyRedeemed is the partial unique index on
+	// discount_redemptions firing. It means a concurrent checkout committed
+	// this customer's one use of the code first - the eligibility check passed
+	// for both because neither had committed yet, which is exactly why the
+	// constraint exists rather than the check alone.
+	ErrDiscountAlreadyRedeemed = errors.New("discount already redeemed by this customer")
 )
 
 // ── Core structs ──────────────────────────────────────────────────────────────
@@ -139,9 +146,12 @@ type Booking struct {
 	// over THIS rather than EndTime, so cleanup is guarded by the database
 	// rather than by an application rule a race could walk through. Set to
 	// now on early completion to hand the remaining buffer back.
-	BlockedUntil       time.Time  `db:"blocked_until"`
-	Channel            string     `db:"channel"`
-	SpecialRequests    *string    `db:"special_requests"`
+	BlockedUntil    time.Time `db:"blocked_until"`
+	Channel         string    `db:"channel"`
+	SpecialRequests *string   `db:"special_requests"`
+	// DiscountCode is denormalised beside discount_amount so a receipt renders
+	// without a join and survives the discount row being deleted.
+	DiscountCode       *string    `db:"discount_code"`
 	CancellationReason *string    `db:"cancellation_reason"`
 	CancelledAt        *time.Time `db:"cancelled_at"`
 	CompletedAt        *time.Time `db:"completed_at"`
@@ -311,6 +321,30 @@ type FreedSlot struct {
 // and leaving a second way to say "a span of time" next to a typed one is
 // how the typing gets bypassed by whoever reaches for the shorter name.
 
+// AppliedDiscount is a resolved promo code, ready to be written down.
+//
+// Local to this package rather than imported from internal/promo, so the
+// dependency stays one-directional: booking knows how to record a discount,
+// promo knows nothing about bookings. The service layer takes it from a
+// consumer-defined interface (see discountResolver in service.go).
+//
+// It is written in the SAME TRANSACTION as the booking it belongs to. A
+// booking with a discount and no redemption row would leave the code usable
+// for ever; a redemption with no booking would burn the customer's one use for
+// nothing. Neither is recoverable automatically, so neither is allowed to
+// happen.
+type AppliedDiscount struct {
+	DiscountID uuid.UUID
+	CustomerID uuid.UUID
+	Code       string
+	// Amount is what the code ACTUALLY took off, which is not always what it
+	// advertises - the resolver caps a discount at the deposit.
+	Amount decimal.Decimal
+	// FinalPrice after the discount, so the repository writes one consistent
+	// set of numbers rather than recomputing.
+	FinalPrice decimal.Decimal
+}
+
 // ── Request structs ───────────────────────────────────────────────────────────
 
 // GetAvailableSlotsRequest is the query input for GET /api/v1/bookings/slots.
@@ -330,6 +364,9 @@ type CreateBookingRequest struct {
 	StartTime       string  `json:"start_time"       validate:"required"`
 	SpecialRequests *string `json:"special_requests"`
 	Channel         string  `json:"channel"          validate:"required,oneof=customer_pwa artist_dashboard walk_in phone instagram"`
+	// DiscountCode is optional. A logged-in customer is known at creation, so
+	// unlike the guest path this resolves here.
+	DiscountCode *string `json:"discount_code" validate:"omitempty,max=32"`
 }
 
 // HoldGuestSlotRequest is the body for POST /api/v1/bookings/guest/hold.
@@ -353,6 +390,11 @@ type SubmitGuestBookingRequest struct {
 	Name            string  `json:"name"             validate:"required,min=2,max=100"`
 	Phone           string  `json:"phone"            validate:"required,min=7,max=20"`
 	SpecialRequests *string `json:"special_requests"`
+	// DiscountCode is applied HERE and not at hold time, because a hold has no
+	// real customer yet - it carries SystemGuestPlaceholderID until this call
+	// creates the guest user. Eligibility is per customer, so there is nobody
+	// to check it against until now.
+	DiscountCode *string `json:"discount_code" validate:"omitempty,max=32"`
 }
 
 // ApproveBookingRequest is the request body for PATCH /bookings/:id/approve.

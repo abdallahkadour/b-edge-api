@@ -45,6 +45,8 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
+	// captures the redemption written alongside a booking, so a test can
+	lastApplied *AppliedDiscount
 	// Bulk schedule preview (migration 029)
 	enrichedForDay                        []*EnrichedBooking
 	enrichedForDayErr                     error
@@ -155,7 +157,8 @@ func (m *mockRepo) GetArtistStoreBuffer(_ context.Context, _ uuid.UUID, _ uuid.U
 func (m *mockRepo) CreateGuestUser(_ context.Context, _ string, _ string) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
-func (m *mockRepo) CreateBooking(_ context.Context, b *Booking) error {
+func (m *mockRepo) CreateBooking(_ context.Context, b *Booking, applied *AppliedDiscount) error {
+	m.lastApplied = applied
 	b.CreatedAt = time.Now()
 	b.UpdatedAt = time.Now()
 	m.createBookingCaptured = b
@@ -183,7 +186,8 @@ func (m *mockRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, refere
 	m.confirmDepositReceivedReferenceCalled = reference
 	return m.confirmDepositReceivedErr
 }
-func (m *mockRepo) AttachGuestAndSubmit(_ context.Context, _, _ uuid.UUID, _ *string) error {
+func (m *mockRepo) AttachGuestAndSubmit(_ context.Context, _, _ uuid.UUID, _ *string, applied *AppliedDiscount) error {
+	m.lastApplied = applied
 	return m.attachGuestAndSubmitErr
 }
 func (m *mockRepo) GetEnrichedBookingByID(_ context.Context, _ uuid.UUID) (*EnrichedBooking, error) {

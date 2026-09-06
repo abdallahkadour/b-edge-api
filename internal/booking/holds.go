@@ -107,7 +107,11 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		Channel:        ChannelCustomerPWA,
 	}
 
-	if err := s.repo.CreateBooking(ctx, b); err != nil {
+	// nil: a hold has no real customer yet - CustomerID is
+	// SystemGuestPlaceholderID until SubmitGuestBooking creates the guest
+	// user. Eligibility is per customer, so there is nobody to check a code
+	// against at this point. The code is applied at submit instead.
+	if err := s.repo.CreateBooking(ctx, b, nil); err != nil {
 		if errors.Is(err, ErrSlotUnavailable) {
 			return nil, apperror.Conflict("SLOT_UNAVAILABLE", "This slot was just taken. Please choose another time.")
 		}
@@ -161,7 +165,20 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 
 	// Atomically repoint customer_id and transition held → pending. Guarded on
 	// status = held AND held_until > NOW() so an expiry race cannot resurrect it.
-	if err := s.repo.AttachGuestAndSubmit(ctx, bookingID, guestUserID, req.SpecialRequests); err != nil {
+	// The guest user exists as of the line above, so a code can finally be
+	// checked against a real customer. AttachGuestAndSubmit writes the price,
+	// the status transition and the redemption in one transaction.
+	_, applied, err := s.applyDiscount(ctx, b.SalonID, guestUserID,
+		req.DiscountCode, b.FinalPrice, b.DepositAmount)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.AttachGuestAndSubmit(ctx, bookingID, guestUserID, req.SpecialRequests, applied); err != nil {
+		if errors.Is(err, ErrDiscountAlreadyRedeemed) {
+			return nil, apperror.Conflict("DISCOUNT_ALREADY_USED",
+				"You've already used that code. Please remove it and try again.")
+		}
 		if errors.Is(err, ErrBookingNotHeld) {
 			return nil, apperror.Conflict("HOLD_EXPIRED", "Your 10-minute hold expired. Please choose your time again.")
 		}

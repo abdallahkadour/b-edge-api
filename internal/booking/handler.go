@@ -15,6 +15,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
 
 // Handler handles all HTTP requests for the booking domain.
@@ -50,7 +51,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// billing.NewRepository is used here purely as a SubscriptionStatusReader
 	// (see that interface's doc comment) - this domain's own Repository
 	// stays entirely separate from billing's.
-	svc := NewService(repo, billing.NewRepository(pool), log)
+	// promo.NewService satisfies DiscountResolver structurally, the same way
+	// billing's repository satisfies SubscriptionStatusReader above. Wired at
+	// the composition root so neither domain imports the other's service.
+	svc := NewService(repo, billing.NewRepository(pool), log).
+		WithDiscounts(promo.NewService(promo.NewRepository(pool)))
 	handler := NewHandler(svc, log)
 
 	// ── Public routes - no authentication required ────────────────────────────

@@ -104,6 +104,11 @@ type Service struct {
 	subReader SubscriptionStatusReader
 	validate  *validator.Validate
 	log       *zap.Logger
+	// discounts is OPTIONAL - nil means promo codes are ignored entirely and
+	// every booking prices exactly as it did before the feature existed. That
+	// keeps every existing newTestService working untouched and makes the
+	// feature impossible to half-wire.
+	discounts DiscountResolver
 }
 
 // GetAvailableSlots runs the 7-step slot availability algorithm and returns

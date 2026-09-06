@@ -52,6 +52,11 @@ var (
 	// inside CreateOrder's transaction, which is what actually prevents
 	// overselling under concurrent orders.
 	ErrInsufficientStock = errors.New("one or more products in this order do not have enough stock available")
+
+	// ErrDiscountAlreadyRedeemed is the partial unique index on
+	// discount_redemptions firing: a concurrent checkout committed this
+	// customer's one use of the code first.
+	ErrDiscountAlreadyRedeemed = errors.New("discount already redeemed by this customer")
 )
 
 // Order status constants - the state machine from PRD §13.2, as actually
@@ -143,6 +148,8 @@ func toOrderResponse(o *Order, items []*OrderItem) *OrderResponse {
 		ID:                 o.ID,
 		Status:             o.Status,
 		TotalAmount:        o.TotalAmount,
+		DiscountAmount:     positiveOrNil(o.DiscountAmount),
+		DiscountCode:       o.DiscountCode,
 		PaymentReference:   o.PaymentReference,
 		DeliveryNotes:      o.DeliveryNotes,
 		DeliveryLat:        o.DeliveryLat,
@@ -202,11 +209,15 @@ type EnrichedOrderResponse struct {
 
 // Order mirrors a row in the orders table.
 type Order struct {
-	ID               uuid.UUID
-	SalonID          uuid.UUID
-	CustomerID       uuid.UUID
-	Status           string
-	TotalAmount      decimal.Decimal
+	ID          uuid.UUID
+	SalonID     uuid.UUID
+	CustomerID  uuid.UUID
+	Status      string
+	TotalAmount decimal.Decimal
+	// DiscountAmount and DiscountCode mirror bookings exactly, so both money
+	// paths have the same shape. TotalAmount is what is OWED, after this.
+	DiscountAmount   decimal.Decimal
+	DiscountCode     *string
 	PaymentReference *string
 	DeliveryNotes    *string
 	// DeliveryLat/DeliveryLng are the customer's pin-dropped location, nil
@@ -248,11 +259,15 @@ type OrderItemResponse struct {
 // order is meaningless without its line items, so callers always get both
 // together rather than needing a second request.
 type OrderResponse struct {
-	ID               uuid.UUID       `json:"id"`
-	Status           string          `json:"status"`
-	TotalAmount      decimal.Decimal `json:"total_amount"`
-	PaymentReference *string         `json:"payment_reference,omitempty"`
-	DeliveryNotes    *string         `json:"delivery_notes,omitempty"`
+	ID          uuid.UUID       `json:"id"`
+	Status      string          `json:"status"`
+	TotalAmount decimal.Decimal `json:"total_amount"`
+	// Omitted when nothing was discounted, so a receipt shows a discount line
+	// only when there is one.
+	DiscountAmount   *decimal.Decimal `json:"discount_amount,omitempty"`
+	DiscountCode     *string          `json:"discount_code,omitempty"`
+	PaymentReference *string          `json:"payment_reference,omitempty"`
+	DeliveryNotes    *string          `json:"delivery_notes,omitempty"`
 	// DeliveryLat/DeliveryLng: omitted entirely for orders placed before
 	// this existed - the frontend falls back to "no location on file"
 	// rather than a misleading (0,0).
@@ -291,6 +306,10 @@ type CreateOrderRequest struct {
 	DeliveryLng   float64            `json:"delivery_lng"   validate:"required,min=-180,max=180"`
 	DeliveryNotes *string            `json:"delivery_notes" validate:"omitempty,max=500"`
 	Items         []OrderItemRequest `json:"items"          validate:"required,min=1,dive"`
+	// DiscountCode is optional. Unlike a booking, an order has no deposit, so
+	// a code may reduce the total all the way to zero - see
+	// internal/pkg/discount's cap, which floors at the deposit.
+	DiscountCode *string `json:"discount_code" validate:"omitempty,max=32"`
 }
 
 // ConfirmOrderPaymentRequest is the body for PATCH /artists/orders/:id/confirm-payment.
@@ -303,4 +322,16 @@ type ConfirmOrderPaymentRequest struct {
 // CancelOrderRequest is the body for PATCH /orders/:id/cancel.
 type CancelOrderRequest struct {
 	Reason *string `json:"reason" validate:"omitempty,max=500"`
+}
+
+// positiveOrNil hides a zero discount from the receipt.
+//
+// A "$0.00 off" line is noise on every undiscounted order, and rendering it
+// invites the reader to wonder what went wrong. Absent means there was no
+// discount, which is the truth for almost every order.
+func positiveOrNil(d decimal.Decimal) *decimal.Decimal {
+	if d.IsZero() {
+		return nil
+	}
+	return &d
 }

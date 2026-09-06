@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 )
 
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
@@ -29,7 +30,7 @@ type Repository interface {
 	// CreateOrder inserts the order and all its line items in a single
 	// transaction - an order with some items persisted and others lost to
 	// a mid-write failure would be a genuinely bad state to leave behind.
-	CreateOrder(ctx context.Context, o *Order, items []*OrderItem) error
+	CreateOrder(ctx context.Context, o *Order, items []*OrderItem, applied *AppliedDiscount) error
 	GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*OrderItem, error)
 	GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*Order, error)
 
@@ -154,7 +155,7 @@ func (r *pgRepo) UpdateProduct(ctx context.Context, id uuid.UUID, req UpdateProd
 
 // ── Orders ──────────────────────────────────────────────────────────────
 
-func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem) error {
+func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem, applied *AppliedDiscount) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("create order: begin tx: %w", err)
@@ -162,10 +163,12 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem) 
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO orders (id, salon_id, customer_id, status, total_amount, delivery_notes, delivery_lat, delivery_lng)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO orders (id, salon_id, customer_id, status, total_amount, delivery_notes, delivery_lat, delivery_lng,
+		                    discount_amount, discount_code)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at, updated_at`,
 		o.ID, o.SalonID, o.CustomerID, OrderStatusPlaced, o.TotalAmount, o.DeliveryNotes, o.DeliveryLat, o.DeliveryLng,
+		o.DiscountAmount, o.DiscountCode,
 	).Scan(&o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create order: insert order: %w", err)
@@ -203,6 +206,15 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem) 
 		)
 		if err != nil {
 			return fmt.Errorf("create order: insert item: %w", err)
+		}
+	}
+
+	// Same transaction as the order it belongs to - a redemption without an
+	// order would burn the customer's one use for nothing, and an order with
+	// a discount and no redemption would leave the code usable for ever.
+	if applied != nil {
+		if err := insertOrderRedemptionTx(ctx, tx, applied, o.ID); err != nil {
+			return err
 		}
 	}
 
@@ -570,4 +582,37 @@ func (r *pgRepo) FindOrCreateCustomerByPhone(ctx context.Context, name, phone st
 		return uuid.Nil, fmt.Errorf("find or create customer: insert: %w", err)
 	}
 	return id, nil
+}
+
+// AppliedDiscount is a resolved code, ready to be written down.
+//
+// Local to this package for the same reason booking.AppliedDiscount is: the
+// dependency stays one-directional, and promo never learns what an order is.
+type AppliedDiscount struct {
+	DiscountID uuid.UUID
+	CustomerID uuid.UUID
+	Code       string
+	Amount     decimal.Decimal
+}
+
+// insertOrderRedemptionTx records a code's use inside the caller's transaction.
+//
+// The partial unique index is the real guard on "once per customer" - two
+// concurrent checkouts both pass the eligibility check because neither has
+// committed, and exactly one lands here. The loser's whole order rolls back,
+// which is right: they were quoted a total including a discount they cannot
+// have.
+func insertOrderRedemptionTx(ctx context.Context, tx pgx.Tx, applied *AppliedDiscount, orderID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO discount_redemptions (discount_id, customer_id, order_id, amount)
+		VALUES ($1, $2, $3, $4)`,
+		applied.DiscountID, applied.CustomerID, orderID, applied.Amount)
+	if err != nil {
+		var pgErr interface{ SQLState() string }
+		if errors.As(err, &pgErr) && pgErr.SQLState() == "23505" {
+			return ErrDiscountAlreadyRedeemed
+		}
+		return fmt.Errorf("insert order discount redemption: %w", err)
+	}
+	return nil
 }

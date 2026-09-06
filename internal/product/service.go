@@ -12,15 +12,31 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
 
 // Service handles all product-store business logic.
 type Service struct {
-	repo     Repository
-	validate *validator.Validate
+	// discounts is optional; nil means promo codes are ignored entirely.
+	discounts DiscountResolver
+	repo      Repository
+	validate  *validator.Validate
 }
 
 // NewService constructs a Service.
+// DiscountResolver prices an order with an optional promo code.
+//
+// Consumer-defined for the same reason booking.DiscountResolver is: product
+// states the one method it needs and *promo.Service satisfies it
+// structurally, so promo never learns what an order is.
+//
+// Optional - a nil resolver means codes are ignored and every order prices
+// exactly as it did before this existed.
+type DiscountResolver interface {
+	Resolve(ctx context.Context, salonID, customerID uuid.UUID, code string,
+		base, surcharge, deposit decimal.Decimal) (*promo.Result, error)
+}
+
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo, validate: validation.New()}
 }
@@ -203,17 +219,33 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		return nil, fmt.Errorf("place order: resolve customer: %w", err)
 	}
 
-	order := &Order{
-		ID:            uuid.New(),
-		SalonID:       salonID,
-		CustomerID:    customerID,
-		TotalAmount:   total,
-		DeliveryNotes: req.DeliveryNotes,
-		DeliveryLat:   &req.DeliveryLat,
-		DeliveryLng:   &req.DeliveryLng,
+	// The customer exists as of FindOrCreateCustomerByPhone above, so the code
+	// can be checked against a real identity. Orders carry NO DEPOSIT, so the
+	// resolver's floor is zero and a large enough code can take the total all
+	// the way down - which is correct here and deliberately not so for
+	// bookings.
+	total, applied, err := s.applyDiscount(ctx, salonID, customerID, req.DiscountCode, total)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := s.repo.CreateOrder(ctx, order, items); err != nil {
+	order := &Order{
+		ID:             uuid.New(),
+		SalonID:        salonID,
+		CustomerID:     customerID,
+		TotalAmount:    total,
+		DiscountAmount: discountAmountOf(applied),
+		DiscountCode:   discountCodeOf(applied),
+		DeliveryNotes:  req.DeliveryNotes,
+		DeliveryLat:    &req.DeliveryLat,
+		DeliveryLng:    &req.DeliveryLng,
+	}
+
+	if err := s.repo.CreateOrder(ctx, order, items, applied); err != nil {
+		if errors.Is(err, ErrDiscountAlreadyRedeemed) {
+			return nil, apperror.Conflict("DISCOUNT_ALREADY_USED",
+				"You've already used that code. Please remove it and try again.")
+		}
 		if errors.Is(err, ErrInsufficientStock) {
 			return nil, apperror.Conflict("PRODUCT_OUT_OF_STOCK",
 				"Sorry, one or more items in your order just sold out. Please update your cart and try again.")
@@ -385,4 +417,60 @@ func (s *Service) transitionOrder(ctx context.Context, orderID, salonID uuid.UUI
 // message.
 func mapValidationError(err error) error {
 	return validation.MapError(err)
+}
+
+// WithDiscounts attaches a resolver. Separate from NewService so existing call
+// sites, including every test, keep working untouched.
+func (s *Service) WithDiscounts(r DiscountResolver) *Service {
+	s.discounts = r
+	return s
+}
+
+// applyDiscount prices an order and returns the redemption to write with it.
+//
+// A refused code is not an error: a customer mistyping one still gets their
+// order at full price rather than a failure to recover from mid-checkout.
+func (s *Service) applyDiscount(
+	ctx context.Context,
+	salonID, customerID uuid.UUID,
+	code *string,
+	total decimal.Decimal,
+) (decimal.Decimal, *AppliedDiscount, error) {
+	if s.discounts == nil || code == nil || *code == "" {
+		return total, nil, nil
+	}
+
+	// Zero surcharge and zero deposit: neither concept exists for a product
+	// order. The early-bird fee is a booking idea, and nothing is paid up
+	// front.
+	res, err := s.discounts.Resolve(ctx, salonID, customerID, *code,
+		total, decimal.Zero, decimal.Zero)
+	if err != nil {
+		return total, nil, fmt.Errorf("apply order discount: %w", err)
+	}
+	if !res.Applied() {
+		return total, nil, nil
+	}
+
+	return res.Breakdown.Final, &AppliedDiscount{
+		DiscountID: *res.DiscountID,
+		CustomerID: customerID,
+		Code:       res.Breakdown.AppliedCode,
+		Amount:     res.Breakdown.DiscountTotal,
+	}, nil
+}
+
+func discountAmountOf(a *AppliedDiscount) decimal.Decimal {
+	if a == nil {
+		return decimal.Zero
+	}
+	return a.Amount
+}
+
+func discountCodeOf(a *AppliedDiscount) *string {
+	if a == nil {
+		return nil
+	}
+	code := a.Code
+	return &code
 }

@@ -11,6 +11,8 @@ package product
 import (
 	"context"
 	"errors"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/discount"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -25,6 +27,7 @@ import (
 // ── Mock repository ──────────────────────────────────────────────────────────
 
 type mockRepo struct {
+	lastOrderDiscount *AppliedDiscount
 	// products, keyed by ID so PlaceOrder's per-item lookups can return
 	// genuinely different products (and differing salons/prices) in one test.
 	products      map[uuid.UUID]*Product
@@ -81,7 +84,8 @@ func (m *mockRepo) UpdateProduct(_ context.Context, _ uuid.UUID, _ UpdateProduct
 	return m.updateProdErr
 }
 
-func (m *mockRepo) CreateOrder(_ context.Context, o *Order, items []*OrderItem) error {
+func (m *mockRepo) CreateOrder(_ context.Context, o *Order, items []*OrderItem, applied *AppliedDiscount) error {
+	m.lastOrderDiscount = applied
 	if m.createOrderErr != nil {
 		return m.createOrderErr
 	}
@@ -776,3 +780,112 @@ func TestListOrdersByCustomer_NoOrders_IssuesNoItemQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+// ── Order discounts (Sprint 9, T9.6) ─────────────────────────────────────────
+
+// TestPlaceOrder_NoResolver_PricesAsBefore - the resolver is optional, and its
+// absence must be indistinguishable from the behaviour before discounts
+// existed. This is what lets every other test in this file stay untouched.
+func TestPlaceOrder_NoResolver_IsUnchanged(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	assert.Nil(t, svc.discounts, "no resolver by default")
+}
+
+// TestApplyDiscount_NoCode_IsIdentity - the overwhelmingly common path must
+// not consult the resolver at all.
+func TestApplyDiscount_NoCode_IsIdentity(t *testing.T) {
+	svc := newTestService(&mockRepo{}).WithDiscounts(&stubResolver{t: t, mustNotBeCalled: true})
+
+	total, applied, err := svc.applyDiscount(context.Background(), uuid.New(), uuid.New(), nil, dec("100.00"))
+
+	require.NoError(t, err)
+	assert.Nil(t, applied)
+	assert.True(t, total.Equal(dec("100.00")))
+}
+
+// TestApplyDiscount_RefusedCode_IsNotAnError - a customer mistyping a code
+// still gets their order, at full price, rather than a failure to recover
+// from mid-checkout.
+func TestApplyDiscount_RefusedCode_IsNotAnError(t *testing.T) {
+	code := "NOPE"
+	svc := newTestService(&mockRepo{}).WithDiscounts(&stubResolver{
+		result: &promo.Result{
+			Breakdown: discount.Resolve(discount.Input{Base: dec("100.00")}),
+			Reason:    "That code has expired.",
+		},
+	})
+
+	total, applied, err := svc.applyDiscount(context.Background(), uuid.New(), uuid.New(), &code, dec("100.00"))
+
+	require.NoError(t, err, "a refused code is an ordinary outcome, not an error")
+	assert.Nil(t, applied, "nothing to redeem")
+	assert.True(t, total.Equal(dec("100.00")), "full price")
+}
+
+// TestApplyDiscount_AppliedCode_ReducesAndRecords.
+func TestApplyDiscount_AppliedCode_ReducesAndRecords(t *testing.T) {
+	code := "TENOFF"
+	id := uuid.New()
+	customer := uuid.New()
+	svc := newTestService(&mockRepo{}).WithDiscounts(&stubResolver{
+		result: &promo.Result{
+			Breakdown: discount.Resolve(discount.Input{
+				Base: dec("100.00"),
+				Code: &discount.Rule{Code: "TENOFF", Kind: discount.Fixed, Value: dec("10.00")},
+			}),
+			DiscountID: &id,
+		},
+	})
+
+	total, applied, err := svc.applyDiscount(context.Background(), uuid.New(), customer, &code, dec("100.00"))
+
+	require.NoError(t, err)
+	assert.True(t, total.Equal(dec("90.00")), "got %s", total)
+	require.NotNil(t, applied)
+	assert.Equal(t, id, applied.DiscountID)
+	assert.Equal(t, customer, applied.CustomerID)
+	assert.Equal(t, "TENOFF", applied.Code)
+	assert.True(t, applied.Amount.Equal(dec("10.00")))
+}
+
+// TestApplyDiscount_OrdersHaveNoDeposit_SoACodeCanReachZero. Bookings floor a
+// discount at the deposit, because the customer would otherwise have overpaid
+// through a transfer already sent. An order has no deposit, so that floor is
+// zero and a large enough code takes the whole total.
+func TestApplyDiscount_OrdersHaveNoDeposit_SoACodeCanReachZero(t *testing.T) {
+	code := "FREE"
+	id := uuid.New()
+	svc := newTestService(&mockRepo{}).WithDiscounts(&stubResolver{
+		result: &promo.Result{
+			Breakdown: discount.Resolve(discount.Input{
+				Base: dec("40.00"),
+				Code: &discount.Rule{Code: "FREE", Kind: discount.Percentage, Value: dec("100")},
+			}),
+			DiscountID: &id,
+		},
+	})
+
+	total, applied, err := svc.applyDiscount(context.Background(), uuid.New(), uuid.New(), &code, dec("40.00"))
+
+	require.NoError(t, err)
+	assert.True(t, total.IsZero(), "got %s", total)
+	require.NotNil(t, applied)
+}
+
+type stubResolver struct {
+	t               *testing.T
+	result          *promo.Result
+	mustNotBeCalled bool
+}
+
+func (s *stubResolver) Resolve(_ context.Context, _, _ uuid.UUID, _ string,
+	base, _, _ decimal.Decimal) (*promo.Result, error) {
+	if s.mustNotBeCalled {
+		s.t.Fatal("resolver must not be consulted when there is no code")
+	}
+	return s.result, nil
+}
+
+func dec(v string) decimal.Decimal { return decimal.RequireFromString(v) }

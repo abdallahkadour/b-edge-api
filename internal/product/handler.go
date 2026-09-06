@@ -10,6 +10,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
 
 // Handler handles all HTTP requests for the product store.
@@ -20,7 +21,9 @@ type Handler struct {
 // RegisterRoutes attaches product-store routes to the Fiber app.
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
-	svc := NewService(repo)
+	// promo.NewService satisfies DiscountResolver structurally - wired at the
+	// composition root so neither domain imports the other's service.
+	svc := NewService(repo).WithDiscounts(promo.NewService(promo.NewRepository(pool)))
 	handler := &Handler{svc: svc}
 
 	auth := middleware.RequireAuth()

@@ -2,6 +2,7 @@
 package review
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -176,6 +177,9 @@ func (h *Handler) GetReviewsByArtist(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=[]EnrichedReviewResponse}
 // @Router       /public/reviews/artist/{artist_id} [get]
 func (h *Handler) GetPublicReviewsByArtist(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Reviews)
+
 	artistID, err := uuid.Parse(c.Params("artist_id"))
 	if err != nil {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")

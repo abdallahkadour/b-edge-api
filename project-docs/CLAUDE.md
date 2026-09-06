@@ -33,7 +33,7 @@ Lebanon." Solo founder build.
 | Migrations | **35** (latest `035_dual_layer_reviews`) |
 | Tables | **29** |
 | Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **102** paths in swagger |
-| Go tests | **667**, all passing |
+| Go tests | **674**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |
 
@@ -42,8 +42,9 @@ client, customerauth, discovery, earnings, **inbox**, media, notification,
 onboarding, product, review, **share** — plus `domain/auth`, `config`,
 `middleware`.
 
-**Leaf packages** (`internal/pkg/`): apperror, **bidi**, hash, jwt, **money**,
-**openinghours**, **optional**, response, **subscription**, **validation**.
+**Leaf packages** (`internal/pkg/`): apperror, **bidi**, **clientip**, hash,
+**httpcache**, jwt, **money**, **openinghours**, **optional**, response,
+**subscription**, **validation**.
 
 Bold entries are recent and are not described in any older doc.
 

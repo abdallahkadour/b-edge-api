@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ func NewLogger(rootLogger *zap.Logger) fiber.Handler {
 			zap.String("path", path),
 			zap.Int("status", c.Response().StatusCode()),
 			zap.Duration("latency", time.Since(start)),
-			zap.String("ip", c.IP()),
+			zap.String("ip", clientip.From(c)),
 			zap.String("request_id", c.GetRespHeader("X-Request-Id")),
 		}
 

@@ -3,6 +3,7 @@
 package media
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +87,9 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // @Failure      400 {object} response.ErrorBody
 // @Router       /media/portfolio/{artist_id} [get]
 func (h *Handler) GetPortfolio(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Catalogue)
+
 	artistID, err := uuid.Parse(c.Params("artist_id"))
 	if err != nil {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")

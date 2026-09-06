@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -71,7 +72,7 @@ func (h *Handler) Approve(c *fiber.Ctx) error {
 	}
 	adminID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.Approve(c.Context(), artistID, adminID, c.IP()); err != nil {
+	if err := h.svc.Approve(c.Context(), artistID, adminID, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -102,7 +103,7 @@ func (h *Handler) Reject(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.svc.Reject(c.Context(), artistID, adminID, req, c.IP()); err != nil {
+	if err := h.svc.Reject(c.Context(), artistID, adminID, req, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)

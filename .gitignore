@@ -26,3 +26,9 @@ full_project.txt
 
 # Graphify (VS Code knowledge-graph tool) output
 /graphify-out/
+
+# Database dumps. Real customer data - deposit records, booking history,
+# phone numbers. scripts/backup.sh writes here and the contents must never
+# reach a git remote.
+backups/
+*.dump

@@ -21,6 +21,7 @@
 package auth
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -126,7 +127,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	result, err := h.svc.Login(c.Context(), req, c.IP())
+	result, err := h.svc.Login(c.Context(), req, clientip.From(c))
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@
 package discovery
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +55,9 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // @Failure      400 {object} response.ErrorBody "INVALID_CATEGORY"
 // @Router       /discovery/artists [get]
 func (h *Handler) ListArtists(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Discovery)
+
 	params := ListArtistsParams{
 		City:     c.Query("city"),
 		Category: c.Query("category"),
@@ -80,6 +84,9 @@ func (h *Handler) ListArtists(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody "ARTIST_NOT_FOUND"
 // @Router       /discovery/artists/{id} [get]
 func (h *Handler) GetArtistProfile(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Discovery)
+
 	artistID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")

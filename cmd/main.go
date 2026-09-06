@@ -88,8 +88,21 @@ func main() {
 	}
 	defer shutdownTracing() //nolint:errcheck
 
+	// Who may tell us a client's IP. Empty by default - see config/proxy.go
+	// for why the default is to trust nothing and why the header is only
+	// believed when the connection came from a listed proxy.
+	proxyCfg := config.LoadProxyConfig()
+	if proxyCfg.Enabled() {
+		logger.Info("Trusting proxy client-IP header",
+			zap.String("header", proxyCfg.Header),
+			zap.Int("trusted_cidrs", len(proxyCfg.TrustedProxies)),
+		)
+	} else {
+		logger.Info("No trusted proxies configured; client IP is the socket peer")
+	}
+
 	// Create Fiber app
-	app := fiber.New(fiber.Config{
+	fiberCfg := fiber.Config{
 		AppName:      "B-Edge API",
 		ErrorHandler: apperror.ErrorHandler,
 		// Fiber defaults to 4MB, which would reject an image upload
@@ -99,7 +112,9 @@ func main() {
 		// request body in this API is small JSON, so raising this
 		// globally rather than per-route costs nothing elsewhere.
 		BodyLimit: 20 * 1024 * 1024,
-	})
+	}
+	proxyCfg.Apply(&fiberCfg)
+	app := fiber.New(fiberCfg)
 
 	// app.Use(func(c *fiber.Ctx) error {
 	// 	c.Locals("logger", logger)

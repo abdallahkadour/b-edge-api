@@ -3,6 +3,7 @@ package artist
 
 import (
 	"errors"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -187,6 +188,9 @@ func (h *Handler) UpdateStore(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody
 // @Router       /artists/{id} [get]
 func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Catalogue)
+
 	// The :id param accepts either a real UUID or a public handle (e.g.
 	// "rania") - ResolveArtistID tries UUID first, falls back to a handle
 	// lookup. This keeps every existing UUID-based link working exactly as
@@ -221,6 +225,9 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody
 // @Router       /artists/{id}/services [get]
 func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Catalogue)
+
 	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
@@ -305,6 +312,9 @@ func (h *Handler) UpdateProfile(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=[]Store}
 // @Router       /artists/{id}/stores [get]
 func (h *Handler) GetStoresByArtist(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.Catalogue)
+
 	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {

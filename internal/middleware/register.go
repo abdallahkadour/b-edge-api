@@ -11,6 +11,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"go.uber.org/zap"
 )
 
@@ -128,6 +130,11 @@ func Register(app *fiber.App, logger *zap.Logger) {
 	app.Use(limiter.New(limiter.Config{
 		Max:        maxRequestsPerWindow,
 		Expiration: rateLimitWindow,
+		// Explicit rather than Fiber's default of c.IP(), which returns the
+		// EMPTY STRING when proxy trust is on and the header is absent - every
+		// such request would then share one bucket, which is the outage this
+		// limiter exists to prevent. See internal/pkg/clientip.
+		KeyGenerator: clientip.From,
 		LimitReached: func(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"data": nil,

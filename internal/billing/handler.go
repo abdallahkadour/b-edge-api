@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -290,7 +291,7 @@ func (h *Handler) AdminConfirmInvoice(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid invoice ID")
 	}
 
-	inv, err := h.svc.ConfirmInvoice(c.Context(), invoiceID, adminID, c.IP())
+	inv, err := h.svc.ConfirmInvoice(c.Context(), invoiceID, adminID, clientip.From(c))
 	if err != nil {
 		return err
 	}
@@ -320,7 +321,7 @@ func (h *Handler) AdminVoidInvoice(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	if err := h.svc.VoidInvoice(c.Context(), invoiceID, adminID, req, c.IP()); err != nil {
+	if err := h.svc.VoidInvoice(c.Context(), invoiceID, adminID, req, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -350,7 +351,7 @@ func (h *Handler) AdminUpdateSubscription(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	sub, err := h.svc.UpdateSubscription(c.Context(), subscriptionID, adminID, req, c.IP())
+	sub, err := h.svc.UpdateSubscription(c.Context(), subscriptionID, adminID, req, clientip.From(c))
 	if err != nil {
 		return err
 	}

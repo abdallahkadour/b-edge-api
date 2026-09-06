@@ -94,6 +94,18 @@ func SecurityHeaders() fiber.Handler {
 		// carry an identifier out of third-party logs.
 		c.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
+		// Fail closed on caching. Before 2026-09-06 no endpoint sent a
+		// Cache-Control header at all, which is undefined rather than safe:
+		// a CDN caches nothing (losing the whole point of one) while a
+		// less careful intermediate might cache an authenticated response
+		// and serve one customer's bookings to another.
+		//
+		// The handful of genuinely public reads opt back in by calling
+		// httpcache.Public, which runs later and overwrites this. Caching
+		// by default and opting out for private data has one failure mode
+		// and it is a data breach.
+		c.Set(fiber.HeaderCacheControl, "no-store")
+
 		c.Set("Content-Security-Policy", APIContentSecurityPolicy)
 		c.Set("Permissions-Policy", permissionsPolicy)
 

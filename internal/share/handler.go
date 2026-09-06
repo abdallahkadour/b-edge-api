@@ -3,6 +3,7 @@ package share
 import (
 	"errors"
 	"fmt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 	"html"
 	"os"
 	"strings"
@@ -55,6 +56,9 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // callers for the same URL, which is both fragile (the UA list is never
 // complete) and the exact pattern search engines treat as cloaking.
 func (h *Handler) ArtistPreview(c *fiber.Ctx) error {
+	// Public and identical for every caller - safe for a shared cache.
+	httpcache.Public(c, httpcache.SharePreview)
+
 	slug := c.Params("handle")
 
 	preview, err := h.repo.GetPreviewByHandleOrID(c.Context(), slug)

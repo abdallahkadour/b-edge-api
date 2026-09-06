@@ -45,6 +45,9 @@ type DiscountResolver interface {
 	// ReleaseForBooking implements D3.5 - a customer who did not break the
 	// booking keeps their code.
 	ReleaseForBooking(ctx context.Context, bookingID uuid.UUID) error
+	// Preview prices a code without committing to it.
+	Preview(ctx context.Context, salonID, customerID uuid.UUID, code string,
+		base, surcharge, deposit decimal.Decimal) (*promo.PreviewResponse, error)
 }
 
 func NewService(repo Repository, subReader SubscriptionStatusReader, log ...*zap.Logger) *Service {
@@ -76,6 +79,36 @@ func discountCodeOf(a *AppliedDiscount) *string {
 	}
 	code := a.Code
 	return &code
+}
+
+// PreviewDiscount answers "what would this code do to this booking", without
+// committing anything.
+//
+// Takes a booking rather than a service + slot because the price being
+// discounted is already computed and stored on the held row - including the
+// early-bird surcharge. Re-deriving it here would be a second implementation
+// of the pricing that could disagree with the first.
+//
+// PUBLIC, because guest holds are. A held guest booking carries
+// SystemGuestPlaceholderID, so the per-customer checks (already used,
+// first-time-only) cannot be evaluated yet and the preview reports the code's
+// face value. Those checks run for real at submit, which is the first moment a
+// customer exists - see SubmitGuestBooking.
+func (s *Service) PreviewDiscount(ctx context.Context, bookingID uuid.UUID, code string) (*promo.PreviewResponse, error) {
+	if s.discounts == nil {
+		return &promo.PreviewResponse{Code: code, Valid: false, Reason: "That code isn't valid."}, nil
+	}
+
+	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, errBookingNotFound()
+		}
+		return nil, fmt.Errorf("preview discount: %w", err)
+	}
+
+	return s.discounts.Preview(ctx, b.SalonID, b.CustomerID, code,
+		b.FinalPrice, decimal.Zero, b.DepositAmount)
 }
 
 // WithDiscounts attaches a resolver. Separate from NewService so the dozen

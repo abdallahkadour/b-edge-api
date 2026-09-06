@@ -32,7 +32,7 @@ Lebanon." Solo founder build.
 | Angular | 21.2 — `customer-pwa`, `artist-dashboard`, `@bedge/shared` |
 | Migrations | **37** (latest `037_discounts`) |
 | Tables | **29** |
-| Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **102** paths in swagger |
+| Route registrations | **115** (44 GET, 33 POST, 30 PATCH, 6 DELETE, 2 PUT) · **105** paths in swagger |
 | Go tests | **705**, all passing |
 | Frontend routes | 13 customer · 25 artist-dashboard |
 | Branches | api `feature/feasibility-sprints-1-3` · web `feature/feasibility-sprints-2-3` |

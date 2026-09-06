@@ -63,6 +63,9 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// before the parametric /:id route in the protected group.
 	pub := app.Group("/api/v1/bookings")
 	pub.Get("/slots", handler.GetAvailableSlots)
+	// Public for the same reason the guest hold routes are: a customer typing
+	// a promo code has no account yet.
+	pub.Post("/:id/discount-preview", handler.PreviewDiscount)
 	pub.Post("/guest/hold", handler.HoldGuestSlot)
 	pub.Post("/waitlist", handler.JoinWaitlist)
 	pub.Patch("/guest/:id/submit", handler.SubmitGuestBooking)
@@ -740,4 +743,34 @@ func (h *Handler) PreviewShiftDay(c *fiber.Ctx) error {
 		return err
 	}
 	return response.OK(c, result)
+}
+
+// PreviewDiscount godoc
+// @Summary      Check what a discount code would do to a held booking (public)
+// @Tags         bookings
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Booking UUID"
+// @Param        body body PreviewDiscountRequest true "The code to try"
+// @Success      200 {object} response.Body{data=promo.PreviewResponse}
+// @Router       /bookings/{id}/discount-preview [post]
+func (h *Handler) PreviewDiscount(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return errBookingNotFound()
+	}
+
+	var req PreviewDiscountRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+	if err := h.svc.validate.Struct(req); err != nil {
+		return validation.MapError(err)
+	}
+
+	out, err := h.svc.PreviewDiscount(c.Context(), id, req.Code)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
 }

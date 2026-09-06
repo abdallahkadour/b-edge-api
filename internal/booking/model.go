@@ -345,6 +345,11 @@ type AppliedDiscount struct {
 	FinalPrice decimal.Decimal
 }
 
+// PreviewDiscountRequest is the body for POST /bookings/:id/discount-preview.
+type PreviewDiscountRequest struct {
+	Code string `json:"code" validate:"required,min=1,max=32"`
+}
+
 // ── Request structs ───────────────────────────────────────────────────────────
 
 // GetAvailableSlotsRequest is the query input for GET /api/v1/bookings/slots.

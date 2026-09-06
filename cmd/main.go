@@ -30,6 +30,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
+	"github.com/abdallahkadour/b-edge-api/internal/promo"
 	review "github.com/abdallahkadour/b-edge-api/internal/review"
 	"github.com/abdallahkadour/b-edge-api/internal/share"
 	"github.com/gofiber/fiber/v2"
@@ -159,6 +160,9 @@ func main() {
 	customerauth.RegisterRoutes(app, pool, logger)
 	booking.RegisterRoutes(app, pool, logger)
 	artist.RegisterRoutes(app, pool, logger)
+	// promo has no logger of its own - nothing in it is worth a log line that
+	// the request logger does not already carry.
+	promo.RegisterRoutes(app, pool)
 	review.RegisterRoutes(app, pool, logger)
 	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)

@@ -99,7 +99,7 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	result, err := h.svc.Register(c.Context(), req)
+	result, err := h.svc.Register(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	result, err := h.svc.Login(c.Context(), req, clientip.From(c))
+	result, err := h.svc.Login(c.UserContext(), req, clientip.From(c))
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (h *Handler) Refresh(c *fiber.Ctx) error {
 		return apperror.Unauthorized("TOKEN_MISSING", "Authentication required")
 	}
 
-	result, err := h.svc.Refresh(c.Context(), rawToken)
+	result, err := h.svc.Refresh(c.UserContext(), rawToken)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (h *Handler) Logout(c *fiber.Ctx) error {
 	rawToken := c.Cookies(refreshTokenCookie)
 	if rawToken != "" {
 		// Best effort - do not fail logout if token not found
-		if err := h.svc.Logout(c.Context(), rawToken); err != nil {
+		if err := h.svc.Logout(c.UserContext(), rawToken); err != nil {
 			h.log.Warn("logout: failed to revoke token", zap.Error(err))
 		}
 	}
@@ -206,7 +206,7 @@ func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
 	}
 
 	// Service is always silent - never reveals if email exists
-	h.svc.ForgotPassword(c.Context(), req) //nolint:errcheck
+	h.svc.ForgotPassword(c.UserContext(), req) //nolint:errcheck
 
 	// Always return 204 - never reveal if the email is registered
 	return response.NoContent(c)
@@ -227,7 +227,7 @@ func (h *Handler) ResetPassword(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	if err := h.svc.ResetPassword(c.Context(), req); err != nil {
+	if err := h.svc.ResetPassword(c.UserContext(), req); err != nil {
 		return err
 	}
 
@@ -252,7 +252,7 @@ func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.ChangePassword(c.Context(), userID, req); err != nil {
+	if err := h.svc.ChangePassword(c.UserContext(), userID, req); err != nil {
 		return err
 	}
 
@@ -270,7 +270,7 @@ func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 func (h *Handler) FreezeAccount(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.FreezeAccount(c.Context(), userID); err != nil {
+	if err := h.svc.FreezeAccount(c.UserContext(), userID); err != nil {
 		return err
 	}
 
@@ -288,7 +288,7 @@ func (h *Handler) FreezeAccount(c *fiber.Ctx) error {
 func (h *Handler) UnfreezeAccount(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.UnfreezeAccount(c.Context(), userID); err != nil {
+	if err := h.svc.UnfreezeAccount(c.UserContext(), userID); err != nil {
 		return err
 	}
 
@@ -306,7 +306,7 @@ func (h *Handler) UnfreezeAccount(c *fiber.Ctx) error {
 func (h *Handler) DeleteAccount(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.DeleteAccount(c.Context(), userID); err != nil {
+	if err := h.svc.DeleteAccount(c.UserContext(), userID); err != nil {
 		return err
 	}
 

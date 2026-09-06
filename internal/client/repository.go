@@ -168,7 +168,10 @@ func (r *pgRepo) ListClients(ctx context.Context, artistID uuid.UUID, q string) 
 	}
 	defer rows.Close()
 
-	var result []*ClientRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ClientRow, 0)
 	for rows.Next() {
 		c, err := scanClientRow(rows)
 		if err != nil {
@@ -217,7 +220,10 @@ func (r *pgRepo) GetClientHistory(ctx context.Context, artistID, customerID uuid
 	}
 	defer rows.Close()
 
-	var result []*BookingHistoryRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*BookingHistoryRow, 0)
 	for rows.Next() {
 		h := &BookingHistoryRow{}
 		if err := rows.Scan(

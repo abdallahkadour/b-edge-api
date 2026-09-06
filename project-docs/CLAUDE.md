@@ -180,6 +180,20 @@ Two suites are worth knowing before writing tests:
   can highlight; only genuinely unattributable failures (malformed syntax, empty
   body) stay a 400.
 
+- **Handlers pass `c.UserContext()`, never `c.Context()`.** The latter is
+  fasthttp's `*RequestCtx`: pooled and reset when the handler returns, and
+  carrying no deadline. `middleware.RequestContext` sets a real,
+  deadline-bounded context so `c.UserContext()` returns something that can
+  actually end - unset, Fiber hands back `context.Background()`, which never
+  cancels, so the naive swap is worse than the bug. The one legitimate use of
+  `c.Context()` is `internal/pkg/clientip`, which needs `RemoteIP()` off the
+  connection and reads it synchronously.
+
+- **Every list result is built with `make([]*T, 0)`, never `var xs []*T`.** A
+  nil Go slice marshals to JSON `null`, which no Angular `@for` can iterate.
+  Only `ApiService.getArray` coalesces that away, so relying on it makes
+  correctness depend on which client helper a caller picked.
+
 - User-supplied text rendered to a *different* person must go through
   `internal/pkg/bidi`. A bidi override is not markup, so no escaping catches
   it. Current surfaces: Open Graph tags, notification bodies, `.ics`

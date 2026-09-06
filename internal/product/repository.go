@@ -119,7 +119,10 @@ func (r *pgRepo) GetProductsBySalon(ctx context.Context, salonID uuid.UUID, acti
 	}
 	defer rows.Close()
 
-	var result []*Product
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*Product, 0)
 	for rows.Next() {
 		p := &Product{}
 		if err := rows.Scan(&p.ID, &p.SalonID, &p.Name, &p.Description, &p.Category, &p.Price, &p.ImageURL, &p.StockQuantity, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
@@ -309,7 +312,10 @@ func (r *pgRepo) GetOrderItems(ctx context.Context, orderID uuid.UUID) ([]*Order
 	}
 	defer rows.Close()
 
-	var result []*OrderItem
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*OrderItem, 0)
 	for rows.Next() {
 		item := &OrderItem{}
 		if err := rows.Scan(&item.ID, &item.OrderID, &item.ProductID, &item.ProductName, &item.UnitPrice, &item.Quantity, &item.Subtotal); err != nil {
@@ -372,7 +378,10 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 	}
 	defer rows.Close()
 
-	var result []*EnrichedOrderResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*EnrichedOrderResponse, 0)
 	for rows.Next() {
 		e := &EnrichedOrderResponse{}
 		var orderID uuid.UUID
@@ -434,7 +443,10 @@ func (r *pgRepo) GetOrdersByCustomer(ctx context.Context, customerID uuid.UUID) 
 }
 
 func scanOrders(rows pgx.Rows) ([]*Order, error) {
-	var result []*Order
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*Order, 0)
 	for rows.Next() {
 		o := &Order{}
 		if err := rows.Scan(

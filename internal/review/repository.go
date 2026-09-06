@@ -285,7 +285,10 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 	}
 	defer rows.Close()
 
-	var result []*Review
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*Review, 0)
 	for rows.Next() {
 		rev := &Review{}
 		if err := rows.Scan(
@@ -325,7 +328,10 @@ func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.U
 	}
 	defer rows.Close()
 
-	var result []*EnrichedReviewResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*EnrichedReviewResponse, 0)
 	for rows.Next() {
 		e := &EnrichedReviewResponse{}
 		if err := rows.Scan(

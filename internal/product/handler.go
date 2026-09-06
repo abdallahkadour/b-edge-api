@@ -82,7 +82,7 @@ func (h *Handler) ListPublicProducts(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid salon ID")
 	}
 
-	products, err := h.svc.ListProductsBySalon(c.Context(), salonID, true)
+	products, err := h.svc.ListProductsBySalon(c.UserContext(), salonID, true)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	product, err := h.svc.CreateProduct(c.Context(), *salonID, req)
+	product, err := h.svc.CreateProduct(c.UserContext(), *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -142,7 +142,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	product, err := h.svc.UpdateProduct(c.Context(), productID, *salonID, req)
+	product, err := h.svc.UpdateProduct(c.UserContext(), productID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (h *Handler) ListMyProducts(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	products, err := h.svc.ListProductsBySalon(c.Context(), *salonID, false)
+	products, err := h.svc.ListProductsBySalon(c.UserContext(), *salonID, false)
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func (h *Handler) PlaceOrder(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	order, err := h.svc.PlaceOrder(c.Context(), req)
+	order, err := h.svc.PlaceOrder(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (h *Handler) GetOrder(c *fiber.Ctx) error {
 	requesterRole := middleware.RoleFromContext(c)
 	requesterSalonID := middleware.SalonIDFromContext(c)
 
-	order, err := h.svc.GetOrderByID(c.Context(), orderID, requesterID, requesterRole, requesterSalonID)
+	order, err := h.svc.GetOrderByID(c.UserContext(), orderID, requesterID, requesterRole, requesterSalonID)
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (h *Handler) GetOrder(c *fiber.Ctx) error {
 func (h *Handler) ListMyOrders(c *fiber.Ctx) error {
 	customerID := middleware.UserIDFromContext(c)
 
-	orders, err := h.svc.ListOrdersByCustomer(c.Context(), customerID)
+	orders, err := h.svc.ListOrdersByCustomer(c.UserContext(), customerID)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (h *Handler) ListSalonOrders(c *fiber.Ctx) error {
 	}
 
 	status := c.Query("status")
-	orders, err := h.svc.ListOrdersBySalon(c.Context(), *salonID, status)
+	orders, err := h.svc.ListOrdersBySalon(c.UserContext(), *salonID, status)
 	if err != nil {
 		return err
 	}
@@ -280,7 +280,7 @@ func (h *Handler) ConfirmOrderPayment(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	order, err := h.svc.ConfirmOrderPayment(c.Context(), orderID, *salonID, req)
+	order, err := h.svc.ConfirmOrderPayment(c.UserContext(), orderID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func (h *Handler) ShipOrder(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	order, err := h.svc.ShipOrder(c.Context(), orderID, *salonID)
+	order, err := h.svc.ShipOrder(c.UserContext(), orderID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -332,7 +332,7 @@ func (h *Handler) DeliverOrder(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	order, err := h.svc.DeliverOrder(c.Context(), orderID, *salonID)
+	order, err := h.svc.DeliverOrder(c.UserContext(), orderID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func (h *Handler) CancelOrder(c *fiber.Ctx) error {
 	requesterRole := middleware.RoleFromContext(c)
 	requesterSalonID := middleware.SalonIDFromContext(c)
 
-	order, err := h.svc.CancelOrder(c.Context(), orderID, requesterID, requesterRole, requesterSalonID, req)
+	order, err := h.svc.CancelOrder(c.UserContext(), orderID, requesterID, requesterRole, requesterSalonID, req)
 	if err != nil {
 		return err
 	}

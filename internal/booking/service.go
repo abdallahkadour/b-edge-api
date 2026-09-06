@@ -375,7 +375,10 @@ func (s *Service) GetBookingsByArtist(ctx context.Context, artistID uuid.UUID, c
 		bookings = bookings[:limit]
 	}
 
-	var result []*BookingResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*BookingResponse, 0)
 	for _, b := range bookings {
 		result = append(result, toResponse(b))
 	}
@@ -399,7 +402,10 @@ func (s *Service) GetBookingsByCustomer(ctx context.Context, customerID uuid.UUI
 		bookings = bookings[:limit]
 	}
 
-	var result []*BookingResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*BookingResponse, 0)
 	for _, b := range bookings {
 		result = append(result, toResponse(b))
 	}

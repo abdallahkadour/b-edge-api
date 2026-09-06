@@ -94,7 +94,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // @Success      200 {object} response.Body{data=[]Plan}
 // @Router       /billing/plans [get]
 func (h *Handler) ListPublicPlans(c *fiber.Ctx) error {
-	plans, err := h.svc.ListPublicPlans(c.Context())
+	plans, err := h.svc.ListPublicPlans(c.UserContext())
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (h *Handler) ListPublicPlans(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=[]Plan}
 // @Router       /admin/plans [get]
 func (h *Handler) ListAllPlans(c *fiber.Ctx) error {
-	plans, err := h.svc.ListAllPlans(c.Context())
+	plans, err := h.svc.ListAllPlans(c.UserContext())
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (h *Handler) CreatePlan(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	plan, err := h.svc.CreatePlan(c.Context(), req)
+	plan, err := h.svc.CreatePlan(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func (h *Handler) UpdatePlan(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	plan, err := h.svc.UpdatePlan(c.Context(), code, req)
+	plan, err := h.svc.UpdatePlan(c.UserContext(), code, req)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (h *Handler) UpdatePlan(c *fiber.Ctx) error {
 func (h *Handler) GetMySubscription(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	sub, err := h.svc.GetMySubscription(c.Context(), userID)
+	sub, err := h.svc.GetMySubscription(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (h *Handler) GetMySubscription(c *fiber.Ctx) error {
 func (h *Handler) GetMyInvoices(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	invoices, err := h.svc.GetMyInvoices(c.Context(), userID)
+	invoices, err := h.svc.GetMyInvoices(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (h *Handler) SubmitInvoicePayment(c *fiber.Ctx) error {
 		}
 	}
 
-	inv, err := h.svc.SubmitInvoicePayment(c.Context(), userID, invoiceID, req)
+	inv, err := h.svc.SubmitInvoicePayment(c.UserContext(), userID, invoiceID, req)
 	if err != nil {
 		return err
 	}
@@ -248,7 +248,7 @@ func (h *Handler) SubmitInvoicePayment(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=[]SubscriptionOverviewRow}
 // @Router       /admin/billing/overview [get]
 func (h *Handler) AdminListOverview(c *fiber.Ctx) error {
-	overview, err := h.svc.ListSubscriptionsOverview(c.Context())
+	overview, err := h.svc.ListSubscriptionsOverview(c.UserContext())
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func (h *Handler) AdminListOverview(c *fiber.Ctx) error {
 func (h *Handler) AdminListInvoices(c *fiber.Ctx) error {
 	status := c.Query("status")
 
-	invoices, err := h.svc.ListInvoices(c.Context(), status)
+	invoices, err := h.svc.ListInvoices(c.UserContext(), status)
 	if err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ func (h *Handler) AdminConfirmInvoice(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid invoice ID")
 	}
 
-	inv, err := h.svc.ConfirmInvoice(c.Context(), invoiceID, adminID, clientip.From(c))
+	inv, err := h.svc.ConfirmInvoice(c.UserContext(), invoiceID, adminID, clientip.From(c))
 	if err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func (h *Handler) AdminVoidInvoice(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	if err := h.svc.VoidInvoice(c.Context(), invoiceID, adminID, req, clientip.From(c)); err != nil {
+	if err := h.svc.VoidInvoice(c.UserContext(), invoiceID, adminID, req, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -351,7 +351,7 @@ func (h *Handler) AdminUpdateSubscription(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	sub, err := h.svc.UpdateSubscription(c.Context(), subscriptionID, adminID, req, clientip.From(c))
+	sub, err := h.svc.UpdateSubscription(c.UserContext(), subscriptionID, adminID, req, clientip.From(c))
 	if err != nil {
 		return err
 	}

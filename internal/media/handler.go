@@ -95,7 +95,7 @@ func (h *Handler) GetPortfolio(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	portfolio, err := h.svc.GetPortfolio(c.Context(), artistID)
+	portfolio, err := h.svc.GetPortfolio(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (h *Handler) GetPortfolio(c *fiber.Ctx) error {
 func (h *Handler) GetMyPortfolio(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	portfolio, err := h.svc.GetMyPortfolio(c.Context(), userID)
+	portfolio, err := h.svc.GetMyPortfolio(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (h *Handler) AddPhoto(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	photo, err := h.svc.AddPhoto(c.Context(), userID, req)
+	photo, err := h.svc.AddPhoto(c.UserContext(), userID, req)
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func (h *Handler) DeletePhoto(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.DeletePhoto(c.Context(), userID, mediaID); err != nil {
+	if err := h.svc.DeletePhoto(c.UserContext(), userID, mediaID); err != nil {
 		return err
 	}
 
@@ -198,7 +198,7 @@ func (h *Handler) SetCover(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.SetCover(c.Context(), userID, mediaID); err != nil {
+	if err := h.svc.SetCover(c.UserContext(), userID, mediaID); err != nil {
 		return err
 	}
 
@@ -231,7 +231,7 @@ func (h *Handler) SetMediaServices(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	item, err := h.svc.SetMediaServices(c.Context(), userID, mediaID, req)
+	item, err := h.svc.SetMediaServices(c.UserContext(), userID, mediaID, req)
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func (h *Handler) Reorder(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.Reorder(c.Context(), userID, req); err != nil {
+	if err := h.svc.Reorder(c.UserContext(), userID, req); err != nil {
 		return err
 	}
 
@@ -283,7 +283,7 @@ func (h *Handler) GetProductPhotos(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid product ID")
 	}
 
-	gallery, err := h.svc.GetProductPhotos(c.Context(), productID)
+	gallery, err := h.svc.GetProductPhotos(c.UserContext(), productID)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func (h *Handler) AddProductPhoto(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	photo, err := h.svc.AddProductPhoto(c.Context(), productID, *salonID, req)
+	photo, err := h.svc.AddProductPhoto(c.UserContext(), productID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -347,7 +347,7 @@ func (h *Handler) DeleteProductPhoto(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.DeleteProductPhoto(c.Context(), mediaID, *salonID); err != nil {
+	if err := h.svc.DeleteProductPhoto(c.UserContext(), mediaID, *salonID); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -381,7 +381,7 @@ func (h *Handler) ReorderProductPhotos(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.ReorderProductPhotos(c.Context(), productID, *salonID, req); err != nil {
+	if err := h.svc.ReorderProductPhotos(c.UserContext(), productID, *salonID, req); err != nil {
 		return err
 	}
 	return response.NoContent(c)

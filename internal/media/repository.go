@@ -435,7 +435,10 @@ func (r *pgRepo) GetProductSalonID(ctx context.Context, productID uuid.UUID) (uu
 // ── Scan helpers ──────────────────────────────────────────────────────────────
 
 func scanMediaRows(rows pgx.Rows) ([]*MediaItem, error) {
-	var result []*MediaItem
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*MediaItem, 0)
 	for rows.Next() {
 		m := &MediaItem{}
 		if err := rows.Scan(

@@ -167,7 +167,10 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 	}
 	defer rows.Close()
 
-	var result []*ArtistCardRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ArtistCardRow, 0)
 	for rows.Next() {
 		c := &ArtistCardRow{}
 		if err := rows.Scan(
@@ -227,7 +230,10 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 	}
 	defer rows.Close()
 
-	var result []*StoreRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*StoreRow, 0)
 	for rows.Next() {
 		s := &StoreRow{}
 		if err := rows.Scan(
@@ -262,7 +268,10 @@ func (r *pgRepo) GetStoreHours(ctx context.Context, storeIDs []uuid.UUID) ([]*Da
 	}
 	defer rows.Close()
 
-	var result []*DayHoursRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*DayHoursRow, 0)
 	for rows.Next() {
 		h := &DayHoursRow{}
 		if err := rows.Scan(&h.StoreID, &h.DayOfWeek, &h.IsOpen, &h.OpenTime, &h.CloseTime); err != nil {
@@ -293,7 +302,10 @@ func (r *pgRepo) GetStoreExceptions(ctx context.Context, storeIDs []uuid.UUID, f
 	}
 	defer rows.Close()
 
-	var result []*ExceptionRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ExceptionRow, 0)
 	for rows.Next() {
 		e := &ExceptionRow{}
 		if err := rows.Scan(&e.StoreID, &e.ExceptionDate, &e.IsClosed, &e.OpenTime, &e.CloseTime); err != nil {
@@ -321,7 +333,10 @@ func (r *pgRepo) GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*Se
 	}
 	defer rows.Close()
 
-	var result []*ServiceRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ServiceRow, 0)
 	for rows.Next() {
 		s := &ServiceRow{}
 		if err := rows.Scan(&s.ID, &s.Name, &s.DurationMin, &s.Price, &s.DepositAmount); err != nil {

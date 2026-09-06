@@ -180,7 +180,10 @@ func (s *Service) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID, re
 		return nil, fmt.Errorf("get reviews by artist: %w", err)
 	}
 
-	var result []*ReviewResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ReviewResponse, 0)
 	for _, r := range reviews {
 		result = append(result, toResponse(r))
 	}

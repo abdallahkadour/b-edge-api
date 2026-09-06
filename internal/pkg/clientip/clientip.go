@@ -50,5 +50,9 @@ func From(c *fiber.Ctx) string {
 	}
 	// RemoteIP reads the connection itself and is never affected by
 	// ProxyHeader, so it cannot return the empty string the way c.IP() can.
+	// c.Context(), NOT c.UserContext(): RemoteIP reads the CONNECTION, which
+	// only the fasthttp RequestCtx knows about. This is the one place the
+	// pooled ctx is the right object - it is read synchronously inside the
+	// handler and never retained.
 	return c.Context().RemoteIP().String()
 }

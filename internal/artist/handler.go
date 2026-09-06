@@ -133,7 +133,7 @@ func (h *Handler) CreateStore(c *fiber.Ctx) error {
 	}
 	userID := middleware.UserIDFromContext(c)
 
-	store, err := h.svc.CreateStore(c.Context(), userID, *salonID, req)
+	store, err := h.svc.CreateStore(c.UserContext(), userID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func (h *Handler) UpdateStore(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	store, err := h.svc.UpdateStore(c.Context(), storeID, *salonID, req)
+	store, err := h.svc.UpdateStore(c.UserContext(), storeID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 	// "rania") - ResolveArtistID tries UUID first, falls back to a handle
 	// lookup. This keeps every existing UUID-based link working exactly as
 	// before while letting new links use the shorter, human-readable form.
-	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
+	artistID, err := h.svc.ResolveArtistID(c.UserContext(), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
 			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
@@ -203,7 +203,7 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	artist, err := h.svc.GetArtistByID(c.Context(), artistID)
+	artist, err := h.svc.GetArtistByID(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
 	// Public and identical for every caller - safe for a shared cache.
 	httpcache.Public(c, httpcache.Catalogue)
 
-	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
+	artistID, err := h.svc.ResolveArtistID(c.UserContext(), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
 			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
@@ -236,7 +236,7 @@ func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	services, err := h.svc.GetPublicServicesByArtist(c.Context(), artistID)
+	services, err := h.svc.GetPublicServicesByArtist(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func (h *Handler) GetPublicServicesByArtist(c *fiber.Ctx) error {
 func (h *Handler) GetMyProfile(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	profile, err := h.svc.GetMyProfile(c.Context(), userID)
+	profile, err := h.svc.GetMyProfile(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (h *Handler) UpdateProfile(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	artist, err := h.svc.UpdateProfile(c.Context(), artistID, userID, req)
+	artist, err := h.svc.UpdateProfile(c.UserContext(), artistID, userID, req)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func (h *Handler) GetStoresByArtist(c *fiber.Ctx) error {
 	// Public and identical for every caller - safe for a shared cache.
 	httpcache.Public(c, httpcache.Catalogue)
 
-	artistID, err := h.svc.ResolveArtistID(c.Context(), c.Params("id"))
+	artistID, err := h.svc.ResolveArtistID(c.UserContext(), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
 			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
@@ -323,7 +323,7 @@ func (h *Handler) GetStoresByArtist(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	stores, err := h.svc.GetStoresByArtist(c.Context(), artistID)
+	stores, err := h.svc.GetStoresByArtist(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func (h *Handler) GetStoresBySalon(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	stores, err := h.svc.GetStoresBySalon(c.Context(), *salonID)
+	stores, err := h.svc.GetStoresBySalon(c.UserContext(), *salonID)
 	if err != nil {
 		return err
 	}
@@ -365,7 +365,7 @@ func (h *Handler) GetServicesBySalon(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	services, err := h.svc.GetServicesBySalon(c.Context(), *salonID)
+	services, err := h.svc.GetServicesBySalon(c.UserContext(), *salonID)
 	if err != nil {
 		return err
 	}
@@ -393,7 +393,7 @@ func (h *Handler) CreateService(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	svc, err := h.svc.CreateService(c.Context(), *salonID, req)
+	svc, err := h.svc.CreateService(c.UserContext(), *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -427,7 +427,7 @@ func (h *Handler) UpdateService(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	svc, err := h.svc.UpdateService(c.Context(), serviceID, *salonID, req)
+	svc, err := h.svc.UpdateService(c.UserContext(), serviceID, *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -454,7 +454,7 @@ func (h *Handler) DeleteService(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.DeleteService(c.Context(), serviceID, *salonID); err != nil {
+	if err := h.svc.DeleteService(c.UserContext(), serviceID, *salonID); err != nil {
 		return err
 	}
 
@@ -480,7 +480,7 @@ func (h *Handler) GetBusinessHours(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	hours, err := h.svc.GetBusinessHours(c.Context(), storeID, *salonID)
+	hours, err := h.svc.GetBusinessHours(c.UserContext(), storeID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -514,7 +514,7 @@ func (h *Handler) SetBusinessHours(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.SetBusinessHours(c.Context(), storeID, *salonID, req); err != nil {
+	if err := h.svc.SetBusinessHours(c.UserContext(), storeID, *salonID, req); err != nil {
 		return err
 	}
 
@@ -540,7 +540,7 @@ func (h *Handler) GetExceptions(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	exceptions, err := h.svc.GetExceptions(c.Context(), storeID, *salonID)
+	exceptions, err := h.svc.GetExceptions(c.UserContext(), storeID, *salonID)
 	if err != nil {
 		return err
 	}
@@ -574,7 +574,7 @@ func (h *Handler) CreateException(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.CreateException(c.Context(), storeID, *salonID, req); err != nil {
+	if err := h.svc.CreateException(c.UserContext(), storeID, *salonID, req); err != nil {
 		return err
 	}
 
@@ -606,7 +606,7 @@ func (h *Handler) DeleteException(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	if err := h.svc.DeleteException(c.Context(), storeID, *salonID, date); err != nil {
+	if err := h.svc.DeleteException(c.UserContext(), storeID, *salonID, date); err != nil {
 		return err
 	}
 

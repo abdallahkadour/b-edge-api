@@ -87,7 +87,7 @@ func (h *Handler) CreateReview(c *fiber.Ctx) error {
 
 	customerID := middleware.UserIDFromContext(c)
 
-	review, err := h.svc.CreateReview(c.Context(), req, customerID)
+	review, err := h.svc.CreateReview(c.UserContext(), req, customerID)
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (h *Handler) CreateReview(c *fiber.Ctx) error {
 // @Success      200 {object} response.Body{data=ReviewBookingContext}
 // @Router       /reviews/by-token/{token} [get]
 func (h *Handler) GetBookingContextByToken(c *fiber.Ctx) error {
-	ctxRow, err := h.svc.GetBookingContextByToken(c.Context(), c.Params("token"))
+	ctxRow, err := h.svc.GetBookingContextByToken(c.UserContext(), c.Params("token"))
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (h *Handler) CreateReviewByToken(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	review, err := h.svc.CreateReviewByToken(c.Context(), c.Params("token"), req)
+	review, err := h.svc.CreateReviewByToken(c.UserContext(), c.Params("token"), req)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func (h *Handler) GetReviewsByArtist(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	reviews, err := h.svc.GetReviewsByArtist(c.Context(), artistID, requesterUserID)
+	reviews, err := h.svc.GetReviewsByArtist(c.UserContext(), artistID, requesterUserID)
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func (h *Handler) GetPublicReviewsByArtist(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	reviews, err := h.svc.GetPublicReviewsByArtist(c.Context(), artistID)
+	reviews, err := h.svc.GetPublicReviewsByArtist(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (h *Handler) DeleteReview(c *fiber.Ctx) error {
 	requesterID := middleware.UserIDFromContext(c)
 	requesterRole := middleware.RoleFromContext(c)
 
-	if err := h.svc.DeleteReview(c.Context(), reviewID, requesterID, requesterRole); err != nil {
+	if err := h.svc.DeleteReview(c.UserContext(), reviewID, requesterID, requesterRole); err != nil {
 		return err
 	}
 
@@ -237,7 +237,7 @@ func (h *Handler) HideReview(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.HideReview(c.Context(), reviewID, requesterUserID); err != nil {
+	if err := h.svc.HideReview(c.UserContext(), reviewID, requesterUserID); err != nil {
 		return err
 	}
 
@@ -263,7 +263,7 @@ func (h *Handler) ShowReview(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.ShowReview(c.Context(), reviewID, requesterUserID); err != nil {
+	if err := h.svc.ShowReview(c.UserContext(), reviewID, requesterUserID); err != nil {
 		return err
 	}
 

@@ -275,7 +275,10 @@ func (r *pgRepo) ListAllSubscriptions(ctx context.Context) ([]*Subscription, err
 	}
 	defer rows.Close()
 
-	var result []*Subscription
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*Subscription, 0)
 	for rows.Next() {
 		s, err := scanSubscription(rows)
 		if err != nil {
@@ -337,7 +340,10 @@ func (r *pgRepo) ListSubscriptionsOverview(ctx context.Context) ([]*Subscription
 	}
 	defer rows.Close()
 
-	var result []*SubscriptionOverviewRow
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*SubscriptionOverviewRow, 0)
 	for rows.Next() {
 		var row SubscriptionOverviewRow
 		if err := rows.Scan(

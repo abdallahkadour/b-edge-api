@@ -61,7 +61,7 @@ func (h *Handler) GetSummary(c *fiber.Ctx) error {
 		To:   c.Query("to"),
 	}
 
-	summary, err := h.svc.GetSummary(c.Context(), userID, req)
+	summary, err := h.svc.GetSummary(c.UserContext(), userID, req)
 	if err != nil {
 		return err
 	}

@@ -526,7 +526,10 @@ func (r *pgRepo) GetBusinessHours(ctx context.Context, storeID uuid.UUID) ([]*Bu
 	}
 	defer rows.Close()
 
-	var result []*BusinessHours
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*BusinessHours, 0)
 	for rows.Next() {
 		bh := &BusinessHours{}
 		if err := rows.Scan(
@@ -571,7 +574,10 @@ func (r *pgRepo) GetExceptions(ctx context.Context, storeID uuid.UUID) ([]*Busin
 	}
 	defer rows.Close()
 
-	var result []*BusinessHoursException
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*BusinessHoursException, 0)
 	for rows.Next() {
 		ex := &BusinessHoursException{}
 		if err := rows.Scan(
@@ -623,7 +629,10 @@ func (r *pgRepo) DeleteException(ctx context.Context, storeID uuid.UUID, date ti
 // ── Scan helpers ──────────────────────────────────────────────────────────────
 
 func scanStores(rows pgx.Rows) ([]*Store, error) {
-	var result []*Store
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*Store, 0)
 	for rows.Next() {
 		s := &Store{}
 		if err := rows.Scan(
@@ -641,7 +650,10 @@ func scanStores(rows pgx.Rows) ([]*Store, error) {
 }
 
 func scanServices(rows pgx.Rows) ([]*SalonServiceRecord, error) {
-	var result []*SalonServiceRecord
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*SalonServiceRecord, 0)
 	for rows.Next() {
 		s := &SalonServiceRecord{}
 		if err := rows.Scan(

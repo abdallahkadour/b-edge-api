@@ -64,7 +64,7 @@ func (h *Handler) GetFeed(c *fiber.Ctx) error {
 	unreadOnly := c.Query("unread") == "true"
 	limit, _ := strconv.Atoi(c.Query("limit"))
 
-	feed, err := h.svc.GetFeed(c.Context(), userID, unreadOnly, limit)
+	feed, err := h.svc.GetFeed(c.UserContext(), userID, unreadOnly, limit)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func (h *Handler) GetFeed(c *fiber.Ctx) error {
 // @Router       /notifications/unread-count [get]
 func (h *Handler) GetUnreadCount(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
-	count, err := h.svc.GetUnreadCount(c.Context(), userID)
+	count, err := h.svc.GetUnreadCount(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (h *Handler) MarkRead(c *fiber.Ctx) error {
 	if err != nil {
 		return apperror.BadRequest("INVALID_ID", "Invalid notification ID")
 	}
-	if err := h.svc.MarkRead(c.Context(), middleware.UserIDFromContext(c), id); err != nil {
+	if err := h.svc.MarkRead(c.UserContext(), middleware.UserIDFromContext(c), id); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -116,7 +116,7 @@ func (h *Handler) MarkRead(c *fiber.Ctx) error {
 // @Success      204
 // @Router       /notifications/read-all [post]
 func (h *Handler) MarkAllRead(c *fiber.Ctx) error {
-	if err := h.svc.MarkAllRead(c.Context(), middleware.UserIDFromContext(c)); err != nil {
+	if err := h.svc.MarkAllRead(c.UserContext(), middleware.UserIDFromContext(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -136,7 +136,7 @@ func (h *Handler) Archive(c *fiber.Ctx) error {
 	if err != nil {
 		return apperror.BadRequest("INVALID_ID", "Invalid notification ID")
 	}
-	if err := h.svc.Archive(c.Context(), middleware.UserIDFromContext(c), id); err != nil {
+	if err := h.svc.Archive(c.UserContext(), middleware.UserIDFromContext(c), id); err != nil {
 		return err
 	}
 	return response.NoContent(c)

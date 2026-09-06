@@ -117,7 +117,7 @@ func (h *Handler) GetAvailableSlots(c *fiber.Ctx) error {
 		Date:      c.Query("date"),
 	}
 
-	slots, err := h.svc.GetAvailableSlots(c.Context(), req)
+	slots, err := h.svc.GetAvailableSlots(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func (h *Handler) HoldGuestSlot(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	res, err := h.svc.HoldGuestSlot(c.Context(), req)
+	res, err := h.svc.HoldGuestSlot(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func (h *Handler) SubmitGuestBooking(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	booking, err := h.svc.SubmitGuestBooking(c.Context(), bookingID, req)
+	booking, err := h.svc.SubmitGuestBooking(c.UserContext(), bookingID, req)
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func (h *Handler) CreateBooking(c *fiber.Ctx) error {
 
 	customerID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.CreateBooking(c.Context(), req, customerID)
+	booking, err := h.svc.CreateBooking(c.UserContext(), req, customerID)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (h *Handler) GetBookingByID(c *fiber.Ctx) error {
 	requesterID := middleware.UserIDFromContext(c)
 	requesterRole := middleware.RoleFromContext(c)
 
-	booking, err := h.svc.GetEnrichedBookingByID(c.Context(), bookingID, requesterID, requesterRole)
+	booking, err := h.svc.GetEnrichedBookingByID(c.UserContext(), bookingID, requesterID, requesterRole)
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (h *Handler) SubmitBooking(c *fiber.Ctx) error {
 
 	customerID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.SubmitBooking(c.Context(), bookingID, customerID)
+	booking, err := h.svc.SubmitBooking(c.UserContext(), bookingID, customerID)
 	if err != nil {
 		return err
 	}
@@ -276,7 +276,7 @@ func (h *Handler) ApproveBooking(c *fiber.Ctx) error {
 
 	artistID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.ApproveBooking(c.Context(), bookingID, artistID)
+	booking, err := h.svc.ApproveBooking(c.UserContext(), bookingID, artistID)
 	if err != nil {
 		return err
 	}
@@ -300,7 +300,7 @@ func (h *Handler) MarkDepositReceived(c *fiber.Ctx) error {
 
 	artistID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.MarkDepositReceived(c.Context(), bookingID, artistID)
+	booking, err := h.svc.MarkDepositReceived(c.UserContext(), bookingID, artistID)
 	if err != nil {
 		return err
 	}
@@ -324,7 +324,7 @@ func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 
 	artistID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.ConfirmDeposit(c.Context(), bookingID, artistID)
+	booking, err := h.svc.ConfirmDeposit(c.UserContext(), bookingID, artistID)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func (h *Handler) MarkRefunded(c *fiber.Ctx) error {
 		}
 	}
 
-	booking, err := h.svc.MarkRefunded(c.Context(), bookingID, middleware.UserIDFromContext(c), req.Reference)
+	booking, err := h.svc.MarkRefunded(c.UserContext(), bookingID, middleware.UserIDFromContext(c), req.Reference)
 	if err != nil {
 		return err
 	}
@@ -416,7 +416,7 @@ func (h *Handler) ConfirmDepositReceived(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.ConfirmDepositReceived(c.Context(), bookingID, requesterUserID, req.Reference)
+	booking, err := h.svc.ConfirmDepositReceived(c.UserContext(), bookingID, requesterUserID, req.Reference)
 	if err != nil {
 		return err
 	}
@@ -446,7 +446,7 @@ func (h *Handler) CancelBooking(c *fiber.Ctx) error {
 	requesterID := middleware.UserIDFromContext(c)
 	requesterRole := middleware.RoleFromContext(c)
 
-	booking, err := h.svc.CancelBooking(c.Context(), bookingID, requesterID, requesterRole, req)
+	booking, err := h.svc.CancelBooking(c.UserContext(), bookingID, requesterID, requesterRole, req)
 	if err != nil {
 		return err
 	}
@@ -470,7 +470,7 @@ func (h *Handler) CompleteBooking(c *fiber.Ctx) error {
 
 	artistID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.CompleteBooking(c.Context(), bookingID, artistID)
+	booking, err := h.svc.CompleteBooking(c.UserContext(), bookingID, artistID)
 	if err != nil {
 		return err
 	}
@@ -494,7 +494,7 @@ func (h *Handler) MarkNoShow(c *fiber.Ctx) error {
 
 	artistID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.MarkNoShow(c.Context(), bookingID, artistID)
+	booking, err := h.svc.MarkNoShow(c.UserContext(), bookingID, artistID)
 	if err != nil {
 		return err
 	}
@@ -528,7 +528,7 @@ func (h *Handler) GetBookingsByArtist(c *fiber.Ctx) error {
 	requesterRole := middleware.RoleFromContext(c)
 
 	bookings, hasMore, err := h.svc.ListEnrichedBookingsByArtist(
-		c.Context(), artistID, requesterUserID, requesterRole, status, cursor, limit)
+		c.UserContext(), artistID, requesterUserID, requesterRole, status, cursor, limit)
 	if err != nil {
 		return err
 	}
@@ -575,7 +575,7 @@ func (h *Handler) GetArtistCalendar(c *fiber.Ctx) error {
 	requesterRole := middleware.RoleFromContext(c)
 
 	bookings, err := h.svc.ListEnrichedBookingsForWeek(
-		c.Context(), artistID, requesterUserID, requesterRole, weekStart)
+		c.UserContext(), artistID, requesterUserID, requesterRole, weekStart)
 	if err != nil {
 		return err
 	}
@@ -599,7 +599,7 @@ func (h *Handler) JoinWaitlist(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	entryID, err := h.svc.JoinWaitlist(c.Context(), req)
+	entryID, err := h.svc.JoinWaitlist(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -624,7 +624,7 @@ func (h *Handler) GetWaitlistByArtist(c *fiber.Ctx) error {
 	requesterUserID := middleware.UserIDFromContext(c)
 	requesterRole := middleware.RoleFromContext(c)
 
-	entries, err := h.svc.GetWaitlistByArtist(c.Context(), artistID, requesterUserID, requesterRole)
+	entries, err := h.svc.GetWaitlistByArtist(c.UserContext(), artistID, requesterUserID, requesterRole)
 	if err != nil {
 		return err
 	}
@@ -645,7 +645,7 @@ func (h *Handler) GetBookingsByCustomer(c *fiber.Ctx) error {
 	customerID := middleware.UserIDFromContext(c)
 	cursor, limit := parsePaginationParams(c)
 
-	bookings, hasMore, err := h.svc.ListEnrichedBookingsByCustomer(c.Context(), customerID, cursor, limit)
+	bookings, hasMore, err := h.svc.ListEnrichedBookingsByCustomer(c.UserContext(), customerID, cursor, limit)
 	if err != nil {
 		return err
 	}
@@ -701,7 +701,7 @@ func (h *Handler) ShiftDay(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	plan, err := h.svc.ShiftDay(c.Context(), middleware.UserIDFromContext(c), req)
+	plan, err := h.svc.ShiftDay(c.UserContext(), middleware.UserIDFromContext(c), req)
 	if err != nil {
 		// A refusal still carries the plan, so the caller sees WHY rather
 		// than only that it failed.
@@ -738,7 +738,7 @@ func (h *Handler) PreviewShiftDay(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	result, err := h.svc.PreviewShiftDay(c.Context(), userID, req)
+	result, err := h.svc.PreviewShiftDay(c.UserContext(), userID, req)
 	if err != nil {
 		return err
 	}
@@ -768,7 +768,7 @@ func (h *Handler) PreviewDiscount(c *fiber.Ctx) error {
 		return validation.MapError(err)
 	}
 
-	out, err := h.svc.PreviewDiscount(c.Context(), id, req.Code)
+	out, err := h.svc.PreviewDiscount(c.UserContext(), id, req.Code)
 	if err != nil {
 		return err
 	}

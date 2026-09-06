@@ -59,7 +59,7 @@ func (h *Handler) ListClients(c *fiber.Ctx) error {
 	requesterUserID := middleware.UserIDFromContext(c)
 	q := c.Query("q")
 
-	clients, err := h.svc.ListClients(c.Context(), requesterUserID, q)
+	clients, err := h.svc.ListClients(c.UserContext(), requesterUserID, q)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (h *Handler) GetClient(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	profile, err := h.svc.GetClient(c.Context(), requesterUserID, customerID)
+	profile, err := h.svc.GetClient(c.UserContext(), requesterUserID, customerID)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func (h *Handler) UpsertNote(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	note, err := h.svc.UpsertNote(c.Context(), requesterUserID, customerID, req)
+	note, err := h.svc.UpsertNote(c.UserContext(), requesterUserID, customerID, req)
 	if err != nil {
 		return err
 	}

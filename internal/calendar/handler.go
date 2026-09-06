@@ -43,7 +43,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 // ICS returns the calendar file.
 func (h *Handler) ICS(c *fiber.Ctx) error {
-	view, err := h.svc.GetEvent(c.Context(), c.Params("token"))
+	view, err := h.svc.GetEvent(c.UserContext(), c.Params("token"))
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func (h *Handler) ICS(c *fiber.Ctx) error {
 // sends Google users to Google's own web flow and everyone else to the
 // file.
 func (h *Handler) Page(c *fiber.Ctx) error {
-	view, err := h.svc.GetEvent(c.Context(), c.Params("token"))
+	view, err := h.svc.GetEvent(c.UserContext(), c.Params("token"))
 	if err != nil {
 		return err
 	}

@@ -364,7 +364,10 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 
 // scanEnrichedBookings scans multiple enriched rows.
 func scanEnrichedBookings(rows pgx.Rows) ([]*EnrichedBooking, error) {
-	var result []*EnrichedBooking
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*EnrichedBooking, 0)
 	for rows.Next() {
 		e := &EnrichedBooking{}
 		if err := scanEnrichedBooking(rows, e); err != nil {
@@ -830,7 +833,10 @@ func (r *pgRepo) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([
 	}
 	defer rows.Close()
 
-	var result []*WaitlistEntryResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*WaitlistEntryResponse, 0)
 	for rows.Next() {
 		e := &WaitlistEntryResponse{}
 		var date time.Time
@@ -1452,7 +1458,10 @@ func (r *pgRepo) ExpireStalePendingBookings(ctx context.Context, artistID uuid.U
 //
 // NOTE: b.SessionID is intentionally NOT scanned here - see scanBooking.
 func scanBookings(rows pgx.Rows) ([]*Booking, error) {
-	var bookings []*Booking
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	bookings := make([]*Booking, 0)
 	for rows.Next() {
 		b := &Booking{}
 		if err := rows.Scan(

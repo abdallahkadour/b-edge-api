@@ -24,6 +24,28 @@ const maxDBConns = 20
 // after an idle period doesn't pay the connection-setup cost.
 const minDBConns = 2
 
+// statementTimeout is the hard ceiling on any single query.
+//
+// # WHY THIS EXISTS SEPARATELY FROM THE REQUEST TIMEOUT
+//
+// middleware.RequestContext bounds a whole request at 15s. This bounds one
+// QUERY at 5s, and the two are deliberately not the same number and not the
+// same mechanism.
+//
+// The pool is the scarce resource: 20 connections against an in-flight
+// ceiling of 300 (middleware.maxInFlightRequests). At that ratio a handful of
+// slow queries starves everything, so the tight bound belongs where the
+// scarcity is. It also does not depend on a call site remembering to pass a
+// context - PostgreSQL enforces it whoever asks and however they got here,
+// including psql.
+//
+// Five seconds is far beyond any query this schema should run. GetAvailableSlots
+// is the heaviest - hours, exceptions, bookings and travel buffers for one
+// artist-day - and is milliseconds on realistic data. A query that takes five
+// seconds is a bad plan or a lock wait, and both are better killed than
+// nursed.
+const statementTimeout = "5000" // milliseconds, as PostgreSQL expects
+
 // NewDatabase creates a pgx connection pool and verifies connectivity.
 // Reads DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD from environment.
 func NewDatabase(logger *zap.Logger) (*pgxpool.Pool, error) {
@@ -43,6 +65,14 @@ func NewDatabase(logger *zap.Logger) (*pgxpool.Pool, error) {
 	poolConfig.MaxConns = maxDBConns
 	poolConfig.MinConns = minDBConns
 
+	// Applied as a connection parameter so it is set once at connect and
+	// covers every query on that connection, rather than being something each
+	// call site has to opt into.
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = statementTimeout
+
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database pool: %w", err)
@@ -57,6 +87,7 @@ func NewDatabase(logger *zap.Logger) (*pgxpool.Pool, error) {
 		zap.String("port", os.Getenv("DB_PORT")),
 		zap.String("database", os.Getenv("DB_NAME")),
 		zap.Int32("max_conns", poolConfig.MaxConns),
+		zap.String("statement_timeout_ms", statementTimeout),
 	)
 
 	return pool, nil

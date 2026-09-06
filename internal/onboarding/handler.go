@@ -62,7 +62,7 @@ func (h *Handler) Complete(c *fiber.Ctx) error {
 
 	userID := middleware.UserIDFromContext(c)
 
-	result, err := h.svc.Complete(c.Context(), userID, req)
+	result, err := h.svc.Complete(c.UserContext(), userID, req)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func (h *Handler) Complete(c *fiber.Ctx) error {
 func (h *Handler) GetStatus(c *fiber.Ctx) error {
 	userID := middleware.UserIDFromContext(c)
 
-	status, err := h.svc.GetStatus(c.Context(), userID)
+	status, err := h.svc.GetStatus(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}

@@ -61,7 +61,7 @@ func (h *Handler) ArtistPreview(c *fiber.Ctx) error {
 
 	slug := c.Params("handle")
 
-	preview, err := h.repo.GetPreviewByHandleOrID(c.Context(), slug)
+	preview, err := h.repo.GetPreviewByHandleOrID(c.UserContext(), slug)
 	if err != nil {
 		if errors.Is(err, ErrArtistNotFound) {
 			// Send unknown links to the app's home rather than showing an

@@ -50,7 +50,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 // @Success      200 {object} response.Body{data=[]PendingArtist}
 // @Router       /admin/artists/pending [get]
 func (h *Handler) ListPending(c *fiber.Ctx) error {
-	artists, err := h.svc.ListPending(c.Context())
+	artists, err := h.svc.ListPending(c.UserContext())
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (h *Handler) Approve(c *fiber.Ctx) error {
 	}
 	adminID := middleware.UserIDFromContext(c)
 
-	if err := h.svc.Approve(c.Context(), artistID, adminID, clientip.From(c)); err != nil {
+	if err := h.svc.Approve(c.UserContext(), artistID, adminID, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)
@@ -103,7 +103,7 @@ func (h *Handler) Reject(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.svc.Reject(c.Context(), artistID, adminID, req, clientip.From(c)); err != nil {
+	if err := h.svc.Reject(c.UserContext(), artistID, adminID, req, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)

@@ -183,7 +183,10 @@ func (w *Worker) fetchPending(ctx context.Context) ([]*PendingNotification, erro
 	}
 	defer rows.Close()
 
-	var result []*PendingNotification
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*PendingNotification, 0)
 	for rows.Next() {
 		n := &PendingNotification{}
 		if err := rows.Scan(

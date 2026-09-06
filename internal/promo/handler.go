@@ -60,7 +60,7 @@ func (h *Handler) ListDiscounts(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	out, err := h.svc.ListBySalon(c.Context(), *salonID)
+	out, err := h.svc.ListBySalon(c.UserContext(), *salonID)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (h *Handler) CreateDiscount(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	out, err := h.svc.Create(c.Context(), *salonID, req)
+	out, err := h.svc.Create(c.UserContext(), *salonID, req)
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func (h *Handler) UpdateDiscount(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 
-	out, err := h.svc.Update(c.Context(), id, *salonID, req)
+	out, err := h.svc.Update(c.UserContext(), id, *salonID, req)
 	if err != nil {
 		return err
 	}

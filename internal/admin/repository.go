@@ -69,7 +69,10 @@ func (r *pgRepo) ListPending(ctx context.Context) ([]*PendingArtist, error) {
 	}
 	defer rows.Close()
 
-	var result []*PendingArtist
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*PendingArtist, 0)
 	for rows.Next() {
 		p := &PendingArtist{}
 		if err := rows.Scan(

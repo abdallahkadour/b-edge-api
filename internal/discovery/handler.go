@@ -65,7 +65,7 @@ func (h *Handler) ListArtists(c *fiber.Ctx) error {
 		Limit:    c.QueryInt("limit", 0),
 	}
 
-	cards, err := h.svc.ListArtists(c.Context(), params)
+	cards, err := h.svc.ListArtists(c.UserContext(), params)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (h *Handler) GetArtistProfile(c *fiber.Ctx) error {
 		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
 	}
 
-	profile, err := h.svc.GetArtistProfile(c.Context(), artistID)
+	profile, err := h.svc.GetArtistProfile(c.UserContext(), artistID)
 	if err != nil {
 		return err
 	}

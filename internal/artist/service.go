@@ -179,7 +179,10 @@ func (s *Service) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]
 		return nil, fmt.Errorf("get services by salon: %w", err)
 	}
 
-	var result []*ServiceResponse
+	// Non-nil so an empty result marshals as [] rather than null. A nil Go
+	// slice becomes JSON null, which an @for in a template cannot iterate -
+	// and only ApiService.getArray coalesces it away on the client.
+	result := make([]*ServiceResponse, 0)
 	for _, svc := range services {
 		result = append(result, toServiceResponse(svc))
 	}

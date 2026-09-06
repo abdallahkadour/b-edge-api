@@ -54,7 +54,7 @@ func (h *Handler) RequestOTP(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	if err := h.svc.RequestOTP(c.Context(), req); err != nil {
+	if err := h.svc.RequestOTP(c.UserContext(), req); err != nil {
 		return err
 	}
 
@@ -79,7 +79,7 @@ func (h *Handler) VerifyOTP(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	result, err := h.svc.VerifyOTP(c.Context(), req)
+	result, err := h.svc.VerifyOTP(c.UserContext(), req)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (h *Handler) Refresh(c *fiber.Ctx) error {
 		return apperror.Unauthorized("TOKEN_MISSING", "Authentication required")
 	}
 
-	result, err := h.svc.Refresh(c.Context(), rawToken)
+	result, err := h.svc.Refresh(c.UserContext(), rawToken)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (h *Handler) Refresh(c *fiber.Ctx) error {
 func (h *Handler) Logout(c *fiber.Ctx) error {
 	rawToken := c.Cookies(refreshTokenCookie)
 	if rawToken != "" {
-		_ = h.svc.Logout(c.Context(), rawToken)
+		_ = h.svc.Logout(c.UserContext(), rawToken)
 	}
 	clearRefreshTokenCookie(c)
 	return c.SendStatus(fiber.StatusNoContent)

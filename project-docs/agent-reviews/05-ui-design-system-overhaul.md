@@ -158,7 +158,46 @@ none of them exposing a `role` or an accessible value.
 
 ---
 
-## F2 — No dark mode at all · **P1**
+## F2 — No dark mode at all · **P1** · ✅ SHIPPED 2026-09-07
+
+> **Shipped, but not as specified below.** The recommendation in this section
+> was to rename the utility classes onto new semantic names (`bg-white` →
+> `bg-surface`, `text-gray-400` → `text-muted`). Sizing that found **~1,400
+> occurrences across 56 files** — an unreviewable diff on a frontend with 22
+> tests, where every mistake stays invisible until someone opens the app in
+> the dark.
+>
+> What shipped instead **redefines the existing palette rather than renaming
+> it**, and touches no template for theming purposes. `ink` and `white` are
+> already used as an inverted *pair* (`bg-ink text-white`, 81 times), so
+> flipping both together keeps every pair correct for free. The `<style>`
+> block below is still the right shape; only the token *names* changed, to
+> the ones the templates already use.
+>
+> Three findings this section did not anticipate:
+>
+> 1. **Redefining the palette only themes what goes through the palette.** A
+>    dark-mode screenshot showed the error banner still light pink: it used
+>    `bg-red-50`, a Tailwind default the config never owned. Sweeping found
+>    **~110 such bypasses** (the `bg-red-50`/`text-red-700`/`border-red-200`
+>    banner alone appears ~30 times, plus 19 hardcoded `#16a34a` — which is
+>    exactly `success`'s own value). All pre-existing design-system
+>    violations, invisible while there was only one theme.
+> 2. **Elevation must be preserved, not inverted.** Mechanically inverting the
+>    ramp makes `white` the darkest value in the file, so every card reads as
+>    a hole punched in the page. The dark ramp is ordered by elevation
+>    instead: `gray-50` (ground) < `white` (card) < `gray-100` < `gray-200`.
+> 3. **One colour genuinely cannot flip.** Content over a literal black scrim
+>    (`bg-black/50 text-white`) would turn dark-on-dark and vanish — the scrim
+>    darkens a *photograph*, not the page. That needed a new fixed `on-scrim`
+>    token.
+>
+> Also shipped: a three-state preference (light / dark / **system**, the
+> default) with `ThemeStore` + an 11-test spec, a segmented toggle on the
+> artist profile and in the customer My Bookings header, and a pre-boot script
+> in `index.html` so choosing dark does not mean a white flash on every load.
+> Dark mode clears AA on every text tier (the muted tier reaches 5.2:1, where
+> light mode's is 2.6:1). `b-edge-web` @ `572b79e`.
 
 ```
 tailwind.config.js  darkMode:      not configured
@@ -280,12 +319,12 @@ handling anywhere.
 
 ## Recommended action
 
-| # | Action | Priority |
-|---|---|---|
-| F2 | Tokenise colours behind CSS variables; ship dark mode | **P1** |
-| F1 | Add 5 components to `@bedge/shared/ui`; migrate call sites | **P1** |
-| F3 | Adopt `cdk/overlay` for the notification panel; add `LiveAnnouncer` | P2 |
-| F4 | Move micro-interactions onto components; add reduced-motion | P3 |
+| # | Action | Priority | Status |
+|---|---|---|---|
+| F2 | Tokenise colours behind CSS variables; ship dark mode | **P1** | ✅ 2026-09-07 — shipped by redefining the palette, not renaming 1,400 classes |
+| F1 | Add 5 components to `@bedge/shared/ui`; migrate call sites | **P1** | ✅ shipped |
+| F3 | Adopt `cdk/overlay` for the notification panel; add `LiveAnnouncer` | P2 | open |
+| F4 | Move micro-interactions onto components; add reduced-motion | P3 | open |
 
 **Not recommended:** adopting a third-party Angular component library
 (Material, PrimeNG, Spartan). The bespoke components are small, on-brand, and

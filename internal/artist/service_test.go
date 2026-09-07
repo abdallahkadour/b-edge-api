@@ -525,6 +525,111 @@ func TestCreateService_NegativePrice(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// ── Deposit ceiling ───────────────────────────────────────────────────────────
+//
+// The deposit is the one figure the funnel asks a client to send directly to a
+// stranger, by OMT or Whish, with no escrow and no chargeback behind it. A
+// deposit above the price is the shape of an advance-fee scam, and these tests
+// are the reason the platform cannot render one. Mirrored by a CHECK
+// constraint in migration 038.
+
+func TestCreateService_DepositAbovePrice_Rejected(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	req := CreateServiceRequest{
+		Name:                 "Full Makeup",
+		DurationMin:          60,
+		Price:                "50.00",
+		DepositAmount:        "500.00",
+		DepositDeadlineHours: 48,
+	}
+
+	result, err := svc.CreateService(context.Background(), uuid.New(), req)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "deposit")
+}
+
+// A deposit equal to the price is legitimate and must keep working. Bridal and
+// travel work is routinely paid in full up front in this market.
+func TestCreateService_DepositEqualToPrice_Allowed(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	req := CreateServiceRequest{
+		Name:                 "Bridal Package",
+		DurationMin:          180,
+		Price:                "300.00",
+		DepositAmount:        "300.00",
+		DepositDeadlineHours: 48,
+	}
+
+	result, err := svc.CreateService(context.Background(), uuid.New(), req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestUpdateService_RaisingDepositAbovePrice_Rejected(t *testing.T) {
+	salonID := uuid.New()
+	existing := defaultSalonServiceRecord() // price 200.00
+	existing.SalonID = salonID
+
+	repo := &mockRepo{getServiceByIDSvc: existing}
+	svc := newTestService(repo)
+
+	deposit := "900.00"
+	req := UpdateServiceRequest{DepositAmount: &deposit}
+
+	result, err := svc.UpdateService(context.Background(), existing.ID, salonID, req)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// The case a naive check misses. The request carries only a PRICE, and on its
+// own it is unremarkable - but it drops below the deposit already stored on
+// the row, which leaves the service in exactly the state the rule forbids.
+// The ceiling has to be evaluated against the values the row will HAVE.
+func TestUpdateService_LoweringPriceBelowStoredDeposit_Rejected(t *testing.T) {
+	salonID := uuid.New()
+	existing := defaultSalonServiceRecord() // price 200.00, deposit 50.00
+	existing.SalonID = salonID
+
+	repo := &mockRepo{getServiceByIDSvc: existing}
+	svc := newTestService(repo)
+
+	price := "10.00"
+	req := UpdateServiceRequest{Price: &price}
+
+	result, err := svc.UpdateService(context.Background(), existing.ID, salonID, req)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// Both moving together in a way that stays valid must still be allowed -
+// otherwise an artist could never raise a deposit and a price in one edit.
+func TestUpdateService_PriceAndDepositRaisedTogether_Allowed(t *testing.T) {
+	salonID := uuid.New()
+	existing := defaultSalonServiceRecord()
+	existing.SalonID = salonID
+
+	repo := &mockRepo{getServiceByIDSvc: existing, updateServiceErr: nil}
+	svc := newTestService(repo)
+
+	price := "400.00"
+	deposit := "150.00"
+	req := UpdateServiceRequest{Price: &price, DepositAmount: &deposit}
+
+	result, err := svc.UpdateService(context.Background(), existing.ID, salonID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
 // ── UpdateService tests ───────────────────────────────────────────────────────
 
 func TestUpdateService_Success(t *testing.T) {

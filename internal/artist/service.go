@@ -247,6 +247,10 @@ func (s *Service) CreateService(ctx context.Context, salonID uuid.UUID, req Crea
 		return nil, err
 	}
 
+	if err := checkDepositCeiling(price, deposit); err != nil {
+		return nil, err
+	}
+
 	var categoryID *uuid.UUID
 	if req.CategoryID != nil {
 		id, err := uuid.Parse(*req.CategoryID)
@@ -314,6 +318,30 @@ func (s *Service) UpdateService(ctx context.Context, serviceID uuid.UUID, salonI
 		return nil, errServiceNotFound()
 	}
 
+	// The ceiling has to be checked against the values the row will HAVE, not
+	// the ones the request carries. This is a partial update: raising the
+	// deposit and lowering the price arrive as two separate fields, and either
+	// one alone can breach the rule against the other's stored value.
+	newPrice := existing.Price
+	if req.Price != nil {
+		p, err := money.Parse(*req.Price, "price")
+		if err != nil {
+			return nil, err
+		}
+		newPrice = p
+	}
+	newDeposit := existing.DepositAmount
+	if req.DepositAmount != nil {
+		d, err := money.Parse(*req.DepositAmount, "deposit_amount")
+		if err != nil {
+			return nil, err
+		}
+		newDeposit = d
+	}
+	if err := checkDepositCeiling(newPrice, newDeposit); err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.UpdateService(ctx, serviceID, req); err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
@@ -323,6 +351,32 @@ func (s *Service) UpdateService(ctx context.Context, serviceID uuid.UUID, salonI
 		return nil, fmt.Errorf("update service: get updated: %w", err)
 	}
 	return toServiceResponse(updated), nil
+}
+
+// checkDepositCeiling refuses a deposit larger than the service it secures.
+//
+// B-Edge has no card rails: the client sends this figure directly to the
+// artist by OMT or Whish, with no escrow and no chargeback behind it. The
+// number rendered in the booking funnel is the only thing bounding an
+// up-front transfer to a stranger, so a deposit above the price is not a
+// tidiness problem - it is the shape of an advance-fee scam, and the platform
+// should not be able to render one.
+//
+// A deposit EQUAL to the price stays legal. Bridal and travel work is
+// routinely paid in full up front in this market, and refusing that would
+// break a legitimate booking to prevent a hypothetical one.
+//
+// Mirrored by a CHECK constraint in migration 038. This exists as well as the
+// constraint, not instead of it: the constraint is the guarantee, and this is
+// what turns it into a 400 the artist can read rather than a 500.
+func checkDepositCeiling(price, deposit decimal.Decimal) error {
+	if deposit.GreaterThan(price) {
+		return apperror.BadRequest(
+			"DEPOSIT_ABOVE_PRICE",
+			"The deposit cannot be more than the price of the service",
+		)
+	}
+	return nil
 }
 
 // DeleteService deactivates a service.

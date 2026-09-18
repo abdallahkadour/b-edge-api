@@ -29,6 +29,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/inbox"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
+	"github.com/abdallahkadour/b-edge-api/internal/payout"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
 	review "github.com/abdallahkadour/b-edge-api/internal/review"
@@ -163,6 +164,7 @@ func main() {
 	// promo has no logger of its own - nothing in it is worth a log line that
 	// the request logger does not already carry.
 	promo.RegisterRoutes(app, pool)
+	payout.RegisterRoutes(app, pool)
 	review.RegisterRoutes(app, pool, logger)
 	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)

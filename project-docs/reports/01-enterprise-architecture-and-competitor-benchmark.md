@@ -73,7 +73,7 @@ already ships most of what B-Edge lacks.
 | Arabic + RTL | Full | **None** — zero Arabic strings, no i18n framework |
 | LBP **and** USD | Both | USD only (decision D1) |
 | Whish Pay deposits | Collected in-app | Manual transfer, artist confirms |
-| WhatsApp reminders | Yes | **Structurally impossible** — no `scheduled_at` |
+| WhatsApp reminders | Yes | **Built 2026-09-18**; delivery still gated on Meta verification |
 | Packages, memberships, loyalty | Yes | None |
 | Intake forms | Yes | None |
 | Recurring + group bookings | Yes | None |
@@ -124,7 +124,7 @@ against the constraints in report 03, not in isolation.
 
 | # | Feature | Value | Complexity | Verdict |
 |---|---|---|---|---|
-| 1 | **Scheduled notifications → reminders** | Very high | **Low** | One column, one worker branch. The worker pattern exists three times. |
+| 1 | ~~**Scheduled notifications → reminders**~~ | Very high | Low | ✅ **BUILT 2026-09-18** — migration 041 + `booking.ReminderWorker`. Estimate held: one column, one worker. |
 | 2 | **Arabic + RTL, with notification templating** | Very high | High | The competitor leads with it in the same market. Must be sequenced with template work or Arabic messages stay impossible. |
 | 3 | **Whish Pay integration** | High | Medium | Turns the deposit from a two-party manual chore into one tap. Largest funnel friction. |
 | 4 | **Client-initiated reschedule** | High | Low | Slot machinery already exists. Removes the cancel-and-lose-your-deposit trap. |
@@ -150,3 +150,6 @@ is a well-understood shape.
 
 **Consensus:** build 1 and 4 now. They are low-complexity, high-value, and
 neither threatens the constraints in report 03.
+
+**Update, same day:** item 1 shipped. The estimate held — one migration, one
+worker, no changes to any existing call site. Item 4 is next.

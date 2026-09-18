@@ -93,7 +93,7 @@ Verified present in code, not taken from documentation.
 | Item | What is there | What is missing |
 |---|---|---|
 | **Notification templates** | `buildMessageBody` reads a pre-rendered `message` string | **No variable substitution, no locale selection.** The code calls itself "Phase 1". Arabic notifications are impossible until this is done — independent of any UI translation. |
-| **Appointment reminders** | Nothing | `notifications` has **no `scheduled_at` column**. The worker drains pending rows immediately. There is no way to say "send tomorrow at 09:00". `pkg/subscription/status.go` already says *"Revisit these numbers once reminders actually send."* |
+| ~~**Appointment reminders**~~ | **RESOLVED 2026-09-18** — migration 041 adds `scheduled_at`; `booking.ReminderWorker` reconciles the calendar in both directions every 15 minutes | Delivery still gated on Meta verification (blocker B1), like every other notification. The scheduling half is done and verified against the real database. |
 | **Client reschedule** | Artist-side day shift exists | Client can only cancel — losing the slot and, inside 24h, the deposit. |
 | **WhatsApp delivery** | Worker, templates, dead-letter alerting all built | Blocked on Meta business verification, which is blocked on a domain. Notifications queue correctly and never send. |
 
@@ -131,7 +131,7 @@ Verified present in code, not taken from documentation.
 
 | # | Item | Status |
 |---|---|---|
-| S1 | Appointment reminders | Not built. Deposits are the compensating control and are blunter. |
+| ~~S1~~ | ~~Appointment reminders~~ | ✅ Built 2026-09-18. Queue correctly; send when B1 clears. |
 | S2 | `promo` service coverage (11.5%) | Newest money path, thinnest tests. |
 | S3 | Web test coverage (33 tests) | `button`, `badge`, `card`, `input`, `empty-state`, `skeleton`, `location-map`, `help-guide` have none. |
 | S4 | CDN/WAF | Depends on B1. |
@@ -147,6 +147,7 @@ Verified present in code, not taken from documentation.
 - ✅ Nothing reaped expired credentials — 94% of the largest table was dead
 - ✅ Public review list was unbounded
 - ✅ Integers with a floor and no ceiling returned 500 instead of 400
+- ✅ Appointment reminders were structurally impossible (no `scheduled_at`)
 
 ### 5.4 Release verdict
 

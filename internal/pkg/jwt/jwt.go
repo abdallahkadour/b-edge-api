@@ -120,6 +120,18 @@ func GenerateTokenPair(userID uuid.UUID, salonID *uuid.UUID, role string) (*Toke
 // Returns the full Claims on success, error on invalid or expired token.
 func VerifyAccessToken(tokenStr string) (*Claims, error) {
 	secret := os.Getenv("JWT_SECRET")
+	// Fail closed. Generation already refuses without a secret, but
+	// verification did not check - so an empty JWT_SECRET meant tokens signed
+	// with an empty key VERIFIED, turning a misconfiguration into a complete
+	// authentication bypass rather than an outage.
+	//
+	// config.ValidateEnv refuses to boot without a long-enough secret, so this
+	// was not reachable in a running process. It is here so the property holds
+	// in this package rather than depending on a caller three layers away
+	// remembering to check.
+	if secret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is not configured")
+	}
 
 	token, err := gojwt.ParseWithClaims(tokenStr, &Claims{}, func(t *gojwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*gojwt.SigningMethodHMAC); !ok {
@@ -143,6 +155,12 @@ func VerifyAccessToken(tokenStr string) (*Claims, error) {
 // Returns the user UUID on success, error on invalid or expired token.
 func VerifyRefreshToken(tokenStr string) (uuid.UUID, error) {
 	secret := os.Getenv("JWT_REFRESH_SECRET")
+	// Same reasoning as VerifyAccessToken: fail closed rather than verifying
+	// against an empty key. A forged refresh token is worse - it is good for
+	// seven days, not fifteen minutes.
+	if secret == "" {
+		return uuid.Nil, fmt.Errorf("JWT_REFRESH_SECRET is not configured")
+	}
 
 	token, err := gojwt.ParseWithClaims(tokenStr, &gojwt.RegisteredClaims{}, func(t *gojwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*gojwt.SigningMethodHMAC); !ok {

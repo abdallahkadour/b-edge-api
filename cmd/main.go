@@ -226,6 +226,11 @@ func main() {
 	// already dead, every row a credential hash.
 	superviseWorker(ctx, "maintenance", maintenance.NewWorker(pool, logger), logger)
 
+	// Schedules appointment reminders. Until migration 041 this was
+	// structurally impossible - notifications had no scheduled_at, so there
+	// was no way to express "send this tomorrow at 09:00".
+	superviseWorker(ctx, "reminder", booking.NewReminderWorker(pool, logger), logger)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

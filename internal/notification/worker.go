@@ -171,7 +171,11 @@ func (w *Worker) fetchPending(ctx context.Context) ([]*PendingNotification, erro
 			WHERE status IN ('pending', 'failed')
 			AND attempts < $1
 			AND (last_attempted_at IS NULL OR last_attempted_at < NOW() - $2::interval)
-			ORDER BY created_at ASC
+			-- NULL means send now, which is what every event-driven
+			-- notification leaves it as. A future value holds the row back
+			-- without it counting as pending work (migration 041).
+			AND (scheduled_at IS NULL OR scheduled_at <= NOW())
+			ORDER BY scheduled_at NULLS FIRST, created_at ASC
 			LIMIT 10
 			FOR UPDATE SKIP LOCKED
 		)

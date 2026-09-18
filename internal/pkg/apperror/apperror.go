@@ -54,6 +54,26 @@ func Conflict(code, message string) *AppError {
 	return &AppError{HTTPStatus: http.StatusConflict, Code: code, Message: message}
 }
 
+// TooManyRequests creates a 429 Too Many Requests AppError.
+//
+// This exists because its absence had a visible consequence. The OTP request
+// limiter is the one rate limit expressed as a domain error rather than by the
+// middleware, and with no 429 helper here it reached for BadRequest - so a
+// throttled client got a 400 carrying code RATE_LIMITED.
+//
+// Two things broke quietly as a result:
+//
+//   - The shared front-end interceptor keys on `err.status === 429` and never
+//     reads the code, so the rate-limit banner both apps ship never appeared
+//     for OTP throttling. The user saw a generic failure instead.
+//   - The handler below logs at 404 and above, so a 400 was never recorded.
+//     Someone hammering the OTP endpoint left no trace in the logs at all.
+//
+// Caught by executing the documented security plan on 2026-09-18 (SPAM-02).
+func TooManyRequests(code, message string) *AppError {
+	return &AppError{HTTPStatus: http.StatusTooManyRequests, Code: code, Message: message}
+}
+
 // UnprocessableEntity creates a 422 Unprocessable Entity AppError with field details.
 func UnprocessableEntity(code string, details []FieldError) *AppError {
 	return &AppError{

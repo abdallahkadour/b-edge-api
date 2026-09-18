@@ -4,12 +4,15 @@ package customerauth
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/stretchr/testify/require"
 
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
@@ -169,6 +172,25 @@ func TestRequestOTP_RateLimited_Rejected(t *testing.T) {
 	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
 
 	assert.Error(t, err)
+}
+
+// The STATUS matters, not just the failure. This previously returned 400
+// because apperror had no 429 helper, and two things broke silently: the
+// shared front-end interceptor keys on 429 and never showed its rate-limit
+// banner, and the error handler only logs at 404 and above, so someone
+// hammering the endpoint left no trace. Asserting the error alone - which is
+// all the test above did - is what let that through.
+func TestRequestOTP_RateLimited_Returns429(t *testing.T) {
+	repo := &mockRepo{recentOTPCount: 3}
+	svc := newTestService(repo)
+
+	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, http.StatusTooManyRequests, appErr.HTTPStatus)
+	assert.Equal(t, "RATE_LIMITED", appErr.Code)
 }
 
 func TestRequestOTP_UnderRateLimit_Allowed(t *testing.T) {

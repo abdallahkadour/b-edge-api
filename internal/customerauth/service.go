@@ -80,7 +80,7 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
 		return fmt.Errorf("request otp: rate limit check: %w", err)
 	}
 	if count >= otpRateLimitMax {
-		return apperror.BadRequest("RATE_LIMITED", ErrRateLimited.Error())
+		return apperror.TooManyRequests("RATE_LIMITED", ErrRateLimited.Error())
 	}
 
 	// Read-only eligibility check. Deliberately does NOT create a users row:

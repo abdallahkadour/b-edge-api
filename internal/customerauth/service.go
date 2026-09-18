@@ -16,6 +16,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -74,6 +75,15 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
 	if err := s.validate.Struct(req); err != nil {
 		return mapValidationError(err)
 	}
+
+	// Normalise BEFORE the rate-limit lookup, or "71900001" and "+96171900001"
+	// are two different buckets and the per-phone cap is trivially bypassed by
+	// retyping the same number a different way.
+	normalized, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
+	if err != nil {
+		return err
+	}
+	req.Phone = normalized
 
 	count, err := s.repo.CountRecentOTPs(ctx, req.Phone, time.Now().Add(-otpRateLimitWindow))
 	if err != nil {
@@ -138,6 +148,15 @@ func (s *Service) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyO
 	if err := s.validate.Struct(req); err != nil {
 		return nil, mapValidationError(err)
 	}
+
+	// Same normalisation as RequestOTP, and for the same reason: the code was
+	// stored against the canonical form, so verifying against the raw input
+	// would never match if the two were typed differently.
+	normalized, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
+	if err != nil {
+		return nil, err
+	}
+	req.Phone = normalized
 
 	if isDevBypassCode(req.Code) {
 		return s.issueSession(ctx, req.Phone)

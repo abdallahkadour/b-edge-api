@@ -131,8 +131,10 @@ func TestRequestOTP_Success_EnqueuesMessageWithCode(t *testing.T) {
 	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
 
 	require.NoError(t, err)
-	assert.Equal(t, "70123456", repo.enqueuedPhone,
-		"the code is now queued against the PHONE - no users row exists yet at this point")
+	assert.Equal(t, "+96170123456", repo.enqueuedPhone,
+		"queued against the PHONE - no users row exists yet at this point - and in "+
+			"E.164, because the notification worker concatenates \"whatsapp:\" straight "+
+			"onto this value and Twilio rejects anything else")
 	assert.Contains(t, repo.enqueuedMessage, "B-Edge verification code")
 	assert.Contains(t, repo.enqueuedMessage, "5 minutes")
 }
@@ -508,4 +510,40 @@ func TestLogout_RevokesToken(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, repo.revokeCalled)
+}
+
+// The rate limit is keyed on the phone, so it only works if the same human
+// always produces the same key. Before normalisation, "70123456" and
+// "+96170123456" were two separate buckets and the three-per-five-minutes cap
+// was bypassable by retyping the number a different way.
+func TestRequestOTP_NormalisesBeforeTheRateLimitLookup(t *testing.T) {
+	for _, form := range []string{"70123456", "070123456", "+961 70 123 456", "0096170123456"} {
+		repo := &mockRepo{}
+		svc := newTestService(repo)
+
+		require.NoError(t, svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: form}))
+		assert.Equal(t, "+96170123456", repo.enqueuedPhone,
+			"every way of typing this number must hit the same rate-limit bucket (%q)", form)
+	}
+}
+
+// The API's only rule was validate:"required,min=7,max=20" - a length check on
+// a string. This is what that let through.
+func TestRequestOTP_RejectsWhatTheLengthCheckAccepted(t *testing.T) {
+	for _, junk := range []string{"aaaaaaa", "1234567", "-------"} {
+		svc := newTestService(&mockRepo{})
+		assert.Error(t, svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: junk}),
+			"%q must be rejected", junk)
+	}
+}
+
+// A Gulf client booking a Beirut artist can pay in person. Refusing their
+// number at the form turns a reachable customer into a lost one.
+func TestRequestOTP_AcceptsMENANumbers(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	require.NoError(t, svc.RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+971501234567"}))
+	assert.Equal(t, "+971501234567", repo.enqueuedPhone)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
@@ -214,7 +215,14 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		})
 	}
 
-	customerID, err := s.repo.FindOrCreateCustomerByPhone(ctx, req.Name, req.Phone)
+	// Find-or-create keys on the phone, so it has to be the canonical form or
+	// the same person gets a second account and a second order history.
+	normalizedPhone, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
+	if err != nil {
+		return nil, err
+	}
+
+	customerID, err := s.repo.FindOrCreateCustomerByPhone(ctx, req.Name, normalizedPhone)
 	if err != nil {
 		return nil, fmt.Errorf("place order: resolve customer: %w", err)
 	}

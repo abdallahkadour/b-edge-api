@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 )
 
 // CompleteBooking marks a confirmed booking as completed.
@@ -55,7 +56,16 @@ func (s *Service) JoinWaitlist(ctx context.Context, req JoinWaitlistRequest) (uu
 		return uuid.Nil, apperror.BadRequest("INVALID_DATE", "requested_date must be in YYYY-MM-DD format")
 	}
 
-	customerID, err := s.repo.CreateGuestUser(ctx, req.Name, req.Phone)
+	// E.164 before a users row is created. CreateGuestUser is a
+	// find-or-create on the phone, so an unnormalised number would create a
+	// SECOND account for a customer who already exists under the canonical
+	// form - splitting their booking history in two.
+	normalizedPhone, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	customerID, err := s.repo.CreateGuestUser(ctx, req.Name, normalizedPhone)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("join waitlist: resolve customer: %w", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 )
 
 // HoldGuestSlot creates a held booking when a guest taps a slot on C-04.
@@ -158,7 +159,13 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 	}
 
 	// Create the real guest user now that the customer has completed the form.
-	guestUserID, err := s.repo.CreateGuestUser(ctx, req.Name, req.Phone)
+	// See waitlist.go for why this is normalised before the find-or-create.
+	normalizedPhone, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
+	if err != nil {
+		return nil, err
+	}
+
+	guestUserID, err := s.repo.CreateGuestUser(ctx, req.Name, normalizedPhone)
 	if err != nil {
 		return nil, fmt.Errorf("submit guest booking: create guest user: %w", err)
 	}

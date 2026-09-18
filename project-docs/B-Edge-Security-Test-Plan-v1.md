@@ -365,6 +365,68 @@ SPAM-05.
 
 ---
 
+## 6. Second execution — 2026-09-18
+
+Run against the live local stack (Postgres healthy, API :3000, customer-pwa
+:4200, artist-dashboard :4300) using the permanent `mkup1`-`mkup4` roster.
+
+### 6.1 Result
+
+**21 security checks executed, 21 passed, 1 advisory observation.**
+No security defect found.
+
+Executed and passing: AUTH-01, AUTH-02, AUTH-03 (+ role-injection at
+registration), AUTH-04, AUTH-07, INJ-01 (+ path-UUID), INJ-02, INJ-03,
+INJ-04, CLIENT-03, CLIENT-04, EDGE-03, FRAUD-01, FRAUD-03, SPAM-02, SPAM-05.
+
+Notable confirmations:
+
+- **FRAUD-01** — eight concurrent guest holds on one slot; at most one won.
+  The GIST exclusion constraint holds under real concurrency.
+- **FRAUD-03** — `CreateOrderRequest` has **no total field at all**, so the
+  total-tampering attack surface does not exist. Negative and absurd
+  quantities are both rejected.
+- **INJ-03** — `{{7*7}}`, `${7*7}`, `</title><script>` and an `onerror`
+  attribute breakout were all escaped in the share preview.
+- **Deposit ceiling** (new, migration 038) — a deposit above the price is
+  rejected live. This was the fix made during the trust & safety review.
+
+### 6.2 Advisory — not a vulnerability
+
+The OTP request limiter engages correctly after exactly 3 requests per phone,
+but returns **HTTP 400 with `RATE_LIMITED`** rather than **429**. The control
+works; the status code is wrong for it. Standard client retry logic, proxies
+and monitoring key on 429, and a 400 is indistinguishable from a validation
+failure. Worth changing, but it is a correctness-of-signal issue and not a
+hole.
+
+A related cosmetic note: both PWAs fire a `401` on `auth/refresh` on every
+cold signed-out load. Expected behaviour, but it makes real 401s harder to
+spot in logs.
+
+### 6.3 Not executed — do not read these as passes
+
+AUTH-05, AUTH-06 (token replay / refresh reuse — still the largest genuine
+coverage gap, and still blocked on a HTTPS origin), AUTH-08 (needs the API
+restarted under other `APP_ENV` values), AUTH-09, AUTH-10, CLIENT-01 (only
+partially covered via INJ-03), CLIENT-02, CLIENT-05, EDGE-01 (requires
+written authorisation), EDGE-02, EDGE-04, FRAUD-04, FRAUD-05, FRAUD-06,
+FRAUD-07, SPAM-01, SPAM-03, SPAM-04.
+
+### 6.4 Note on method
+
+The first UI pass reported six artist-dashboard screens as rendering when the
+session had not finished establishing — every one was actually the login page,
+which is long enough and error-free enough to satisfy a naive "page has
+content" assertion. It was caught by opening a screenshot, not by the
+assertion. The re-run waits on the URL and asserts the expected `h1`; all 14
+screens then genuinely passed at both 1440×900 and 390×844.
+
+Worth carrying forward: **a render check that does not assert identity will
+happily pass on the login page.**
+
+---
+
 ## 4. Recommended sequence
 
 1. **Before any testing:** stub Twilio; take a DB snapshot; confirm staging's

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,6 +75,54 @@ func (s *service) Approve(ctx context.Context, artistID, adminID uuid.UUID, ip s
 		EntityType: "artist",
 		EntityID:   artistID,
 		Action:     "approved",
+		IPAddress:  ip,
+	})
+
+	return nil
+}
+
+// SetVerification grants or removes the verified badge.
+//
+// The badge means one thing, recorded on VerificationRequest: B-Edge has seen
+// documentation confirming the artist's identity and that the business is
+// real. It is not a statement about their work.
+//
+// Both directions are audited with the note. REMOVING a badge is the more
+// consequential of the two - it is what happens when something turns out to be
+// wrong - so it is recorded with exactly the same care as granting one.
+func (s *service) SetVerification(ctx context.Context, artistID, adminID uuid.UUID, req VerificationRequest, ip string) error {
+	if req.IsVerified == nil {
+		return apperror.BadRequest("IS_VERIFIED_REQUIRED", "is_verified is required")
+	}
+	if strings.TrimSpace(req.Note) == "" {
+		return apperror.BadRequest("NOTE_REQUIRED", "Record what this decision was based on")
+	}
+
+	rows, err := s.repo.SetVerified(ctx, artistID, *req.IsVerified)
+	if err != nil {
+		return fmt.Errorf("set verification: %w", err)
+	}
+	if rows == 0 {
+		// Covers both "no such artist" and "not active". Deliberately one
+		// message: an admin route still must not let a caller distinguish a
+		// real id from a made-up one by the response alone.
+		return apperror.Conflict("NOT_ACTIVE", "This artist is not active")
+	}
+
+	action := "verification_removed"
+	if *req.IsVerified {
+		action = "verified"
+	}
+
+	// Best-effort, matching Approve and Reject: a failure to write the audit
+	// log must never undo a change that already committed.
+	_ = s.audit.Log(ctx, audit.Event{
+		ActorID:    &adminID,
+		ActorRole:  "admin",
+		EntityType: "artist",
+		EntityID:   artistID,
+		Action:     action,
+		NewValues:  map[string]any{"is_verified": *req.IsVerified, "note": strings.TrimSpace(req.Note)},
 		IPAddress:  ip,
 	})
 

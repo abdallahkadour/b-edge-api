@@ -11,6 +11,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
 type Handler struct {
@@ -40,6 +41,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	g.Get("/artists/pending", handler.ListPending)
 	g.Post("/artists/:id/approve", handler.Approve)
 	g.Post("/artists/:id/reject", handler.Reject)
+	g.Patch("/artists/:id/verification", handler.SetVerification)
 }
 
 // ListPending godoc
@@ -104,6 +106,39 @@ func (h *Handler) Reject(c *fiber.Ctx) error {
 	}
 
 	if err := h.svc.Reject(c.UserContext(), artistID, adminID, req, clientip.From(c)); err != nil {
+		return err
+	}
+	return response.NoContent(c)
+}
+
+// SetVerification godoc
+// @Summary      Grant or remove an artist's verified badge
+// @Description  The badge means B-Edge has seen documentation confirming the
+// @Description  artist's identity and that the business is real. It is not a
+// @Description  statement about the quality of their work. A note recording
+// @Description  the basis for the decision is required and is audited.
+// @Tags         admin
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id      path string              true "Artist UUID"
+// @Param        request body VerificationRequest true "Decision and basis"
+// @Success      204
+// @Failure      409 {object} response.Body "artist is not active"
+// @Router       /admin/artists/{id}/verification [patch]
+func (h *Handler) SetVerification(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid artist ID")
+	}
+
+	var req VerificationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+
+	adminID := middleware.UserIDFromContext(c)
+	if err := h.svc.SetVerification(c.UserContext(), artistID, adminID, req, clientip.From(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)

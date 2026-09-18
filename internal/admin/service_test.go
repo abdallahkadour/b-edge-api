@@ -24,6 +24,11 @@ type mockRepo struct {
 	updateStatusRows int64
 	updateStatusErr  error
 
+	setVerifiedRows  int64
+	setVerifiedErr   error
+	lastVerified     bool
+	setVerifiedCalls int
+
 	lastArtistID    uuid.UUID
 	lastStatus      string
 	lastTrialPlan   string
@@ -32,6 +37,13 @@ type mockRepo struct {
 
 func (m *mockRepo) ListPending(_ context.Context) ([]*PendingArtist, error) {
 	return m.pendingResult, m.pendingErr
+}
+
+func (m *mockRepo) SetVerified(_ context.Context, artistID uuid.UUID, verified bool) (int64, error) {
+	m.setVerifiedCalls++
+	m.lastArtistID = artistID
+	m.lastVerified = verified
+	return m.setVerifiedRows, m.setVerifiedErr
 }
 
 func (m *mockRepo) UpdateStatus(_ context.Context, artistID uuid.UUID, newStatus string) (int64, error) {
@@ -307,4 +319,117 @@ func TestReject_AuditLogFailure_DoesNotFailTheRejection(t *testing.T) {
 	err := svc.Reject(context.Background(), uuid.New(), uuid.New(), DecisionRequest{}, "1.2.3.4")
 
 	require.NoError(t, err)
+}
+
+// ── SetVerification ──────────────────────────────────────────────────────────
+//
+// artists.is_verified renders a badge on discovery cards and artist profiles,
+// orders discovery results and has a partial index built on it - and until
+// this existed, nothing in the codebase could ever set it. The badge could not
+// be earned and the sort key was a constant.
+
+func TestSetVerification_GrantsTheBadgeAndAudits(t *testing.T) {
+	repo := &mockRepo{setVerifiedRows: 1}
+	auditRepo := &mockAudit{}
+	svc := newTestService(repo, auditRepo)
+	artistID, adminID := uuid.New(), uuid.New()
+	yes := true
+
+	err := svc.SetVerification(context.Background(), artistID, adminID,
+		VerificationRequest{IsVerified: &yes, Note: "Passport and business licence seen"}, "1.2.3.4")
+
+	require.NoError(t, err)
+	assert.True(t, repo.lastVerified)
+	require.Len(t, auditRepo.events, 1)
+	e := auditRepo.events[0]
+	assert.Equal(t, "verified", e.Action)
+	assert.Equal(t, artistID, e.EntityID)
+	assert.Equal(t, &adminID, e.ActorID)
+	assert.Equal(t, "1.2.3.4", e.IPAddress)
+}
+
+// Removing a badge is the more consequential direction - it is what happens
+// when something turns out to be wrong - so it is recorded with the same care,
+// under its own action name.
+func TestSetVerification_RemovingIsAuditedDistinctly(t *testing.T) {
+	repo := &mockRepo{setVerifiedRows: 1}
+	auditRepo := &mockAudit{}
+	svc := newTestService(repo, auditRepo)
+	no := false
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: &no, Note: "Licence turned out to be another business"}, "")
+
+	require.NoError(t, err)
+	assert.False(t, repo.lastVerified)
+	require.Len(t, auditRepo.events, 1)
+	assert.Equal(t, "verification_removed", auditRepo.events[0].Action)
+}
+
+// The note is the whole point of auditing this. Without it the trail records
+// who flipped a boolean but not on what basis - and the basis is what someone
+// asking "why is this one verified?" in six months actually needs.
+func TestSetVerification_RecordsTheBasisInTheAuditTrail(t *testing.T) {
+	repo := &mockRepo{setVerifiedRows: 1}
+	auditRepo := &mockAudit{}
+	svc := newTestService(repo, auditRepo)
+	yes := true
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: &yes, Note: "  Passport seen 2026-09-18  "}, "")
+
+	require.NoError(t, err)
+	vals, ok := auditRepo.events[0].NewValues.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Passport seen 2026-09-18", vals["note"], "the note is trimmed, not dropped")
+	assert.Equal(t, true, vals["is_verified"])
+}
+
+func TestSetVerification_RejectsAnEmptyNote(t *testing.T) {
+	repo := &mockRepo{setVerifiedRows: 1}
+	svc := newTestService(repo, &mockAudit{})
+	yes := true
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: &yes, Note: "   "}, "")
+
+	require.Error(t, err)
+	assert.Zero(t, repo.setVerifiedCalls, "validation must reject before anything is written")
+}
+
+func TestSetVerification_RejectsAMissingDecision(t *testing.T) {
+	svc := newTestService(&mockRepo{setVerifiedRows: 1}, &mockAudit{})
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: nil, Note: "whatever"}, "")
+
+	assert.Error(t, err)
+}
+
+// A badge on someone who cannot take a booking is meaningless, so the repo
+// guards on status='active' and zero rows means the guard did not match.
+func TestSetVerification_RefusesANonActiveArtist(t *testing.T) {
+	repo := &mockRepo{setVerifiedRows: 0}
+	auditRepo := &mockAudit{}
+	svc := newTestService(repo, auditRepo)
+	yes := true
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: &yes, Note: "Documents seen"}, "")
+
+	require.Error(t, err)
+	assert.Empty(t, auditRepo.events, "nothing changed, so nothing should be audited")
+}
+
+// The audit write is best-effort everywhere else in this service, and must be
+// here too: failing to LOG a change cannot undo a change that already
+// committed.
+func TestSetVerification_SurvivesAFailingAuditLog(t *testing.T) {
+	svc := newTestService(&mockRepo{setVerifiedRows: 1}, &mockAudit{err: assert.AnError})
+	yes := true
+
+	err := svc.SetVerification(context.Background(), uuid.New(), uuid.New(),
+		VerificationRequest{IsVerified: &yes, Note: "Documents seen"}, "")
+
+	assert.NoError(t, err)
 }

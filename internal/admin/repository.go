@@ -20,6 +20,12 @@ type Repository interface {
 	// and order status transitions elsewhere in this codebase.
 	UpdateStatus(ctx context.Context, artistID uuid.UUID, newStatus string) (rowsAffected int64, err error)
 
+	// SetVerified flips the verified badge. Guarded on the artist being
+	// 'active': a trust badge on someone who cannot take a booking is
+	// meaningless, and rowsAffected is how the caller learns the guard did
+	// not match.
+	SetVerified(ctx context.Context, artistID uuid.UUID, verified bool) (rowsAffected int64, err error)
+
 	// ApproveWithTrialSubscription approves a pending artist AND creates
 	// their initial trial subscription in one transaction - see
 	// Service.Approve's doc comment for why this exists (before this,
@@ -93,6 +99,27 @@ func (r *pgRepo) UpdateStatus(ctx context.Context, artistID uuid.UUID, newStatus
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update artist status: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SetVerified flips the verified badge on an ACTIVE artist.
+//
+// Before this existed, artists.is_verified was DEFAULT FALSE and no statement
+// anywhere in the codebase ever set it - while the column was rendered as a
+// badge on discovery cards and artist profiles, ordered discovery results
+// (ORDER BY a.is_verified DESC) and had a partial index built on it. The badge
+// could not be earned, the sort key was a constant, and the index matched no
+// rows.
+func (r *pgRepo) SetVerified(ctx context.Context, artistID uuid.UUID, verified bool) (int64, error) {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE artists
+		    SET is_verified = $1, updated_at = NOW()
+		  WHERE id = $2 AND status = 'active'`,
+		verified, artistID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("set artist verified: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

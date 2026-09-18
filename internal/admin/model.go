@@ -47,8 +47,35 @@ type DecisionRequest struct {
 	Reason *string `json:"reason" validate:"omitempty,max=1000"`
 }
 
+// VerificationRequest sets or clears an artist's verified badge.
+//
+// # WHAT THE BADGE MEANS, WRITTEN DOWN
+//
+// "B-Edge has seen documentation confirming this artist's identity and that
+// the business is real." That and nothing more. It is deliberately NOT a
+// statement about the quality of their work - reviews already carry that, and
+// they are earned from real attended bookings rather than granted by us.
+//
+// The definition is recorded here because the badge is shown to clients who
+// are deciding whether to send money to a stranger, and an undefined trust
+// signal is worse than none: it invites everyone to read their own meaning
+// into it.
+//
+// # WHY A NOTE IS REQUIRED
+//
+// Without one the audit trail records who flipped a boolean and when, but not
+// on what basis. For a signal that ranks artists in discovery and influences a
+// payment decision, the basis is the part worth keeping. It is never shown to
+// the artist or the client - it exists for whoever asks "why is this one
+// verified?" six months from now.
+type VerificationRequest struct {
+	IsVerified *bool  `json:"is_verified" validate:"required"`
+	Note       string `json:"note"        validate:"required,min=4,max=500"`
+}
+
 type Service interface {
 	ListPending(ctx context.Context) ([]*PendingArtist, error)
 	Approve(ctx context.Context, artistID, adminID uuid.UUID, ip string) error
 	Reject(ctx context.Context, artistID, adminID uuid.UUID, req DecisionRequest, ip string) error
+	SetVerification(ctx context.Context, artistID, adminID uuid.UUID, req VerificationRequest, ip string) error
 }

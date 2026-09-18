@@ -32,6 +32,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/payout"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
+	"github.com/abdallahkadour/b-edge-api/internal/report"
 	review "github.com/abdallahkadour/b-edge-api/internal/review"
 	"github.com/abdallahkadour/b-edge-api/internal/share"
 	"github.com/gofiber/fiber/v2"
@@ -165,6 +166,7 @@ func main() {
 	// the request logger does not already carry.
 	promo.RegisterRoutes(app, pool)
 	payout.RegisterRoutes(app, pool)
+	report.RegisterRoutes(app, pool)
 	review.RegisterRoutes(app, pool, logger)
 	client.RegisterRoutes(app, pool, logger)
 	discovery.RegisterRoutes(app, pool, logger)

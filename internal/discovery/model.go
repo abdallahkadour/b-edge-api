@@ -52,7 +52,10 @@ type ArtistCardRow struct {
 	ReviewCount int             `db:"review_count"`
 	City        string          `db:"city"`
 	IsVerified  bool            `db:"is_verified"`
-	CreatedAt   time.Time       `db:"created_at"`
+	// AvatarURL is the artist's photo. Nullable: most artists have not
+	// uploaded one, and the card falls back to initials.
+	AvatarURL *string   `db:"avatar_url"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 // ArtistProfileRow is the core artist row for the public profile aggregate.
@@ -125,7 +128,12 @@ type ArtistCard struct {
 	ReviewCount int             `json:"review_count"`
 	City        string          `json:"city"`
 	IsVerified  bool            `json:"is_verified"`
-	IsNew       bool            `json:"is_new"`
+	// AvatarURL lets the card render the artist rather than their initials.
+	// Omitted when absent so the client can branch on its presence, which is
+	// the difference between a marketplace and a directory - this is a beauty
+	// product and the work is the product.
+	AvatarURL *string `json:"avatar_url,omitempty"`
+	IsNew     bool    `json:"is_new"`
 }
 
 // PublicArtistProfile is the full public profile aggregate rendered by the
@@ -242,6 +250,7 @@ func toArtistCard(r *ArtistCardRow, now time.Time) *ArtistCard {
 		ReviewCount: r.ReviewCount,
 		City:        r.City,
 		IsVerified:  r.IsVerified,
+		AvatarURL:   r.AvatarURL,
 		IsNew:       now.Sub(r.CreatedAt) < newArtistWindow,
 	}
 }

@@ -152,7 +152,7 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 
 	q := fmt.Sprintf(`
 		SELECT a.id, a.handle, u.name, a.category, a.rating, a.review_count,
-		       s.city, a.is_verified, a.created_at
+		       s.city, a.is_verified, a.avatar_url, a.created_at
 		FROM artists a
 		JOIN users u         ON u.id  = a.user_id
 		JOIN artist_stores ast ON ast.artist_id = a.id
@@ -175,7 +175,7 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 		c := &ArtistCardRow{}
 		if err := rows.Scan(
 			&c.ID, &c.Handle, &c.Name, &c.Category, &c.Rating, &c.ReviewCount,
-			&c.City, &c.IsVerified, &c.CreatedAt,
+			&c.City, &c.IsVerified, &c.AvatarURL, &c.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan artist card: %w", err)
 		}

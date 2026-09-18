@@ -296,4 +296,10 @@ type SubscriptionOverviewRow struct {
 	CurrentPeriodEnd  *time.Time      `json:"current_period_end"`
 	CancelledAt       *time.Time      `json:"cancelled_at"`
 	OutstandingAmount decimal.Decimal `json:"outstanding_amount"`
+
+	// IsVerified backs the Artists tab's verification control. It lives on
+	// this row rather than behind a second request because the tab already
+	// lists every artist, and an admin toggling a badge needs to see its
+	// current state to avoid setting what is already set.
+	IsVerified bool `json:"is_verified"`
 }

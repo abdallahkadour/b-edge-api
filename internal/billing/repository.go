@@ -328,7 +328,8 @@ func (r *pgRepo) ListSubscriptionsOverview(ctx context.Context) ([]*Subscription
 			COALESCE((
 				SELECT SUM(i.amount) FROM invoices i
 				WHERE i.subscription_id = s.id AND i.status IN ('issued', 'submitted')
-			), 0) AS outstanding_amount
+			), 0) AS outstanding_amount,
+			a.is_verified
 		FROM subscriptions s
 		JOIN artists a ON a.id = s.artist_id
 		JOIN users u ON u.id = a.user_id
@@ -350,7 +351,7 @@ func (r *pgRepo) ListSubscriptionsOverview(ctx context.Context) ([]*Subscription
 			&row.ArtistID, &row.ArtistName, &row.SubscriptionID, &row.PlanCode, &row.PlanName,
 			&row.MonthlyPrice, &row.Currency, &row.CurrentPeriodEnd,
 			&row.Seats, &row.TrialEndsAt, &row.CancelledAt,
-			&row.OutstandingAmount,
+			&row.OutstandingAmount, &row.IsVerified,
 		); err != nil {
 			return nil, fmt.Errorf("list subscriptions overview: scan: %w", err)
 		}

@@ -27,13 +27,14 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 //     it would publish every artist's account number to anything that
 //     paginates the marketplace. This is read only when someone is actually
 //     about to pay.
+//
 //   - artist.ArtistResponse is documented as deliberately narrow. Widening it
 //     for payment data would erode the rule that keeps it narrow.
 //
-//	GET    /api/v1/salons/:salon_id/payment-methods   - public, active only
-//	GET    /api/v1/artists/salon/payment-methods      - own, including retired
-//	PUT    /api/v1/artists/salon/payment-methods      - add or change one
-//	PATCH  /api/v1/artists/salon/payment-methods/:id  - retire or restore
+//     GET    /api/v1/salons/:salon_id/payment-methods   - public, active only
+//     GET    /api/v1/artists/salon/payment-methods      - own, including retired
+//     PUT    /api/v1/artists/salon/payment-methods      - add or change one
+//     PATCH  /api/v1/artists/salon/payment-methods/:id  - retire or restore
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
 	handler := NewHandler(NewService(NewRepository(pool)))
 

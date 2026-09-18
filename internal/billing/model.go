@@ -77,7 +77,7 @@ type CreatePlanRequest struct {
 	MonthlyPrice  string   `json:"monthly_price" validate:"required"`
 	Currency      string   `json:"currency" validate:"omitempty,len=3"`
 	SeatPrice     string   `json:"seat_price"`
-	IncludedSeats int      `json:"included_seats" validate:"omitempty,min=1"`
+	IncludedSeats int      `json:"included_seats" validate:"omitempty,min=1,max=1000"`
 	Description   string   `json:"description" validate:"max=1000"`
 	Features      []string `json:"features"`
 	IsPublic      *bool    `json:"is_public"`
@@ -96,7 +96,7 @@ type UpdatePlanRequest struct {
 	Name          *string   `json:"name" validate:"omitempty,max=80"`
 	MonthlyPrice  *string   `json:"monthly_price"`
 	SeatPrice     *string   `json:"seat_price"`
-	IncludedSeats *int      `json:"included_seats" validate:"omitempty,min=1"`
+	IncludedSeats *int      `json:"included_seats" validate:"omitempty,min=1,max=1000"`
 	Description   *string   `json:"description" validate:"omitempty,max=1000"`
 	Features      *[]string `json:"features"`
 	IsPublic      *bool     `json:"is_public"`
@@ -203,7 +203,7 @@ type SubscriptionResponse struct {
 // touches the one subscription an admin explicitly named.
 type UpdateSubscriptionRequest struct {
 	PlanCode         *string `json:"plan_code" validate:"omitempty,max=30"`
-	Seats            *int    `json:"seats" validate:"omitempty,min=1"`
+	Seats            *int    `json:"seats" validate:"omitempty,min=1,max=1000"`
 	TrialEndsAt      *string `json:"trial_ends_at"`      // RFC3339, optional
 	CurrentPeriodEnd *string `json:"current_period_end"` // RFC3339, optional
 	// Cancel, if true, sets cancelled_at to now. If false, clears an

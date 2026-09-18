@@ -91,7 +91,7 @@ type CreateDiscountRequest struct {
 
 	StartsAt       *time.Time `json:"starts_at"`
 	EndsAt         *time.Time `json:"ends_at"`
-	MaxRedemptions *int       `json:"max_redemptions" validate:"omitempty,min=1"`
+	MaxRedemptions *int       `json:"max_redemptions" validate:"omitempty,min=1,max=1000000"`
 	FirstTimeOnly  bool       `json:"first_time_only"`
 }
 
@@ -104,7 +104,7 @@ type UpdateDiscountRequest struct {
 	Value          *string    `json:"value"`
 	StartsAt       *time.Time `json:"starts_at"`
 	EndsAt         *time.Time `json:"ends_at"`
-	MaxRedemptions *int       `json:"max_redemptions" validate:"omitempty,min=1"`
+	MaxRedemptions *int       `json:"max_redemptions" validate:"omitempty,min=1,max=1000000"`
 	IsActive       *bool      `json:"is_active"`
 }
 

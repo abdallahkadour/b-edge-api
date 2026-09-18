@@ -308,7 +308,24 @@ func (r *pgRepo) GetReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]
 // a NULL or single-word name can't produce something odd like "Sarah ." -
 // split_part against a string with no space simply returns an empty
 // string for the second part, and the CASE handles that explicitly.
+// maxPublicReviews bounds the public review list.
+//
+// This query had no LIMIT. It backs an UNAUTHENTICATED endpoint and returns
+// every visible review an artist has ever received, so a successful artist
+// with thousands of them produced a multi-megabyte response on every cache
+// miss - against a 20-connection pool with a 300-request in-flight ceiling.
+// Nobody reads review two hundred; the cost was carried entirely by the
+// server and the client's data plan.
+//
+// Fifty, not a page parameter. The customer UI shows a scrolling list with no
+// pager, so pagination would be an API capability with no caller - and an
+// unused parameter on a public endpoint is one more thing to validate and
+// abuse. If the UI ever grows a "show more", this becomes a cursor.
+const maxPublicReviews = 50
+
 func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.UUID) ([]*EnrichedReviewResponse, error) {
+	const limit = maxPublicReviews
+
 	rows, err := r.db.Query(ctx, `
 		SELECT r.id, r.booking_id, r.customer_id, r.artist_id, r.rating, r.comment, r.created_at,
 		       r.salon_rating,
@@ -320,8 +337,9 @@ func (r *pgRepo) GetEnrichedReviewsByArtist(ctx context.Context, artistID uuid.U
 		JOIN users u ON u.id = r.customer_id
 		WHERE r.artist_id = $1
 		AND r.is_visible = TRUE
-		ORDER BY r.created_at DESC`,
-		artistID,
+		ORDER BY r.created_at DESC
+		LIMIT $2`,
+		artistID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get enriched reviews by artist: %w", err)

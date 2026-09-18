@@ -208,7 +208,7 @@ type UpdateServiceRequest struct {
 	BufferMin            *int                   `json:"buffer_min"             validate:"omitempty,min=0,max=120"`
 	Price                *string                `json:"price"                  validate:"omitempty"`
 	DepositAmount        *string                `json:"deposit_amount"         validate:"omitempty"`
-	DepositDeadlineHours *int                   `json:"deposit_deadline_hours" validate:"omitempty,min=1"`
+	DepositDeadlineHours *int                   `json:"deposit_deadline_hours" validate:"omitempty,min=1,max=720"`
 	IsActive             *bool                  `json:"is_active"`
 }
 

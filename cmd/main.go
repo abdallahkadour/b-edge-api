@@ -27,6 +27,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/customerauth"
 	"github.com/abdallahkadour/b-edge-api/internal/discovery"
 	"github.com/abdallahkadour/b-edge-api/internal/inbox"
+	"github.com/abdallahkadour/b-edge-api/internal/maintenance"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
 	"github.com/abdallahkadour/b-edge-api/internal/payout"
@@ -219,6 +220,11 @@ func main() {
 	// another slot opening - which is precisely what is not happening. See
 	// internal/booking/waitlist_worker.go.
 	superviseWorker(ctx, "waitlist", booking.NewWaitlistWorker(pool, logger), logger)
+
+	// Reaps expired refresh tokens and OTPs. Before this, nothing did:
+	// refresh_tokens was the largest table in the database and 94% of it was
+	// already dead, every row a credential hash.
+	superviseWorker(ctx, "maintenance", maintenance.NewWorker(pool, logger), logger)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

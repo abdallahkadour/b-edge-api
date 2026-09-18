@@ -146,9 +146,13 @@ type Booking struct {
 	// over THIS rather than EndTime, so cleanup is guarded by the database
 	// rather than by an application rule a race could walk through. Set to
 	// now on early completion to hand the remaining buffer back.
-	BlockedUntil    time.Time `db:"blocked_until"`
-	Channel         string    `db:"channel"`
-	SpecialRequests *string   `db:"special_requests"`
+	BlockedUntil time.Time `db:"blocked_until"`
+	// RescheduleCount is how many times the client has moved this booking.
+	// Capped by maxReschedules: a slot moved repeatedly is a slot nobody else
+	// can book, with no deposit ever at risk (migration 042).
+	RescheduleCount int     `db:"reschedule_count"`
+	Channel         string  `db:"channel"`
+	SpecialRequests *string `db:"special_requests"`
 	// DiscountCode is denormalised beside discount_amount so a receipt renders
 	// without a join and survives the discount row being deleted.
 	DiscountCode       *string    `db:"discount_code"`
@@ -358,6 +362,14 @@ type GetAvailableSlotsRequest struct {
 	StoreID   string `query:"store_id"   validate:"required,uuid"`
 	ServiceID string `query:"service_id" validate:"required,uuid"`
 	Date      string `query:"date"       validate:"required"`
+
+	// excludeBookingID omits one booking from the artist's occupancy.
+	//
+	// Unexported deliberately: BodyParser and the query binder cannot reach it,
+	// so no caller can ask for availability "as if booking X did not exist".
+	// Set only by RescheduleBooking, which has already proved the caller owns
+	// that booking.
+	excludeBookingID *uuid.UUID
 }
 
 // CreateBookingRequest is the request body for POST /api/v1/bookings.

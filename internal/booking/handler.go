@@ -97,6 +97,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	b.Get("/artist/:artist_id/calendar", middleware.RequireRole("artist", "admin"), handler.GetArtistCalendar)
 	b.Get("/artist/:artist_id/waitlist", middleware.RequireRole("artist", "admin"), handler.GetWaitlistByArtist)
 	b.Get("/customer/me", handler.GetBookingsByCustomer)
+	b.Patch("/:id/reschedule", handler.RescheduleBooking)
 }
 
 // GetAvailableSlots godoc
@@ -769,6 +770,43 @@ func (h *Handler) PreviewDiscount(c *fiber.Ctx) error {
 	}
 
 	out, err := h.svc.PreviewDiscount(c.UserContext(), id, req.Code)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
+}
+
+// RescheduleBooking godoc
+// @Summary      Move a booking to a new time
+// @Description  Only the time changes. Service, store and artist are immovable:
+// @Description  changing any of them is a different appointment at a different
+// @Description  price. The new time must be one the artist's own availability
+// @Description  offers. The status and the deposit travel with the booking -
+// @Description  the artist already accepted this client for this service.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id   path string                   true "Booking UUID"
+// @Param        body body RescheduleBookingRequest true "New start time"
+// @Success      200 {object} response.Body{data=BookingResponse}
+// @Failure      409 {object} response.Body "slot unavailable, limit reached, or no longer movable"
+// @Router       /bookings/{id}/reschedule [patch]
+func (h *Handler) RescheduleBooking(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		// Same answer as someone else's booking - a malformed id must not be
+		// distinguishable from a real one the caller does not own.
+		return errBookingNotFound()
+	}
+
+	var req RescheduleBookingRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+
+	out, err := h.svc.RescheduleBooking(c.UserContext(), bookingID,
+		middleware.UserIDFromContext(c), req)
 	if err != nil {
 		return err
 	}

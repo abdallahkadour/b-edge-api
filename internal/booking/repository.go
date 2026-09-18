@@ -129,12 +129,22 @@ type Repository interface {
 	// UpdateBookingStatus transitions a booking to a new status.
 	UpdateBookingStatus(ctx context.Context, id uuid.UUID, status string) error
 
+	// RescheduleBooking moves a booking to a new time in ONE statement, so the
+	// GIST exclusion constraint remains the final arbiter. Returns rows
+	// affected: zero means the booking was no longer movable or had used up
+	// its reschedules.
+	RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int) (int64, error)
+
 	// GetArtistIDByUserID resolves a requester's users.id to their artists.id.
 	// bookings.artist_id references artists.id, not users.id, so any ownership
 	// check comparing a requester against a booking's artist must resolve
 	// through this first. Returns ErrArtistNotFound if the user has no
 	// artist profile.
 	GetArtistIDByUserID(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
+
+	// GetArtistUserID is the reverse: artists.id to the users.id behind it,
+	// which is who a notification is actually addressed to.
+	GetArtistUserID(ctx context.Context, artistID uuid.UUID) (uuid.UUID, error)
 
 	// CreateWaitlistEntry adds a customer to the queue for a fully-booked
 	// (artist, store, service, date) combination.
@@ -284,7 +294,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
 		&b.DepositReference,
-		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil,
+		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
 		&b.Channel,
 		&b.SpecialRequests,
 		&b.CancellationReason,
@@ -306,7 +316,7 @@ const bookingSelectCols = `
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price, discount_code,
 	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token, calendar_token,
-	buffer_min, blocked_until,
+	buffer_min, blocked_until, reschedule_count,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
@@ -783,6 +793,50 @@ func (r *pgRepo) UpdateBookingStatus(ctx context.Context, id uuid.UUID, status s
 		return ErrBookingNotFound
 	}
 	return nil
+}
+
+// RescheduleBooking moves a booking to a new time.
+//
+// One statement, so the GIST exclusion constraint on (artist_id, tstzrange) is
+// the final arbiter exactly as it is for a new booking. A read-then-write
+// would leave a window where two clients could both be told their new time was
+// free.
+//
+// Guarded on the booking still being in a movable status and on the count, so
+// a client who exhausted their reschedules cannot win a race against their own
+// last attempt. Zero rows means one of those guards refused.
+func (r *pgRepo) RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE bookings
+		   SET start_time       = $2,
+		       end_time         = $3,
+		       blocked_until    = $4,
+		       reschedule_count = reschedule_count + 1,
+		       updated_at       = NOW()
+		 WHERE id = $1
+		   AND deleted_at IS NULL
+		   AND status IN ('pending', 'approved', 'deposit_paid', 'confirmed')
+		   AND reschedule_count < $5`,
+		id, start, end, blockedUntil, maxReschedules,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reschedule booking: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// GetArtistUserID resolves artists.id to the users.id behind it.
+//
+// Notifications are addressed to a USER, not an artist profile, so every
+// artist-facing message needs this hop.
+func (r *pgRepo) GetArtistUserID(ctx context.Context, artistID uuid.UUID) (uuid.UUID, error) {
+	var userID uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT user_id FROM artists WHERE id = $1`, artistID).Scan(&userID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get artist user id: %w", err)
+	}
+	return userID, nil
 }
 
 // GetArtistIDByUserID resolves a user's UUID to their artists.id.
@@ -1469,7 +1523,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice, &b.DiscountCode,
 			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken, &b.CalendarToken,
-			&b.BufferMin, &b.BlockedUntil,
+			&b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,
 			&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt,

@@ -45,6 +45,15 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
+	artistUserID          uuid.UUID
+	artistUserIDErr       error
+	rescheduleRows        int64
+	rescheduleErr         error
+	rescheduleCalls       int
+	lastRescheduleStart   time.Time
+	lastRescheduleEnd     time.Time
+	lastRescheduleBlocked time.Time
+
 	// captures the redemption written alongside a booking, so a test can
 	lastApplied *AppliedDiscount
 	// Bulk schedule preview (migration 029)
@@ -181,6 +190,18 @@ func (m *mockRepo) UpdateBookingStatus(_ context.Context, _ uuid.UUID, _ string)
 }
 func (m *mockRepo) GetArtistIDByUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
 	return m.getArtistIDByUserIDArtistID, m.getArtistIDByUserIDErr
+}
+
+func (m *mockRepo) GetArtistUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
+	return m.artistUserID, m.artistUserIDErr
+}
+
+func (m *mockRepo) RescheduleBooking(_ context.Context, _ uuid.UUID, start, end, blocked time.Time, _ int) (int64, error) {
+	m.rescheduleCalls++
+	m.lastRescheduleStart = start
+	m.lastRescheduleEnd = end
+	m.lastRescheduleBlocked = blocked
+	return m.rescheduleRows, m.rescheduleErr
 }
 func (m *mockRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, reference *string) error {
 	m.confirmDepositReceivedReferenceCalled = reference

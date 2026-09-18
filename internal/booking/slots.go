@@ -233,6 +233,15 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	// would silently stop cross-store bookings blocking their own span.
 	occupied := &Occupancy{}
 	for _, b := range existingBookings {
+		// A booking being RESCHEDULED must not block its own new time. Without
+		// this, moving a 60-minute appointment from 10:00 to 10:30 is refused
+		// by the appointment itself - the one obstacle the client is trying to
+		// remove. Never set from a request parameter: exposing it would let a
+		// caller probe availability as though an arbitrary booking did not
+		// exist.
+		if req.excludeBookingID != nil && b.ID == *req.excludeBookingID {
+			continue
+		}
 		occupied.AddRange(b.StartTime, b.EndTime, KindService)
 		// Cleanup after the appointment, as its own typed interval rather
 		// than a longer service span. Kept separate because the two mean

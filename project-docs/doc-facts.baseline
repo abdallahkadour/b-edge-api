@@ -17,3 +17,4 @@ web_help_admin_sections=4
 web_help_topics_total=45
 web_ng_routes=41
 web_spec_files=6
+web_tests=33

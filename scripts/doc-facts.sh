@@ -95,6 +95,14 @@ echo "api_env_vars=$env_vars"
 
 if [ -d "$WEB_DIR/projects" ]; then
   specs=$(find "$WEB_DIR/projects" -name '*.spec.ts' -not -path '*/node_modules/*' 2>/dev/null | wc -l | tr -d ' ')
+
+  # Test CASES, not files - the file count says nothing about coverage, and
+  # quoting it as if it did is how "6 spec files" got read as "6 tests".
+  #
+  # Counted statically rather than by running `ng test`, because this script
+  # must stay fast and side-effect free. Verified to agree with the runner on
+  # 2026-09-19: 33 either way.
+  web_tests=$(grep -rhoE "^[[:space:]]*it\(" "$WEB_DIR/projects" --include='*.spec.ts' 2>/dev/null | wc -l | tr -d ' ')
   ng_routes=$(count "path: *'" "$WEB_DIR/projects" --include='*.routes.ts')
 
   # Help guides are typed data (GuideSection[]), not markdown. A TOPIC is one
@@ -129,4 +137,5 @@ if [ -d "$WEB_DIR/projects" ]; then
   echo "web_help_topics_total=$help_total"
   echo "web_ng_routes=$ng_routes"
   echo "web_spec_files=$specs"
+  echo "web_tests=$web_tests"
 fi

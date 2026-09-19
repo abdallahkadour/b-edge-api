@@ -38,10 +38,19 @@ blunt about this: a use case with no extensions is **incomplete**, because
 real systems have exceptions ([Visual Paradigm](https://www.visual-paradigm.com/guide/the-comprehensive-guide-from-use-case-to-test-case-via-uml/)).
 Almost every defect above lived in an extension.
 
-**There is no automated regression net on the frontend.** `npx vitest run`
-currently gives **19 failed / 6 passed**, every failure a configuration
-error. So nothing that gets fixed stays verified, and every check is a
-one-off performed by hand.
+**The frontend regression net is thin.** `ng test` gives **33 passing tests
+across 41 routes** — real, but nowhere near enough to hold the behaviour
+this product depends on. Most fixes are held by nothing, so they are
+verified once by hand and then decay.
+
+> An earlier version of this section said the suite was *broken* — "19
+> failed / 6 passed". That was wrong, and instructively so: it came from
+> running `npx vitest run` directly, which bypasses Angular 21's
+> `@angular/build:unit-test` builder. The tool reported real errors about a
+> setup it had loaded incorrectly, and I read them as facts about the
+> project. **Running the wrong command and believing its output is the same
+> mistake as trusting a status column** — see rule 4 below, which now
+> applies to the verifier as much as to the system.
 
 The prompt below is built to attack exactly these.
 
@@ -211,8 +220,11 @@ return 404 rather than 403 so ids cannot be enumerated; repository-layer
 tests are out of scope because no DB test infrastructure exists.
 
 **Known and broken, no need to re-verify:** WhatsApp delivery is 0% pending
-Meta business verification; customer OTP login therefore cannot work; the
-frontend test suite does not run (19 failed / 6 passed, all configuration).
+Meta business verification, so customer OTP login cannot work.
+
+**Known and NOT broken, despite an earlier claim:** the frontend test suite
+runs. Use `ng test <project>` — 33 tests, all passing. `npx vitest run` is
+the wrong entry point for Angular 21 and its failures are meaningless.
 
 **Traps that have already cost time:**
 - `@bedge/shared` resolves to `./dist/shared`, so `ng build shared` must run
@@ -224,6 +236,14 @@ frontend test suite does not run (19 failed / 6 passed, all configuration).
   catch-all registered after a specific stub swallows it.
 - The customer discovery page is at `/`, not `/discover`. `/bookings` and
   `/profile` do not exist.
+- `GET /bookings/slots` returns **only bookable slots** — there is no
+  `available` field to filter on. Filtering for one yields zero results and
+  looks like "no availability".
+- The hours exception table is `business_hours_exceptions` with an
+  `exception_date` column. There is no `special_hours` table.
+- Run test SQL through something that **surfaces stderr**. A helper that
+  swallowed it turned a failed INSERT into a non-existent table into a
+  confident false finding.
 
 ---
 

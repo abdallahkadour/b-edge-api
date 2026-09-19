@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1
 
 run:
 	go run cmd/main.go
@@ -42,3 +42,9 @@ docs-check:
 # The raw facts the docs make claims about, as key=value.
 docs-facts:
 	./scripts/doc-facts.sh
+
+# Executable verification of UC-1 (guest booking) against a running stack.
+# Exits non-zero on any failure. Needs the API on :3000 and bedge-postgres up.
+# See project-docs/B-Edge-UC1-Guest-Booking-Verification-v1.md.
+verify-uc1:
+	python3 scripts/verify-uc1.py

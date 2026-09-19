@@ -11,12 +11,24 @@
 
 ---
 
+> **CORRECTION 2026-09-20 — the frontend test suite is not broken.** An
+> earlier claim here, and the row below about `ng test`, said it gave "19
+> failed / 6 passed, every failure a configuration error". That came from
+> running `npx vitest run` directly, which bypasses Angular 21's
+> `@angular/build:unit-test` builder and loads spec files with no TestBed and
+> no build pipeline — the errors were the wrong command's, not the project's.
+> The correct command is `ng test <project>`: **33 tests, all passing**
+> (shared 31, customer-pwa 1, artist-dashboard 1). The net exists. It is
+> **thin** — 33 tests across 41 routes — which is a fair criticism and a
+> different one from "it does not run".
+>
 > **Verified against code 2026-09-19 (second pass):** **44 migrations**
 > (latest `044_deposit_payer_phone`), **32 tables**, **18 route-bearing
 > domains** (24 directories under `internal/`, excluding `pkg`), **14 leaf
 > packages**, **143 route registrations** across **115 swagger paths**,
 > **834 Go tests**, **24 environment variables**. Frontend: **41 Angular
-> routes**, **6 spec files**, **45 help topics** (15 customer, 26 artist,
+> routes**, **6 spec files** carrying **33 passing tests**, **45 help
+> topics** (15 customer, 26 artist,
 > 4 admin).
 >
 > These numbers are now **generated, not typed**:
@@ -31,15 +43,17 @@
 > "17 domains" was ambiguous rather than wrong: `internal/` holds middleware
 > and config alongside real domains, so the directory count and the domain
 > count were never the same number and the block did not say which it meant.
-> It is now stated as both. And **"Frontend: 8 tests, and the `ng test`
-> targets run"** no longer holds — `npx vitest run` gives **19 failed / 6
-> passed**, every failure a configuration error (the `@bedge/shared` path
-> alias is unresolved, `@playwright/test` is absent, no
-> `TestBed.initTestEnvironment()`, and the environment is `node` rather than
-> `jsdom`). Confirmed pre-existing by stashing all local changes and
-> re-running. **The frontend has no working automated regression net**, which
-> is worth knowing before trusting any claim in these docs about frontend
-> behaviour.
+> It is now stated as both. ~~And "Frontend: 8 tests, and the `ng test`
+> targets run" no longer holds — `npx vitest run` gives 19 failed / 6
+> passed…~~ **That second correction was itself wrong and is retracted
+> (2026-09-20).** `npx vitest run` is not how this workspace runs tests;
+> Angular 21 uses the `@angular/build:unit-test` builder, and invoking vitest
+> directly loads specs with no TestBed and no build pipeline. Every error it
+> printed described the wrong setup, not the project. **`ng test` gives 33
+> passing tests** (shared 31, customer-pwa 1, artist-dashboard 1) — the
+> earlier "8 tests, and the targets run" claim was closer to the truth than
+> the correction that replaced it. See the correction at the top of this
+> file.
 >
 > Any schema-version or domain-count figure written above this line is a
 > snapshot from the day it was written, not current. The current engineering
@@ -64,7 +78,7 @@ over a tunnel and watching what she hit.
 | **Two WebKit-only rendering bugs at 320px** | The store tab strip pushed the whole page 66px sideways with four stores; time values clipped mid-character to `07:08 AI` because Safari renders time inputs in 12-hour form. Neither visible in Chrome. | `hours.component.html` |
 | **Help: 4 new artist topics** | Setting the week at once, the early-bird surcharge, recording a payer number, and refunding a deposit that came from someone else. 22 → 26 artist topics. | `artist-guide.ts` |
 | **`schema_migrations` was stuck dirty at 34** | While the schema was physically at 43, so **`make migrate` failed outright and no migration could be applied by the normal path**. All of 035–043 were verified present before the bookkeeping was corrected. | — |
-| `B-Edge-Use-Case-Verification-Prompt-v1.md` | **New, Sep 19, 2026.** A reusable prompt for verifying the product against a use-case model rather than by looking at screens. Written after a session with the launch artist surfaced defects that earlier testing had missed, and it opens by explaining why: every one of them was an **alternate flow, an exception flow, or an environment variation** — never a broken happy path. The five shapes are named with the real examples (a deposit paid from someone else's number; six weeks of 0% WhatsApp delivery that the `sent` column reported as success; hour labels clipped to one letter on a phone but fine on desktop; a UI sweep that measured the 404 page and called it clean; two screens starting the week on different days). Two structural causes underneath: there is **no written model of what B-Edge should do**, so testing finds only what someone happens to look at, and there is **no frontend regression net**, so nothing that is fixed stays verified. The method is the standard use-case-to-test-case derivation — a use case with no extensions is incomplete — plus six project-specific rules that each exist because ignoring one cost real time: assert identity before measuring, verify the effect rather than the status field, test in WebKit at 390px because that is what the user holds, and check consistency ACROSS screens. Ships with the six paths to model first, ordered by what failure costs, and a reference section of known traps so a fresh session does not rediscover them. |
+| `B-Edge-Use-Case-Verification-Prompt-v1.md` | **New, Sep 19, 2026.** A reusable prompt for verifying the product against a use-case model rather than by looking at screens. Written after a session with the launch artist surfaced defects that earlier testing had missed, and it opens by explaining why: every one of them was an **alternate flow, an exception flow, or an environment variation** — never a broken happy path. The five shapes are named with the real examples (a deposit paid from someone else's number; six weeks of 0% WhatsApp delivery that the `sent` column reported as success; hour labels clipped to one letter on a phone but fine on desktop; a UI sweep that measured the 404 page and called it clean; two screens starting the week on different days). Two structural causes underneath: there is **no written model of what B-Edge should do**, so testing finds only what someone happens to look at, and the frontend regression net is **thin** — 33 tests across 41 routes — so most fixes are held by nothing. (An earlier version of this line said there was no net at all; that was based on running the wrong test command and is corrected above.) The method is the standard use-case-to-test-case derivation — a use case with no extensions is incomplete — plus six project-specific rules that each exist because ignoring one cost real time: assert identity before measuring, verify the effect rather than the status field, test in WebKit at 390px because that is what the user holds, and check consistency ACROSS screens. Ships with the six paths to model first, ordered by what failure costs, and a reference section of known traps so a fresh session does not rediscover them. |
 | `B-Edge-UC1-Guest-Booking-Verification-v1.md` | **New, Sep 19, 2026.** First execution of the verification prompt, on path 1 of 6. **17 flows enumerated, 17 executed, 0 defects.** The guest booking path works, including the flow that actually matters: **six concurrent holds on one slot produced exactly one winner and five `SLOT_UNAVAILABLE`** — the GIST exclusion constraint doing what migration 001 claims for it, verified under real parallelism rather than by reading the Go. Availability never offers a start that would run past closing (53-min service last start 17:00, closes 18:00), exception closures override the weekly pattern, custom exception hours narrow the day correctly, and the early-bird surcharge is charged rather than merely advertised ($200 service → $215 final). **The finding is where the defects are NOT**: this logic is sound, so testing it harder would never have surfaced the rendering, cross-screen and delivery failures that reached the artist. Records its own three false positives in full — including a SQL helper that swallowed stderr, so a failed INSERT into a non-existent table looked like a real defect — on the grounds that a report which hides its own mistakes cannot be trusted on its passes. Six gaps named rather than skipped, the sharpest being **surcharge-vs-discount ordering: a money rule with a named decision (D3) behind it and no test**. Recommends running UC-5 (notifications) next rather than UC-2, because it is the only path with a known 100% failure rate and known-wrong self-reporting. |
 | **Sharing the apps with a remote tester** | `scripts/share.sh` + `share-proxy.mjs` put each app and the API behind **one origin** per app, so the apps call a relative `/api/v1` — a changed tunnel hostname never forces a rebuild, and CORS disappears entirely. `share-watch.sh` restarts a tunnel Cloudflare has reclaimed, checking the **public** URL because the local proxy answers happily while the public one is dead. | `b-edge-web/scripts/` |
 
@@ -76,7 +90,7 @@ over a tunnel and watching what she hit.
 |---|---|---|
 | **Documentation is now checked, not trusted** | `scripts/doc-facts.sh` recomputes every counted claim the docs make — migrations, tables, domains, leaf packages, routes, swagger paths, Go tests, env vars, and the frontend's routes, spec files and help topics — from both repositories. `scripts/check-docs.sh` fails when they drift from `project-docs/doc-facts.baseline`, and additionally maps changed paths to the documents that have a standing relationship with them. Built because this index stood at **33 migrations against a repository holding 43** — ten migrations of drift over a fortnight in which every individual commit was green. Nothing had failed, because nothing was checking. Three enforcement points, deliberately different in strength: `make docs-check` on demand, an **opt-in pre-push hook that warns and never blocks** (a blocking hook is `--no-verify`d once and ignored forever after), and `.github/workflows/docs-check.yml`, which blocks the PR — CI is where the rule can hold because nobody is in a hurry there. The judgement half is the `/sync-docs` skill. | `README.md` § Keeping documentation true; `.claude/skills/sync-docs/SKILL.md` |
 | **Three stale claims this found immediately** | The index said 33 migrations (43). `README.md` said all documentation lives in `docs/` — that is **gitignored swagger output**, so anything written there is lost, and this had already been got wrong more than once. `b-edge-web/README.md` pointed at a root `CLAUDE.md` that **does not exist and never has**. All three corrected. | this file; both READMEs |
-| **The frontend has no working test suite** | `npx vitest run` gives **19 failed / 6 passed**, every failure a configuration error: the `@bedge/shared` path alias is unresolved, `@playwright/test` is absent, `TestBed.initTestEnvironment()` is never called, and the environment is `node` rather than `jsdom`. Confirmed pre-existing by stashing all local changes and re-running. The previous verified block's claim that "the `ng test` targets run at all for the first time" no longer holds. | the "Verified against code" block above |
+| ~~**The frontend has no working test suite**~~ — **WRONG, corrected 2026-09-20** | This row claimed `npx vitest run` gave 19 failed / 6 passed and concluded the frontend had no regression net. The command was wrong, not the project: Angular 21 uses the `@angular/build:unit-test` builder, and calling vitest directly loads specs with no TestBed and no build pipeline. `ng test` gives **33 passing tests**. The real criticism is that 33 tests across 41 routes is **thin**, not that the suite is broken. Left visible rather than deleted, because a wrong claim that shaped two other documents should stay traceable. | the correction at the top of this file |
 | **Enterprise UI test plan executed** | A founder-supplied Fresha-style UI test plan run against the production bundle on real **WebKit 26.5**, not Chrome emulation. Eight defects found and fixed across ten files. The largest was not in the plan: **on Fast 3G the app painted a blank white page for 2.5–3.0 s** on every route, because `<app-root>` was empty and nothing could paint until Angular bootstrapped — no framework-rendered skeleton can fix that, so the fix is an inline splash in `index.html`. Also: the app was frozen at a **480px phone-width column above 768px**, so an iPad Pro rendered a strip with half the screen empty; it now steps 2→3→4 columns. The report carries a correction of its own first issue, which measured three routes that do not exist. | `b-edge-web/project-docs/Enterprise-UI-Test-Plan-Execution-2026-09-19.md` |
 | `b-edge-web/project-docs/` | Now **5 documents**: the E2E test plan, the booking state-machine matrix, the style guide, and the enterprise UI test plan with its execution report. | — |
 

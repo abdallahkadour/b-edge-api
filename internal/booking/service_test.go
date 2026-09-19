@@ -97,6 +97,9 @@ type mockRepo struct {
 	approveBookingCalendarToken           string
 	markRefundedErr                       error
 	markRefundedReference                 *string
+	confirmDepositPayerPhone              *string
+	depositPayerMismatch                  bool
+	depositPayerMismatchErr               error
 	confirmDepositErr                     error
 	cancelBookingErr                      error
 	completeBookingErr                    error
@@ -203,7 +206,8 @@ func (m *mockRepo) RescheduleBooking(_ context.Context, _ uuid.UUID, start, end,
 	m.lastRescheduleBlocked = blocked
 	return m.rescheduleRows, m.rescheduleErr
 }
-func (m *mockRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, reference *string) error {
+func (m *mockRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, reference, payerPhone *string) error {
+	m.confirmDepositPayerPhone = payerPhone
 	m.confirmDepositReceivedReferenceCalled = reference
 	return m.confirmDepositReceivedErr
 }
@@ -243,6 +247,9 @@ func (m *mockRepo) ConfirmDeposit(_ context.Context, _ uuid.UUID) error {
 func (m *mockRepo) MarkRefunded(_ context.Context, _ uuid.UUID, reference *string) error {
 	m.markRefundedReference = reference
 	return m.markRefundedErr
+}
+func (m *mockRepo) DepositPayerMismatch(_ context.Context, _ uuid.UUID) (bool, error) {
+	return m.depositPayerMismatch, m.depositPayerMismatchErr
 }
 func (m *mockRepo) CancelBooking(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
 	return m.cancelBookingErr
@@ -1254,7 +1261,7 @@ func TestConfirmDepositReceived_WithReference_PassedToRepo(t *testing.T) {
 	svc := newTestService(repo)
 
 	ref := "Whish Code #94821"
-	result, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, &ref)
+	result, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, &ref, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, repo.confirmDepositReceivedReferenceCalled,
@@ -1281,7 +1288,7 @@ func TestConfirmDepositReceived_ReferenceTooLong_BadRequest(t *testing.T) {
 	svc := newTestService(repo)
 
 	tooLong := strings.Repeat("x", 256)
-	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, &tooLong)
+	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, &tooLong, nil)
 
 	assert.Error(t, err)
 }
@@ -1302,7 +1309,7 @@ func TestConfirmDepositReceived_Success(t *testing.T) {
 	}
 	svc := newTestService(repo)
 
-	result, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil)
+	result, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, StatusConfirmed, result.Status)
@@ -1557,7 +1564,7 @@ func TestConfirmDepositReceived_WrongArtist_Forbidden(t *testing.T) {
 	}
 	svc := newTestService(repo)
 
-	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil)
+	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil, nil)
 
 	assert.Error(t, err)
 }
@@ -1578,7 +1585,7 @@ func TestConfirmDepositReceived_NotApproved_Conflict(t *testing.T) {
 	}
 	svc := newTestService(repo)
 
-	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil)
+	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil, nil)
 
 	assert.Error(t, err)
 }
@@ -1602,7 +1609,7 @@ func TestConfirmDepositReceived_NoArtistProfile_Forbidden(t *testing.T) {
 	}
 	svc := newTestService(repo)
 
-	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil)
+	_, err := svc.ConfirmDepositReceived(context.Background(), booking.ID, userID, nil, nil)
 
 	assert.Error(t, err)
 }
@@ -2236,7 +2243,7 @@ func TestBothConfirmationRoutes_SendTheSameAnnouncement(t *testing.T) {
 
 	oneStep := newRepo(StatusApproved)
 	svcOne := newTestService(oneStep)
-	_, err := svcOne.ConfirmDepositReceived(context.Background(), oneStep.getBookingByIDBooking.ID, userID, nil)
+	_, err := svcOne.ConfirmDepositReceived(context.Background(), oneStep.getBookingByIDBooking.ID, userID, nil, nil)
 	require.NoError(t, err)
 
 	twoStep := newRepo(StatusDepositPaid)
@@ -2278,7 +2285,7 @@ func TestConfirmation_PastAppointment_ConfirmsSilently(t *testing.T) {
 
 	for name, run := range map[string]func(*Service, uuid.UUID) error{
 		"one-step": func(s *Service, id uuid.UUID) error {
-			_, err := s.ConfirmDepositReceived(context.Background(), id, userID, nil)
+			_, err := s.ConfirmDepositReceived(context.Background(), id, userID, nil, nil)
 			return err
 		},
 		"two-step": func(s *Service, id uuid.UUID) error {
@@ -2314,7 +2321,7 @@ func TestMarkRefunded_ClosesTheRefundLoop(t *testing.T) {
 	svc := newTestService(repo)
 
 	ref := "Whish #94821"
-	got, err := svc.MarkRefunded(context.Background(), b.ID, userID, &ref)
+	got, err := svc.MarkRefunded(context.Background(), b.ID, userID, &ref, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, StatusRefunded, got.Status)
@@ -2333,7 +2340,7 @@ func TestMarkRefunded_WrongStatus_Conflict(t *testing.T) {
 		repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
 		svc := newTestService(repo)
 
-		_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil)
+		_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil, false)
 
 		require.Error(t, err, "status %q", status)
 		var appErr *apperror.AppError
@@ -2352,7 +2359,7 @@ func TestMarkRefunded_WrongArtist_NotFound(t *testing.T) {
 	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: uuid.New()}
 	svc := newTestService(repo)
 
-	_, err := svc.MarkRefunded(context.Background(), b.ID, uuid.New(), nil)
+	_, err := svc.MarkRefunded(context.Background(), b.ID, uuid.New(), nil, false)
 
 	require.Error(t, err)
 	var appErr *apperror.AppError
@@ -2370,11 +2377,11 @@ func TestOwnershipAndAbsence_AreIndistinguishable(t *testing.T) {
 
 	// (a) the booking exists but belongs to another artist
 	ownedByOther := &mockRepo{getBookingByIDBooking: foreign, getArtistIDByUserIDArtistID: uuid.New()}
-	_, errForeign := newTestService(ownedByOther).MarkRefunded(context.Background(), foreign.ID, uuid.New(), nil)
+	_, errForeign := newTestService(ownedByOther).MarkRefunded(context.Background(), foreign.ID, uuid.New(), nil, false)
 
 	// (b) no such booking at all
 	absent := &mockRepo{getBookingByIDErr: ErrBookingNotFound}
-	_, errAbsent := newTestService(absent).MarkRefunded(context.Background(), uuid.New(), uuid.New(), nil)
+	_, errAbsent := newTestService(absent).MarkRefunded(context.Background(), uuid.New(), uuid.New(), nil, false)
 
 	require.Error(t, errForeign)
 	require.Error(t, errAbsent)
@@ -2397,7 +2404,7 @@ func TestMarkRefunded_DoesNotMessageTheCustomer(t *testing.T) {
 	repo := &mockRepo{getBookingByIDBooking: b, getArtistIDByUserIDArtistID: artistID}
 	svc := newTestService(repo)
 
-	_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil)
+	_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil, false)
 
 	require.NoError(t, err)
 	assert.Empty(t, repo.enqueuedNotifications)
@@ -2455,4 +2462,67 @@ func TestCancelBooking_UnconfirmedAndStarted_StillCancellable(t *testing.T) {
 		require.NoError(t, err,
 			"%s has no expiry sweep - blocking cancel here would strand it forever", status)
 	}
+}
+
+// A deposit sent from a different number cannot simply be pushed back to the
+// booking's own. OMT refunds are collected in person at an agent counter and
+// Whish returns to the sending wallet, so the money lands somewhere the
+// customer may not be able to reach - and neither rail has a chargeback.
+//
+// Enforced in the service, not only in the dashboard, because the dashboard
+// is not the only thing that can call this endpoint and this is the rule that
+// costs real money when it is skipped.
+func TestMarkRefunded_PayerMismatch_BlocksUntilCustomerContacted(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), artistID)
+	repo := &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID,
+		depositPayerMismatch:        true,
+	}
+	svc := newTestService(repo)
+
+	_, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "different number")
+	assert.Nil(t, repo.markRefundedReference, "the refund must not have been recorded")
+}
+
+// Once the artist confirms they have told the customer where to collect it,
+// the same refund goes through. The gate is a speed bump on an irreversible
+// transfer, not a block.
+func TestMarkRefunded_PayerMismatch_ProceedsOnceContacted(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), artistID)
+	repo := &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID,
+		depositPayerMismatch:        true,
+	}
+	svc := newTestService(repo)
+
+	ref := "OMT #55120"
+	got, err := svc.MarkRefunded(context.Background(), b.ID, userID, &ref, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusRefunded, got.Status)
+}
+
+// The check must not run when there is nothing to check. A matching payer is
+// the ordinary case and must not require an extra confirmation click.
+func TestMarkRefunded_NoMismatch_NeedsNoConfirmation(t *testing.T) {
+	artistID, userID := uuid.New(), uuid.New()
+	b := confirmableBooking(StatusRefundDue, time.Now().Add(-48*time.Hour), artistID)
+	repo := &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID,
+		depositPayerMismatch:        false,
+	}
+	svc := newTestService(repo)
+
+	got, err := svc.MarkRefunded(context.Background(), b.ID, userID, nil, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusRefunded, got.Status)
 }

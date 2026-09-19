@@ -336,6 +336,20 @@ func (h *Handler) ConfirmDeposit(c *fiber.Ctx) error {
 // MarkRefundedRequest is the optional body for the refunded endpoint.
 type MarkRefundedRequest struct {
 	Reference *string `json:"reference"`
+	// CustomerContacted is the artist confirming they have told the customer
+	// WHERE to collect the money before sending it.
+	//
+	// Required only when the deposit is recorded as having arrived from a
+	// number other than the customer's own. On OMT the refund is collected in
+	// person at an agent counter and on Whish it lands in the sending wallet,
+	// so in a mismatch the money goes somewhere the customer may not be able
+	// to reach without being told. Sending first and explaining afterwards is
+	// how a refund becomes a dispute.
+	//
+	// A boolean rather than a free-text note on purpose: this is an
+	// attestation, and the useful audit answer is "did the artist confirm
+	// they made contact", not a paragraph nobody reads.
+	CustomerContacted bool `json:"customer_contacted"`
 }
 
 // MarkRefunded godoc
@@ -370,7 +384,7 @@ func (h *Handler) MarkRefunded(c *fiber.Ctx) error {
 		}
 	}
 
-	booking, err := h.svc.MarkRefunded(c.UserContext(), bookingID, middleware.UserIDFromContext(c), req.Reference)
+	booking, err := h.svc.MarkRefunded(c.UserContext(), bookingID, middleware.UserIDFromContext(c), req.Reference, req.CustomerContacted)
 	if err != nil {
 		return err
 	}
@@ -382,6 +396,19 @@ func (h *Handler) MarkRefunded(c *fiber.Ctx) error {
 // it did before this note field existed.
 type ConfirmDepositReceivedRequest struct {
 	Reference *string `json:"reference"`
+	// PayerPhone is the number the transfer actually CAME FROM, when it is
+	// not the customer's own.
+	//
+	// Captured here because this is the one moment a human is already
+	// looking at the OMT/Whish receipt and can read it off. It is what makes
+	// the refund gate work later: a refund goes back to the sending number,
+	// so if the deposit came from a spouse's wallet or an agent counter,
+	// pushing it back to the booking's number sends it somewhere the
+	// customer cannot reach - with no chargeback on either rail.
+	//
+	// Optional. Empty means "not recorded", which is deliberately different
+	// from "same as the customer".
+	PayerPhone *string `json:"payer_phone"`
 }
 
 // ConfirmDepositReceived godoc
@@ -417,7 +444,7 @@ func (h *Handler) ConfirmDepositReceived(c *fiber.Ctx) error {
 
 	requesterUserID := middleware.UserIDFromContext(c)
 
-	booking, err := h.svc.ConfirmDepositReceived(c.UserContext(), bookingID, requesterUserID, req.Reference)
+	booking, err := h.svc.ConfirmDepositReceived(c.UserContext(), bookingID, requesterUserID, req.Reference, req.PayerPhone)
 	if err != nil {
 		return err
 	}

@@ -31,6 +31,37 @@ const reminderSweepInterval = 15 * time.Minute
 // silently allow duplicate reminders.
 const reminderTemplate = "booking_reminder_24h"
 
+// morningReminderTemplate is the same-day "your appointment is today" nudge.
+//
+// It is a SECOND reminder, not a replacement for the 24-hour one. They answer
+// different questions: the 24-hour reminder lands while cancelling is still
+// free and the slot can still be refilled from the waitlist; this one lands
+// when the only useful action left is to set off on time. An artist's real
+// loss is not a cancellation a day out - it is a client who forgets, arrives
+// twenty minutes late, and eats the next client's slot.
+//
+// The prefix matters: migration 041's unique index is
+// `(booking_id, template_name) WHERE template_name LIKE 'booking_reminder%'`,
+// so this name is deduplicated per booking automatically. Renaming it to
+// anything outside that prefix would silently permit duplicate reminders.
+const morningReminderTemplate = "booking_reminder_morning"
+
+// morningReminderHour is the store-local hour the same-day reminder is sent.
+//
+// 08:00 in the STORE's timezone, not the customer's and not UTC - a Beirut
+// salon's client should be woken at 8am Beirut time wherever their phone
+// happens to be roaming.
+const morningReminderHour = 8
+
+// minMorningLead is how long before the appointment the morning reminder must
+// land to be worth sending.
+//
+// A reminder that arrives twenty minutes before an 08:20 appointment tells
+// someone they are already too late to leave on time, which is worse than
+// silence. Appointments earlier than 08:00 + this lead get no morning
+// reminder at all; the 24-hour one already covered them.
+const minMorningLead = 45 * time.Minute
+
 // ReminderWorker schedules appointment reminders.
 //
 // # WHY A SWEEP RATHER THAN SCHEDULING AT BOOKING TIME
@@ -57,6 +88,19 @@ func NewReminderWorker(db *pgxpool.Pool, log *zap.Logger) *ReminderWorker {
 		now: time.Now,
 	}
 }
+
+// morningScheduleSQL is the scheduled_at of a morning reminder: 08:00 on the
+// appointment's own local date, in the store's timezone, expressed back as a
+// timestamptz.
+//
+// It is a CONSTANT shared by the insert and the withdrawal deliberately. The
+// withdrawal deletes any reminder whose scheduled_at no longer matches what
+// the insert would compute; if these two expressions ever disagree by so much
+// as a cast, the sweep deletes the row it just wrote, every fifteen minutes,
+// and the reminder silently never sends. Same hazard the 24-hour pair has,
+// which is why that one is a single interval constant rather than two.
+const morningScheduleSQL = `((b.start_time AT TIME ZONE COALESCE(st.timezone, 'Asia/Beirut'))::date
+	 + make_time($2::int, 0, 0)) AT TIME ZONE COALESCE(st.timezone, 'Asia/Beirut')`
 
 // Start runs the sweep until ctx is cancelled.
 //
@@ -98,6 +142,7 @@ func (w *ReminderWorker) Start(ctx context.Context) {
 func (w *ReminderWorker) sweep(ctx context.Context) {
 	now := w.now()
 	w.withdrawStale(ctx)
+	defer w.sweepMorning(ctx, now)
 
 	tag, err := w.db.Exec(ctx, `
 		INSERT INTO notifications
@@ -144,6 +189,61 @@ func (w *ReminderWorker) sweep(ctx context.Context) {
 	}
 }
 
+// sweepMorning schedules the same-day "your appointment is today" reminder.
+//
+// Separate statement rather than a second branch of the 24-hour insert,
+// because the two differ in the one thing that matters - when they fire - and
+// merging them would mean a CASE over scheduled_at in a query that is already
+// the least readable thing in this file.
+//
+// Every customer with an appointment that day gets exactly one, at 08:00 in
+// the store's own timezone, deduplicated by migration 041's unique index.
+func (w *ReminderWorker) sweepMorning(ctx context.Context, now time.Time) {
+	tag, err := w.db.Exec(ctx, `
+		INSERT INTO notifications
+			(booking_id, user_id, template_name, channel, payload, scheduled_at)
+		SELECT
+			b.id,
+			b.customer_id,
+			$1,
+			'whatsapp',
+			jsonb_build_object('message',
+				'Today: your ' || s.name || ' appointment with ' || au.name ||
+				' is at ' ||
+				to_char(b.start_time AT TIME ZONE COALESCE(st.timezone, 'Asia/Beirut'), 'HH12:MIam') ||
+				' at ' || st.name ||
+				'. Please arrive a few minutes early - arriving late may shorten ' ||
+				'your appointment or mean it has to be rescheduled.'),
+			`+morningScheduleSQL+`
+		FROM bookings b
+		JOIN services s  ON s.id = b.service_id
+		JOIN stores   st ON st.id = b.store_id
+		JOIN artists  a  ON a.id = b.artist_id
+		JOIN users    au ON au.id = a.user_id
+		JOIN users    u  ON u.id = b.customer_id
+		WHERE b.status IN ('approved', 'deposit_paid', 'confirmed')
+		  -- Still ahead of us. A morning reminder for an appointment whose
+		  -- 08:00 has already passed would send immediately and read as
+		  -- "today at 9am" to someone whose 9am is over.
+		  AND `+morningScheduleSQL+` > $3
+		  -- And far enough ahead to be actionable. See minMorningLead: an
+		  -- 08:20 appointment cannot be usefully reminded about at 08:00.
+		  AND b.start_time - `+morningScheduleSQL+` >= $4::interval
+		  AND b.start_time < $3 + interval '7 days'
+		  AND u.phone IS NOT NULL
+		  AND u.deleted_at IS NULL
+		ON CONFLICT DO NOTHING`,
+		morningReminderTemplate, morningReminderHour, now, minMorningLead,
+	)
+	if err != nil {
+		w.log.Error("morning reminder sweep failed", zap.Error(err))
+		return
+	}
+	if n := tag.RowsAffected(); n > 0 {
+		w.log.Info("scheduled morning reminders", zap.Int64("count", n))
+	}
+}
+
 // withdrawStale deletes unsent reminders for bookings that are no longer
 // happening, or that have moved so far that the reminder is now wrong.
 //
@@ -151,9 +251,17 @@ func (w *ReminderWorker) sweep(ctx context.Context) {
 // delivered is history: deleting it would lose the record that the client was
 // told, which is exactly the record a later dispute needs.
 func (w *ReminderWorker) withdrawStale(ctx context.Context) {
+	// The "has it moved?" test is PER TEMPLATE. An earlier version compared
+	// every booking_reminder% row against the 24-hour formula, which was
+	// correct while that was the only kind. The moment a second kind exists
+	// that rule deletes it on sight - its scheduled_at is 08:00 local, never
+	// start_time - 24h - so the morning reminder would be written and
+	// destroyed on every fifteen-minute tick and never send, with nothing in
+	// the logs but a steadily climbing withdrawal count.
 	tag, err := w.db.Exec(ctx, `
 		DELETE FROM notifications n
 		 USING bookings b
+		  LEFT JOIN stores st ON st.id = b.store_id
 		 WHERE n.booking_id = b.id
 		   AND n.template_name LIKE 'booking_reminder%'
 		   AND n.status = 'pending'
@@ -163,8 +271,9 @@ func (w *ReminderWorker) withdrawStale(ctx context.Context) {
 		         -- The booking moved. The scheduled time no longer lines up
 		         -- with the appointment, so this row is stale rather than
 		         -- merely early; the INSERT half will write a correct one.
-		         OR n.scheduled_at <> b.start_time - $1::interval
-		       )`, reminderLeadTime)
+		         OR (n.template_name = $3 AND n.scheduled_at <> b.start_time - $1::interval)
+		         OR (n.template_name = $4 AND n.scheduled_at <> `+morningScheduleSQL+`)
+		       )`, reminderLeadTime, morningReminderHour, reminderTemplate, morningReminderTemplate)
 	if err != nil {
 		w.log.Error("reminder withdrawal failed", zap.Error(err))
 		return

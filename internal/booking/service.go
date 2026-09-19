@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
@@ -754,7 +756,22 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 // reference is an optional artist-entered note (e.g. an OMT/Wish transaction
 // code) for her own reconciliation - never shown to the customer, never
 // validated beyond a sanity length cap.
-func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string) (*BookingResponse, error) {
+func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string, payerPhone *string) (*BookingResponse, error) {
+	// Normalise to E.164 before storing so the refund-time comparison against
+	// users.phone is an equality test rather than a guess at formatting.
+	// Rejected outright if unparseable: a payer number that cannot be read
+	// back is worse than none, because the mismatch check treats
+	// "unparseable" as "cannot tell" and would silently stop warning.
+	if payerPhone != nil && strings.TrimSpace(*payerPhone) != "" {
+		normalised, err := phone.Parse(*payerPhone, "LB", "payer_phone")
+		if err != nil {
+			return nil, err
+		}
+		payerPhone = &normalised
+	} else {
+		payerPhone = nil
+	}
+
 	if reference != nil && len(*reference) > 255 {
 		return nil, apperror.BadRequest("REFERENCE_TOO_LONG", "Reference note must be 255 characters or fewer")
 	}
@@ -783,7 +800,7 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 		return nil, apperror.Conflict("BOOKING_NOT_APPROVED", "Only approved bookings can have a deposit confirmed")
 	}
 
-	if err := s.repo.ConfirmDepositReceived(ctx, bookingID, reference); err != nil {
+	if err := s.repo.ConfirmDepositReceived(ctx, bookingID, reference, payerPhone); err != nil {
 		if errors.Is(err, ErrBookingNotApproved) {
 			return nil, apperror.Conflict("BOOKING_NOT_APPROVED", "Only approved bookings can have a deposit confirmed")
 		}
@@ -819,7 +836,7 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 // cancellation when it happens; a second message announcing an out-of-band
 // bank transfer they either have or have not received would raise more
 // questions than it answers.
-func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string) (*BookingResponse, error) {
+func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, requesterUserID uuid.UUID, reference *string, customerContacted bool) (*BookingResponse, error) {
 	if reference != nil && len(*reference) > 255 {
 		return nil, apperror.BadRequest("REFERENCE_TOO_LONG", "Reference note must be 255 characters or fewer")
 	}
@@ -845,6 +862,28 @@ func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, request
 
 	if b.Status != StatusRefundDue {
 		return nil, apperror.Conflict("BOOKING_NOT_REFUND_DUE", "Only bookings with a refund outstanding can be marked refunded")
+	}
+
+	// A deposit that arrived from a DIFFERENT number cannot simply be pushed
+	// back to the booking's own. OMT refunds are collected in person at an
+	// agent counter and Whish returns to the sending wallet, so the money
+	// lands somewhere the customer may not be able to reach - and neither
+	// rail has a chargeback to undo it with. The artist must have told them
+	// where to go BEFORE the transfer, not after.
+	//
+	// Enforced here rather than only in the UI because this is the rule that
+	// costs real money when it is skipped, and the dashboard is not the only
+	// thing that can call this endpoint.
+	if !customerContacted {
+		mismatch, err := s.repo.DepositPayerMismatch(ctx, bookingID)
+		if err != nil {
+			return nil, fmt.Errorf("mark refunded: payer check: %w", err)
+		}
+		if mismatch {
+			return nil, apperror.Conflict("REFUND_PAYER_MISMATCH",
+				"This deposit was sent from a different number. Contact the customer and tell them "+
+					"where to collect the refund, then confirm you have done so.")
+		}
 	}
 
 	if err := s.repo.MarkRefunded(ctx, bookingID, reference); err != nil {

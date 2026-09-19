@@ -99,7 +99,7 @@ func matrixActions() []matrixAction {
 			name: "ConfirmDepositReceived", legalFrom: StatusApproved,
 			rejectCode: "BOOKING_NOT_APPROVED",
 			run: func(s *Service, id, u uuid.UUID) error {
-				_, err := s.ConfirmDepositReceived(context.Background(), id, u, nil)
+				_, err := s.ConfirmDepositReceived(context.Background(), id, u, nil, nil)
 				return err
 			},
 		},
@@ -123,7 +123,7 @@ func matrixActions() []matrixAction {
 			name: "MarkRefunded", legalFrom: StatusRefundDue,
 			rejectCode: "BOOKING_NOT_REFUND_DUE",
 			run: func(s *Service, id, u uuid.UUID) error {
-				_, err := s.MarkRefunded(context.Background(), id, u, nil)
+				_, err := s.MarkRefunded(context.Background(), id, u, nil, false)
 				return err
 			},
 		},
@@ -161,7 +161,7 @@ func (m *matrixRepo) UpdateBookingStatus(_ context.Context, _ uuid.UUID, _ strin
 func (m *matrixRepo) ConfirmDeposit(_ context.Context, _ uuid.UUID) error {
 	return m.guard(StatusDepositPaid)
 }
-func (m *matrixRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, _ *string) error {
+func (m *matrixRepo) ConfirmDepositReceived(_ context.Context, _ uuid.UUID, _, _ *string) error {
 	return m.guard(StatusApproved)
 }
 func (m *matrixRepo) CompleteBooking(_ context.Context, _ uuid.UUID) (string, error) {

@@ -128,6 +128,19 @@ type Booking struct {
 	// confirmation - e.g. an OMT/Wish transaction code. Free text, never
 	// customer-facing.
 	DepositReference *string `db:"deposit_reference"`
+	// DepositPayerPhone is the E.164 number the deposit actually ARRIVED
+	// FROM, when the artist recorded it at confirmation. See migration 044.
+	//
+	// It exists because OMT and Whish are addressed by phone number and a
+	// refund is the same transfer in reverse: money pushed back to the
+	// booking's own number when the deposit came from a spouse's wallet or
+	// an OMT counter does not reach the person owed it, and there is no
+	// chargeback on these rails to undo it.
+	//
+	// NULL means "not recorded", which is deliberately NOT the same as
+	// "matches the customer". Never contact this number - it may be a
+	// counter rather than a person.
+	DepositPayerPhone *string `db:"deposit_payer_phone"`
 	// ReviewToken is generated when the booking completes, letting the guest
 	// leave a review with no login required. See migration 013.
 	ReviewToken *string `db:"review_token"`
@@ -444,6 +457,7 @@ type BookingResponse struct {
 	DepositDeadline    *time.Time      `json:"deposit_deadline,omitempty"`
 	DepositPaidAt      *time.Time      `json:"deposit_paid_at,omitempty"`
 	DepositReference   *string         `json:"deposit_reference,omitempty"`
+	DepositPayerPhone  *string         `json:"deposit_payer_phone,omitempty"`
 	Channel            string          `json:"channel"`
 	SpecialRequests    *string         `json:"special_requests,omitempty"`
 	CancellationReason *string         `json:"cancellation_reason,omitempty"`
@@ -523,6 +537,19 @@ type EnrichedBookingResponse struct {
 	DepositDeadline  *time.Time `json:"deposit_deadline,omitempty"`
 	DepositPaidAt    *time.Time `json:"deposit_paid_at,omitempty"`
 	DepositReference *string    `json:"deposit_reference,omitempty"`
+	// DepositPayerPhone is the number the deposit arrived from, when it was
+	// recorded. Shown to the artist at refund time; never messaged.
+	DepositPayerPhone *string `json:"deposit_payer_phone,omitempty"`
+	// DepositPayerMismatch is TRUE only when a payer number was recorded AND
+	// it differs from the customer's own.
+	//
+	// Derived per response rather than stored, because it compares two live
+	// values: either number can be corrected later, and a stored boolean
+	// would keep asserting a mismatch that no longer exists. Absent payer
+	// number means FALSE - "nobody checked" must not render as "these
+	// differ", or every historical booking would raise a false alarm at
+	// refund time and the warning would be trained away.
+	DepositPayerMismatch bool `json:"deposit_payer_mismatch"`
 	// ReviewToken is present once the booking is completed. Artist-facing
 	// only - used to build a review-request link to send the customer
 	// manually (Calendar detail view) until automated WhatsApp delivery
@@ -555,6 +582,8 @@ func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
 		ServiceID:          e.ServiceID,
 		CustomerName:       e.CustomerName,
 		CustomerPhone:      e.CustomerPhone,
+		DepositPayerPhone:  e.DepositPayerPhone,
+		DepositPayerMismatch: depositPayerMismatch(e.DepositPayerPhone, e.CustomerPhone),
 		ArtistName:         e.ArtistName,
 		ServiceName:        e.ServiceName,
 		StoreName:          e.StoreName,

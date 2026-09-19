@@ -195,7 +195,12 @@ type Repository interface {
 	// booking that will ever be worth putting in a calendar.
 	ApproveBooking(ctx context.Context, id uuid.UUID, depositDeadline time.Time) (calendarToken string, err error)
 
-	// MarkRefunded transitions refund_due → refunded, recording the
+	// DepositPayerMismatch reports whether the deposit was recorded as having
+	// arrived from a number other than the customer's own. Consulted by the
+	// refund gate.
+	DepositPayerMismatch(ctx context.Context, bookingID uuid.UUID) (bool, error)
+
+// MarkRefunded transitions refund_due → refunded, recording the
 	// artist's assertion that they sent the money. Without it refund_due
 	// is terminal and the refund alert can never be cleared.
 	MarkRefunded(ctx context.Context, id uuid.UUID, reference *string) error
@@ -210,7 +215,7 @@ type Repository interface {
 	// into a single atomic transition rather than two separate clicks.
 	// reference is an optional artist-entered note (e.g. a transaction
 	// code) for her own reconciliation - nil leaves the column untouched.
-	ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference *string) error
+	ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference, payerPhone *string) error
 
 	// CancelBooking cancels a booking with a reason and sets cancelled_at.
 	// refundDue=true sets status to refund_due instead of cancelled.
@@ -294,6 +299,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositDeadline,
 		&b.DepositPaidAt,
 		&b.DepositReference,
+		&b.DepositPayerPhone,
 		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
 		&b.Channel,
 		&b.SpecialRequests,
@@ -315,7 +321,7 @@ const bookingSelectCols = `
 	id, salon_id, store_id, artist_id, customer_id, service_id,
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price, discount_code,
-	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, review_token, calendar_token,
+	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, deposit_payer_phone, review_token, calendar_token,
 	buffer_min, blocked_until, reschedule_count,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
@@ -329,7 +335,7 @@ const enrichedSelectCols = `
 	b.id, b.salon_id, b.store_id, b.artist_id, b.customer_id, b.service_id,
 	b.start_time, b.end_time, b.held_until, b.status,
 	b.original_price, b.discount_amount, b.final_price,
-	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.review_token, b.calendar_token,
+	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.deposit_payer_phone, b.review_token, b.calendar_token,
 	b.buffer_min, b.blocked_until,
 	b.channel, b.special_requests, b.cancellation_reason,
 	b.cancelled_at, b.completed_at, b.no_show_at,
@@ -363,7 +369,7 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 		&e.ID, &e.SalonID, &e.StoreID, &e.ArtistID, &e.CustomerID, &e.ServiceID,
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
-		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.ReviewToken, &e.CalendarToken,
+		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.DepositPayerPhone, &e.ReviewToken, &e.CalendarToken,
 		&e.BufferMin, &e.BlockedUntil,
 		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
@@ -1278,17 +1284,22 @@ func (r *pgRepo) ConfirmDeposit(ctx context.Context, id uuid.UUID) error {
 // leaves the existing column value untouched (SQL NULL loses to the
 // existing value in COALESCE), rather than overwriting a previously-entered
 // note with NULL just because this particular call didn't supply one.
-func (r *pgRepo) ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference *string) error {
+func (r *pgRepo) ConfirmDepositReceived(ctx context.Context, id uuid.UUID, reference, payerPhone *string) error {
 	result, err := r.db.Exec(ctx, `
 		UPDATE bookings
 		SET status = $1,
 		    deposit_paid_at = NOW(),
 		    deposit_reference = COALESCE($4, deposit_reference),
+		    -- COALESCE, like the reference beside it: omitting the payer
+		    -- leaves whatever was recorded before. A correction re-sends the
+		    -- number; it is never cleared by a later confirm that simply did
+		    -- not mention it.
+		    deposit_payer_phone = COALESCE($5, deposit_payer_phone),
 		    updated_at = NOW()
 		WHERE id = $2
 		AND status = $3
 		AND deleted_at IS NULL`,
-		StatusConfirmed, id, StatusApproved, reference,
+		StatusConfirmed, id, StatusApproved, reference, payerPhone,
 	)
 	if err != nil {
 		return fmt.Errorf("confirm deposit received: %w", err)
@@ -1312,6 +1323,27 @@ func (r *pgRepo) ConfirmDepositReceived(ctx context.Context, id uuid.UUID, refer
 // Recording it is the entire point: without this the refund_due alert in the
 // notification centre is unresolvable, and the booking sits owing money
 // forever.
+// DepositPayerMismatch reports whether this booking's deposit was recorded as
+// arriving from a number other than the customer's own.
+//
+// Asked of the database at refund time rather than trusted from the request,
+// because the caller supplying the booking id is also the party the check
+// constrains. Reuses depositPayerMismatch so the API response and the refund
+// gate can never disagree about what counts as a mismatch - if they did, the
+// dashboard would show no warning while the endpoint refused the refund.
+func (r *pgRepo) DepositPayerMismatch(ctx context.Context, bookingID uuid.UUID) (bool, error) {
+	var payer, customer *string
+	err := r.db.QueryRow(ctx, `
+		SELECT b.deposit_payer_phone, u.phone
+		  FROM bookings b
+		  JOIN users u ON u.id = b.customer_id
+		 WHERE b.id = $1`, bookingID).Scan(&payer, &customer)
+	if err != nil {
+		return false, fmt.Errorf("deposit payer mismatch: %w", err)
+	}
+	return depositPayerMismatch(payer, customer), nil
+}
+
 func (r *pgRepo) MarkRefunded(ctx context.Context, id uuid.UUID, reference *string) error {
 	result, err := r.db.Exec(ctx, `
 		UPDATE bookings
@@ -1522,7 +1554,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.ID, &b.SalonID, &b.StoreID, &b.ArtistID, &b.CustomerID, &b.ServiceID,
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice, &b.DiscountCode,
-			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.ReviewToken, &b.CalendarToken,
+			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.DepositPayerPhone, &b.ReviewToken, &b.CalendarToken,
 			&b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,

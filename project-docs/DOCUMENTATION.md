@@ -11,12 +11,13 @@
 
 ---
 
-> **Verified against code 2026-09-19:** **43 migrations** (latest
-> `043_normalise_phone_e164`), **32 tables**, **18 route-bearing domains**
-> (24 directories under `internal/`, excluding `pkg`), **14 leaf packages**,
-> **143 route registrations** across **115 swagger paths**, **825 Go tests**,
-> **24 environment variables**. Frontend: **41 Angular routes**, **6 spec
-> files**, **41 help topics** (15 customer, 22 artist, 4 admin).
+> **Verified against code 2026-09-19 (second pass):** **44 migrations**
+> (latest `044_deposit_payer_phone`), **32 tables**, **18 route-bearing
+> domains** (24 directories under `internal/`, excluding `pkg`), **14 leaf
+> packages**, **143 route registrations** across **115 swagger paths**,
+> **834 Go tests**, **24 environment variables**. Frontend: **41 Angular
+> routes**, **6 spec files**, **45 help topics** (15 customer, 26 artist,
+> 4 admin).
 >
 > These numbers are now **generated, not typed**:
 > `./scripts/doc-facts.sh` recomputes them from the repository and
@@ -47,6 +48,25 @@
 > *Previous: verified against code 2026-09-05 — 33 migrations, 29 tables,
 > 17 domains, 115 route registrations (102 paths in swagger), 645 Go tests,
 > frontend 8 tests.*
+
+## What shipped Sep 19, 2026 — afternoon (Rania's first session)
+
+Everything here came out of putting the apps in front of the launch artist
+over a tunnel and watching what she hit.
+
+| Area | What changed | Where to read |
+|---|---|---|
+| **Refunds can no longer be sent to the wrong number** | Migration 044 records the number a deposit actually ARRIVED FROM, captured on the deposit-verify panel where the artist is already holding the receipt. `MarkRefunded` now refuses with **`REFUND_PAYER_MISMATCH`** unless the artist confirms they have told the customer where to collect it. B-Edge holds no money: deposits move over OMT and Whish, both addressed by phone number, and a refund is that transfer in reverse — so a deposit paid from a spouse's wallet or an OMT counter, refunded to the booking's own number, lands somewhere the customer cannot reach, with no chargeback on either rail. Three rules are written at the code because each is one plausible edit from being undone: **compare normalised, not raw** (a string compare calls `70 123 456` and `+96170123456` a mismatch, and a warning that fires on correct data gets clicked through); **unknown is not a mismatch** (no payer, or an unparseable one, returns false — every pre-044 booking is in that state and flagging them all would train the alarm away, which was confirmed live when a `+00000000000` guest placeholder correctly kept the gate quiet); and **the flag is derived, not stored** (it compares two live values). Enforced in the service, not just the dashboard. | `internal/booking/payer.go`, migration 044 |
+| **Same-day appointment reminder** | `booking_reminder_morning`, sent at **08:00 in the store's timezone** to every customer with a booking that day. A second reminder, not a replacement: the 24-hour one lands while cancelling is free and the slot can be refilled; this one lands when the only useful action left is to leave on time. Appointments before ~08:45 get none — telling someone at 08:00 about an 08:20 appointment says they are already late. **The hazard was the withdrawal, not the insert**: `withdrawStale` deleted any `booking_reminder%` row whose `scheduled_at` did not match the *24-hour* formula, so a morning reminder would have been written and destroyed on every fifteen-minute sweep, never sending, with nothing in the logs but a rising withdrawal count. Now template-aware; both rows verified surviving a second sweep. | `internal/booking/reminder_worker.go` |
+| **Bookings status filter was missing 5 of 11 statuses** | `refund_due` among them — an action queue meaning money is owed back, with no way to filter for it. Rania had one in that state and 17 expired bookings, all reachable only by scrolling "All". Labels and badge tones already handled every status; only the tab list was behind. | `bookings.component.ts` |
+| **Hours: set the week once** | "Set the same hours for every day" applies one open/close to all seven. It deliberately does **not** change each day's Open/Closed flag — opening every day in bulk would silently make a never-open Sunday bookable. | `hours.component.ts` |
+| **Booking horizon 28 → 90 days** | The date strip stopped dead at four weeks, reported as "only this month". Nothing on the server imposed it. Month-jump chips scroll rather than select. | `pick-datetime-screen.component.ts` |
+| **Two WebKit-only rendering bugs at 320px** | The store tab strip pushed the whole page 66px sideways with four stores; time values clipped mid-character to `07:08 AI` because Safari renders time inputs in 12-hour form. Neither visible in Chrome. | `hours.component.html` |
+| **Help: 4 new artist topics** | Setting the week at once, the early-bird surcharge, recording a payer number, and refunding a deposit that came from someone else. 22 → 26 artist topics. | `artist-guide.ts` |
+| **`schema_migrations` was stuck dirty at 34** | While the schema was physically at 43, so **`make migrate` failed outright and no migration could be applied by the normal path**. All of 035–043 were verified present before the bookkeeping was corrected. | — |
+| **Sharing the apps with a remote tester** | `scripts/share.sh` + `share-proxy.mjs` put each app and the API behind **one origin** per app, so the apps call a relative `/api/v1` — a changed tunnel hostname never forces a rebuild, and CORS disappears entirely. `share-watch.sh` restarts a tunnel Cloudflare has reclaimed, checking the **public** URL because the local proxy answers happily while the public one is dead. | `b-edge-web/scripts/` |
+
+---
 
 ## What shipped Sep 19, 2026
 

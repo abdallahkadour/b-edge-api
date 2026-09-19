@@ -1,0 +1,57 @@
+# Fails a pull request whose code contradicts its documentation.
+#
+# This is the half of the doc workflow that BLOCKS. The local pre-push hook
+# only warns, because a blocking hook is bypassed with --no-verify on the
+# first urgent push and by habit thereafter. CI has no deadline pressure, so
+# it is where the rule can actually hold.
+#
+# SCOPE, HONESTLY STATED. This job sees only b-edge-api. The documentation
+# index also makes claims about b-edge-web — help-topic counts, Angular route
+# counts — and those cannot be checked here without a cross-repo checkout
+# token. `doc-facts.sh` omits the web_* facts when the sibling repo is absent
+# rather than reporting them as zero, so their absence is skipped rather than
+# silently "passing". Web drift is caught locally by the hook and /sync-docs.
+#
+# The check is --facts-only: the counted claims, which are exact. The
+# change-to-surface mapping is deliberately over-inclusive by design, so it
+# would fail almost every PR and teach people to ignore the job.
+
+name: docs-check
+
+on:
+  pull_request:
+    paths:
+      - 'db/migrations/**'
+      - 'internal/**'
+      - 'cmd/**'
+      - 'project-docs/**'
+      - 'README.md'
+  push:
+    branches: [main, master]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check documentation against code
+        run: ./scripts/check-docs.sh --facts-only
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          echo "::error::Documentation no longer matches the code."
+          echo ""
+          echo "A counted claim in project-docs/ is now wrong — most often the"
+          echo "'Verified against code' block in DOCUMENTATION.md, which states"
+          echo "migration, table, domain and test counts."
+          echo ""
+          echo "To fix, from a checkout with both repos side by side:"
+          echo "  /sync-docs                  (in Claude Code — does the judgement work)"
+          echo ""
+          echo "or by hand:"
+          echo "  1. update the 'Verified against code' block in DOCUMENTATION.md"
+          echo "  2. ./scripts/doc-facts.sh > project-docs/doc-facts.baseline"
+          echo "  3. ./scripts/check-docs.sh   # must exit 0"
+          echo "  4. commit the baseline — that commit IS the sync record"

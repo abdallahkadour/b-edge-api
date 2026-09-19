@@ -193,6 +193,8 @@ Expected response:
 | `make docker-up` | Start PostgreSQL and Jaeger containers |
 | `make docker-down` | Stop and remove containers |
 | `make lint` | Run golangci-lint |
+| `make docs-check` | Fail if the documentation contradicts the code |
+| `make docs-facts` | Print the counted facts the docs make claims about |
 
 ---
 
@@ -284,7 +286,15 @@ All rules are in `docs/CLAUDE.md`. Key rules enforced on every PR:
 
 ## Documentation
 
-All project documentation lives in `docs/`. Key documents:
+All hand-written project documentation lives in **`project-docs/`** — 62
+documents plus 7 in `project-docs/agent-reviews/`.
+
+> **Not `docs/`.** That directory is generated Swagger output and is
+> gitignored (`.gitignore:12`), so anything written there is silently lost.
+> An earlier version of this README said documentation lived in `docs/`,
+> which is how it came to be got wrong more than once.
+
+Key documents:
 
 | Document | Description |
 |---|---|
@@ -293,8 +303,47 @@ All project documentation lives in `docs/`. Key documents:
 | `B-Edge-LLD-v2-Go.docx` | Low level design — Go stack, patterns, types |
 | `B-Edge-Slot-Algorithm-Spec-v1.docx` | Full slot availability algorithm as Go pseudocode |
 | `B-Edge-API-Contract-v1.docx` | Response envelope, error codes, pagination format |
-| `DOCUMENTATION.md` | Index of all 27 documents |
+| `DOCUMENTATION.md` | The index — read this first; it says which documents are stale |
 | `CLAUDE.md` | Coding rules enforced on every PR |
+
+### Keeping documentation true
+
+Docs here do not rot through carelessness — they rot because **nothing fails
+when they go stale**. A migration lands, the build is green, tests pass, the
+PR merges, and the index still states the old count. Ten of those in a row is
+how it came to claim 33 migrations against a repository holding 43.
+
+So the counted claims are now generated rather than typed:
+
+```bash
+make docs-check          # fails when the docs contradict the code
+make docs-facts          # the raw numbers, as key=value
+```
+
+`scripts/doc-facts.sh` recomputes migrations, tables, domains, routes, tests,
+env vars and help-topic counts straight from both repositories.
+`scripts/check-docs.sh` compares them against `project-docs/doc-facts.baseline`
+and additionally maps changed paths to the documents that have a standing
+relationship with them — a new customer screen implicates `customer-guide.ts`,
+a new env var implicates this README and the deployment runbook.
+
+| Where | What it does |
+|---|---|
+| `make docs-check` | On demand, locally |
+| `scripts/install-docs-hook.sh` | Opt-in pre-push hook. **Warns, never blocks** — a blocking hook gets `--no-verify`d once and ignored forever after |
+| `.github/workflows/docs-check.yml` | Blocks the PR. CI is where the rule can hold, because nobody is in a hurry there |
+| `/sync-docs` | Claude Code skill that does the judgement half: which help topics to write, what prose to update |
+
+After updating documentation by hand, re-record the baseline:
+
+```bash
+./scripts/doc-facts.sh > project-docs/doc-facts.baseline
+./scripts/check-docs.sh    # must exit 0
+git add project-docs/doc-facts.baseline
+```
+
+Committing the baseline *is* the sync record — the checker asks git which
+commit last touched it, so there is no separate marker to keep in step.
 
 ---
 

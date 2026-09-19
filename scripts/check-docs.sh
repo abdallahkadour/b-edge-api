@@ -195,6 +195,11 @@ flag() {  # flag <pattern> <where> <document> <reason>
     api) hits=$(echo "$API_CHANGED" | grep -E "$pattern" || true) ;;
     web) hits=$(echo "$WEB_CHANGED" | grep -E "$pattern" || true) ;;
   esac
+  # The help guides live INSIDE the feature directories they document, so a
+  # guide edit matched its own rule and the checker asked for the very
+  # update that had just been made. Updating a doc is not a reason to flag
+  # that doc.
+  hits=$(echo "$hits" | grep -v '/help/' || true)
   [ -z "$hits" ] && return 0
   printf '   \033[1m%s\033[0m\n' "$doc"
   printf '     why: %s\n' "$reason"

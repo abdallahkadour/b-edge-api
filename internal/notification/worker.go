@@ -228,8 +228,11 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 		return
 	}
 
-	// Send via Twilio WhatsApp
-	if err := w.sendWhatsApp(phone, body); err != nil {
+	// Send via Twilio WhatsApp. The SID it returns is the ONLY link between
+	// this row and the message the provider now owns - without it, "did this
+	// actually arrive?" is a question the system cannot ask. See migration 045.
+	sid, err := w.sendWhatsApp(phone, body)
+	if err != nil {
 		w.log.Warn("notification worker: send failed",
 			zap.String("notification_id", n.ID),
 			zap.Error(err),
@@ -238,7 +241,7 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 		return
 	}
 
-	w.markSent(ctx, n)
+	w.markSent(ctx, n, sid)
 	w.log.Info("notification worker: sent",
 		zap.String("notification_id", n.ID),
 		zap.String("template", n.TemplateName),
@@ -246,14 +249,14 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 }
 
 // sendWhatsApp sends a WhatsApp message via Twilio REST API.
-func (w *Worker) sendWhatsApp(to, body string) error {
+func (w *Worker) sendWhatsApp(to, body string) (string, error) {
 	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
 	from := os.Getenv("TWILIO_WHATSAPP_FROM")
 
 	if accountSID == "" || authToken == "" || from == "" {
 		// Twilio not configured - log and skip in development
-		return fmt.Errorf("twilio not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM required)")
+		return "", fmt.Errorf("twilio not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM required)")
 	}
 
 	endpoint := fmt.Sprintf("%s/%s/Messages.json", twilioAPIBase, accountSID)
@@ -265,23 +268,35 @@ func (w *Worker) sendWhatsApp(to, body string) error {
 
 	req, err := http.NewRequest("POST", endpoint, strings.NewReader(data.Encode()))
 	if err != nil {
-		return fmt.Errorf("create twilio request: %w", err)
+		return "", fmt.Errorf("create twilio request: %w", err)
 	}
 	req.SetBasicAuth(accountSID, authToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("twilio request failed: %w", err)
+		return "", fmt.Errorf("twilio request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("twilio returned %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("twilio returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	return nil
+	// Pull the SID out of a response the worker previously read only for its
+	// status code. A missing sid is not an error - the message WAS accepted -
+	// but it does mean this one can never be reconciled, so it is logged.
+	var parsed struct {
+		SID string `json:"sid"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil || parsed.SID == "" {
+		w.log.Warn("notification worker: accepted but no sid in response",
+			zap.String("body", string(respBody[:min(len(respBody), 160)])))
+		return "", nil
+	}
+	return parsed.SID, nil
 }
 
 // getPhoneNumber fetches the phone number for a user.
@@ -316,16 +331,28 @@ func (w *Worker) getPhoneNumber(ctx context.Context, userID string) (string, err
 	return *phone, nil
 }
 
-// markSent updates a notification to sent status.
-func (w *Worker) markSent(ctx context.Context, n *PendingNotification) {
+// markSent records that the provider ACCEPTED the message.
+//
+// Not that it was delivered. `status='sent'` has always meant "Twilio
+// returned 2xx", and treating the two as the same is what hid a 100%
+// delivery failure for six weeks. The provider's own verdict arrives later,
+// in delivery_status, via the reconciler in delivery.go.
+//
+// provider_message_id is the join key that makes that possible at all.
+func (w *Worker) markSent(ctx context.Context, n *PendingNotification, sid string) {
+	var sidArg any
+	if sid != "" {
+		sidArg = sid
+	}
 	_, err := w.db.Exec(ctx, `
 		UPDATE notifications
 		SET status          = 'sent',
 		    sent_at         = NOW(),
 		    attempts        = attempts + 1,
-		    last_attempted_at = NOW()
+		    last_attempted_at = NOW(),
+		    provider_message_id = COALESCE($2, provider_message_id)
 		WHERE id = $1`,
-		n.ID,
+		n.ID, sidArg,
 	)
 	if err != nil {
 		w.log.Error("notification worker: mark sent failed",

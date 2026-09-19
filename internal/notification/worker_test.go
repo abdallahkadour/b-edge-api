@@ -153,7 +153,7 @@ func TestSendWhatsApp_MissingCredentials_ReturnsErrorWithoutRequest(t *testing.T
 		rw.WriteHeader(http.StatusOK)
 	}))
 
-	err := w.sendWhatsApp("+96170123456", "hello")
+	_, err := w.sendWhatsApp("+96170123456", "hello")
 
 	require.Error(t, err)
 	assert.False(t, called, "must not attempt delivery when Twilio isn't configured")
@@ -175,7 +175,7 @@ func TestSendWhatsApp_TwilioAccepts_Succeeds(t *testing.T) {
 		rw.WriteHeader(http.StatusCreated)
 	}))
 
-	err := w.sendWhatsApp("+96170123456", "hello")
+	_, err := w.sendWhatsApp("+96170123456", "hello")
 
 	require.NoError(t, err)
 	assert.True(t, ok, "request must carry basic auth")
@@ -193,7 +193,7 @@ func TestSendWhatsApp_TwilioRejects_ReturnsErrorWithBody(t *testing.T) {
 		_, _ = rw.Write([]byte(`{"message":"invalid number"}`))
 	}))
 
-	err := w.sendWhatsApp("+96170123456", "hello")
+	_, err := w.sendWhatsApp("+96170123456", "hello")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
@@ -219,7 +219,7 @@ func TestSendWhatsApp_TransportFailure_ReturnsError(t *testing.T) {
 		},
 	}
 
-	err = w.sendWhatsApp("+96170123456", "hello")
+	_, err = w.sendWhatsApp("+96170123456", "hello")
 
 	require.Error(t, err)
 }

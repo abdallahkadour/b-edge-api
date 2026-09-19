@@ -215,6 +215,13 @@ func main() {
 	// panicked once and silently stopped would leave notifications queuing
 	// forever with nothing to indicate why.
 	superviseWorker(ctx, "notification", notification.NewWorker(pool, logger), logger)
+
+	// Asks Twilio what actually happened to the messages the worker above
+	// handed over. Separate worker because it is a different question with a
+	// different cadence: the sender asks "can I hand this over", this asks
+	// "did it arrive". Conflating them is what let a 100% delivery failure
+	// read as success for six weeks. See internal/notification/delivery.go.
+	superviseWorker(ctx, "delivery", notification.NewDeliveryWorker(pool, logger), logger)
 	// Unstalls waitlist queues whose notified entry never confirmed. The
 	// only case the lazy cascade cannot reach, because its trigger is
 	// another slot opening - which is precisely what is not happening. See

@@ -282,6 +282,35 @@ def main():
         check("M10", "every money column is still NUMERIC(10,2)", narrow == "",
               narrow or "18 money columns, all NUMERIC(10,2) — matches money.Parse's bounds")
 
+        # ── M11: every phone is E.164, because the refund guard depends on it ──
+        # depositPayerMismatch normalises BOTH sides and returns "cannot tell"
+        # when either fails to parse - deliberately, so an unrecorded payer
+        # does not raise a false alarm. The cost of that choice is that an
+        # unnormalised customer phone silently DISABLES the refund warning
+        # for that account. Migration 043 normalised everything except rows
+        # whose normalised form already existed, and those exceptions are
+        # exactly the accounts the guard stops protecting.
+        # Scoped to customers who HAVE a booking, deliberately. Only they can
+        # ever be owed a refund, so only they can be harmed by the guard
+        # going quiet. Two accounts (Sarah, Abdallah Kadour) hold local-format
+        # numbers that migration 043 could not normalise because the E.164
+        # form was already taken by another user; both have zero bookings and
+        # some order history, so whether they are duplicates to merge or
+        # distinct people to renumber is a human decision, recorded as P0.2 in
+        # the remediation plan. Failing this check on them forever would
+        # teach everyone to ignore it, which is how the last one was missed.
+        bad = sql("""SELECT coalesce(string_agg(u.name||' '||u.phone, ', '), '')
+                       FROM users u
+                      WHERE u.phone IS NOT NULL AND u.phone NOT LIKE '+%'
+                        AND u.deleted_at IS NULL
+                        AND EXISTS (SELECT 1 FROM bookings b WHERE b.customer_id = u.id);""")
+        unscoped = sql("""SELECT count(*) FROM users
+                            WHERE phone IS NOT NULL AND phone NOT LIKE '+%'
+                              AND deleted_at IS NULL;""")
+        check("M11", "no bookable customer has a phone the refund guard cannot parse",
+              bad == "",
+              bad or f"none ({unscoped} unnormalised account(s) exist but have no bookings - P0.2)")
+
     finally:
         for b in created:
             try:

@@ -23,7 +23,7 @@ problems**, and half of P1 is unreachable until it happens.
 
 ## P0 — Do before Rania touches it again
 
-### P0.1 · Make development mode impossible to expose
+### P0.1 · Make development mode impossible to expose — **DONE**
 **Cost:** ~30 min · **Risk if skipped:** total authentication bypass
 
 `devBypassOTPCode` authenticates any phone number when
@@ -36,13 +36,21 @@ The gate is correctly written and fails closed. The hole was that nothing
 connects *"publicly reachable"* to *"not development"*, and `.env` is
 machine-local and gitignored, so the next tunnel can reopen it.
 
-**Fix:** refuse to boot when `APP_ENV=development` and a public base URL is
-configured (`API_PUBLIC_URL` set, or a non-localhost `CLIENT_URL`). Fail at
-startup with a named error, not a warning — a warning in a log nobody reads
-is how this happened.
+**DONE 2026-09-21.** `config.ValidateEnv` now refuses to start when
+`APP_ENV=development` and any of `API_PUBLIC_URL`, `CLIENT_URL` or
+`ARTIST_DASHBOARD_URL` names a non-local host. `CLIENT_URL` is a
+comma-separated allow-list, so each entry is checked — a public host hiding
+behind a localhost one is still caught.
 
-**Done when:** the API exits non-zero on that combination, and a test asserts
-it.
+Loopback, private and link-local addresses all count as local, so ordinary
+development is untouched; a rule that blocked `localhost` would be one people
+disable rather than obey. Anything unparseable fails **open**, because this
+exists to catch a real hostname, not to be a URL validator.
+
+Verified both ways against the built binary: development + the actual tunnel
+hostname exits 1 with the offending host named; development + localhost boots
+normally. Six tests, including one pinned to the exact configuration that
+leaked.
 
 ### P0.2 · Two accounts still hold unnormalised phones
 **Cost:** ~20 min · **Risk if skipped:** silent auth and refund mismatches
@@ -63,12 +71,25 @@ parse**. An unnormalised phone therefore silently disables the refund
 warning for that customer — the guard is off for exactly the accounts
 nobody cleaned up.
 
-**Fix:** decide per account whether it is a duplicate to merge or a distinct
-person to renumber, then normalise. Two rows; this is a judgement call, not
-a migration.
+**Investigated 2026-09-21, and the severity is lower than first written.**
+Both accounts have **zero bookings**, so neither can ever be owed a refund
+and the disabled guard is inert for them today. That correction belongs here
+rather than quietly in a commit.
 
-**Done when:** `SELECT count(*) FROM users WHERE phone NOT LIKE '+%'` is 0
-and no phone is shared.
+They are not empty duplicates either: Sarah holds **1 order** and Abdallah
+Kadour **2**. So merging would move order history onto another person's
+account and renumbering invents a number neither of them gave. **That is a
+judgement call about two real records, and it was left to the founder rather
+than decided here.**
+
+What was done instead: `verify-uc2` gained **M11**, which fails when any
+customer *with a booking* has a phone the guard cannot parse — the exact
+population the rule protects. The two accounts are reported in the passing
+line so they stay visible without turning the suite permanently red, which
+is how checks get ignored.
+
+**Done when:** a decision is made per account — merge into the existing
+holder, or assign the number actually belonging to them.
 
 ### P0.3 · Rania's opening hours are wrong, and they are also a pricing bug
 **Cost:** 2 min, hers · **Risk if skipped:** wrong prices to real customers
@@ -83,7 +104,7 @@ currently selling 3am appointments at a premium.
 **Fix:** she opens Hours → *Set the same hours for every day* → Apply. Her
 data, her call — deliberately not changed for her.
 
-### P0.4 · `request-otp` reports success for a message that never arrives
+### P0.4 · `request-otp` reports success for a message that never arrives — **DONE**
 **Cost:** ~2 h · **Risk if skipped:** every customer login is a dead end
 
 **0 of 92** notifications have ever been delivered. The API answers
@@ -94,12 +115,29 @@ Delivery itself is blocked on Meta. **Honesty is not.** The reconciler now
 records `delivery_status`, so the truth exists in the database and is simply
 not surfaced.
 
-**Fix:** after queueing, if recent notifications to that number are
-`undelivered`, tell the customer WhatsApp is not reaching them and offer the
-guest booking path, which works today.
+**DONE 2026-09-21.** `request-otp` now returns `delivery_looks_broken` and,
+when true, tells the customer WhatsApp is not reaching them and that they
+can still book without signing in — which is true, and is the path that
+works today. The code is queued either way; only the wording changes.
 
-**Done when:** a customer whose last three codes were undelivered sees a
-truthful message rather than "sent".
+**The check is PLATFORM-WIDE, not per number, and that is load-bearing.**
+The first implementation asked "have recent messages to *this* number
+failed", which would have handed back an enumeration oracle the endpoint was
+explicitly built to avoid: `request-otp` returns an identical response for
+an artist's number as for a customer's, so that it cannot be used to
+discover who is registered, and a per-number delivery signal is only
+answerable for numbers the system has messaged before. Rewritten to ask
+whether the last five reconciled attempts across all recipients failed. Five
+rather than one, because a single undelivered message is a flat phone, not
+an outage.
+
+A health-check error means "cannot tell" and is reported as healthy — the
+alternative is announcing an outage because a query timed out.
+
+Verified live against the real 0% delivery rate: the API now answers *"We're
+having trouble reaching WhatsApp right now, so the code may not arrive. You
+can still book without signing in."* Four tests, one of which asserts the
+artist and customer responses stay indistinguishable.
 
 ---
 

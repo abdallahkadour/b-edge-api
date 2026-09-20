@@ -58,6 +58,24 @@ type Repository interface {
 	// (see PhoneEligibleForOTP and migration 018).
 	EnqueueOTPNotification(ctx context.Context, phone, message string) error
 
+	// RecentDeliveryLooksBroken reports whether the WhatsApp CHANNEL has
+	// recently been failing - platform-wide, not for one number.
+	//
+	// Asked so the API can stop claiming success it has no evidence for.
+	// `status='sent'` only ever meant Twilio accepted the message; the
+	// reconciler in internal/notification/delivery.go records what the
+	// provider actually did, and this reads that. See remediation plan
+	// P0.4: delivery is blocked on Meta verification, but HONESTY is not.
+	//
+	// NOT scoped to the caller's phone, deliberately. RequestOTP returns an
+	// identical success response for an artist's number as for a customer's,
+	// specifically so it cannot be used to enumerate who is registered. A
+	// per-number delivery signal would hand that oracle straight back -
+	// "your recent messages failed" is only answerable for a number the
+	// system has messaged before. The channel is either working or it is
+	// not, and that is the same answer for everyone.
+	RecentDeliveryLooksBroken(ctx context.Context) (bool, error)
+
 	// PhoneEligibleForOTP reports whether a phone number may be used for
 	// customer OTP login. False when the number is already held by a
 	// non-customer account (an artist) - artists authenticate by
@@ -237,6 +255,37 @@ func (r *pgRepo) StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenH
 		return fmt.Errorf("store refresh token: %w", err)
 	}
 	return nil
+}
+
+// RecentDeliveryLooksBroken reports whether the provider has recently
+// failed to deliver to this number.
+//
+// "Recently" is the last five reconciled attempts in 24 hours, across all
+// recipients. Five rather than one because a single undelivered message can
+// be a flat phone or a blocked contact, and announcing an outage on that
+// evidence would be its own kind of lying. Five consecutive failures is a
+// channel problem, not a handset problem.
+//
+// Only rows the reconciler has actually ASKED about count. A NULL
+// delivery_status means nobody checked, which is not evidence of failure -
+// the same distinction the refund payer check makes, and for the same
+// reason: "cannot tell" must never render as "it is broken".
+func (r *pgRepo) RecentDeliveryLooksBroken(ctx context.Context) (bool, error) {
+	var attempts, failed int
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE delivery_status IN ('undelivered','failed'))
+		  FROM (
+			SELECT delivery_status
+			  FROM notifications
+			 WHERE delivery_status IS NOT NULL
+			   AND created_at > NOW() - interval '24 hours'
+			 ORDER BY created_at DESC
+			 LIMIT 5
+		  ) recent`).Scan(&attempts, &failed)
+	if err != nil {
+		return false, fmt.Errorf("recent delivery health: %w", err)
+	}
+	return attempts > 0 && failed == attempts, nil
 }
 
 func (r *pgRepo) EnqueueOTPNotification(ctx context.Context, phone, message string) error {

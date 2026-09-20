@@ -54,11 +54,31 @@ func (h *Handler) RequestOTP(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 
-	if err := h.svc.RequestOTP(c.UserContext(), req); err != nil {
+	deliveryLooksBroken, err := h.svc.RequestOTP(c.UserContext(), req)
+	if err != nil {
 		return err
 	}
 
-	return response.OK(c, fiber.Map{"message": "Verification code sent"})
+	// Tell the truth when there is evidence against the usual answer.
+	//
+	// "Verification code sent" was returned unconditionally, and the
+	// platform's delivery rate is currently zero - so the customer waited
+	// for a message that was never going to arrive, with nothing anywhere
+	// saying otherwise. The code IS queued either way; only the wording
+	// changes, and `delivery_looks_broken` lets the app offer the guest
+	// booking path, which works today.
+	if deliveryLooksBroken {
+		return response.OK(c, fiber.Map{
+			"message": "We're having trouble reaching WhatsApp right now, so the code may not arrive. " +
+				"You can still book without signing in.",
+			"delivery_looks_broken": true,
+		})
+	}
+
+	return response.OK(c, fiber.Map{
+		"message":               "Verification code sent",
+		"delivery_looks_broken": false,
+	})
 }
 
 // VerifyOTP godoc

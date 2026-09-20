@@ -71,9 +71,12 @@ func NewService(repo Repository, log ...*zap.Logger) *Service {
 // is. The account isn't meaningfully "theirs" until they complete
 // verification, but the row existing early is harmless - migration 014's
 // phone-uniqueness fix means this can never create a duplicate.
-func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
+// RequestOTP queues a login code and reports whether WhatsApp has recently
+// been failing to reach this number, so the caller can say so instead of
+// claiming a delivery it cannot evidence.
+func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) (deliveryLooksBroken bool, err error) {
 	if err := s.validate.Struct(req); err != nil {
-		return mapValidationError(err)
+		return false, mapValidationError(err)
 	}
 
 	// Normalise BEFORE the rate-limit lookup, or "71900001" and "+96171900001"
@@ -81,16 +84,16 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
 	// retyping the same number a different way.
 	normalized, err := phone.Parse(req.Phone, phone.DefaultISO, "phone")
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Phone = normalized
 
 	count, err := s.repo.CountRecentOTPs(ctx, req.Phone, time.Now().Add(-otpRateLimitWindow))
 	if err != nil {
-		return fmt.Errorf("request otp: rate limit check: %w", err)
+		return false, fmt.Errorf("request otp: rate limit check: %w", err)
 	}
 	if count >= otpRateLimitMax {
-		return apperror.TooManyRequests("RATE_LIMITED", ErrRateLimited.Error())
+		return false, apperror.TooManyRequests("RATE_LIMITED", ErrRateLimited.Error())
 	}
 
 	// Read-only eligibility check. Deliberately does NOT create a users row:
@@ -100,23 +103,27 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
 	// created in VerifyOTP, once they've actually proven control of it.
 	eligible, err := s.repo.PhoneEligibleForOTP(ctx, req.Phone)
 	if err != nil {
-		return fmt.Errorf("request otp: check eligibility: %w", err)
+		return false, fmt.Errorf("request otp: check eligibility: %w", err)
 	}
 	if !eligible {
 		// The number belongs to an artist account, which authenticates by
 		// email+password only. Return the SAME success response as any
 		// other request - revealing the difference would turn this endpoint
 		// into a phone-enumeration oracle. No code is sent.
-		return nil
+		//
+		// The channel-health flag is returned here too, and must be: it is
+		// platform-wide, so it carries no information about THIS number and
+		// withholding it would make the two responses distinguishable.
+		return s.channelLooksBroken(ctx), nil
 	}
 
 	code, err := generateOTPCode()
 	if err != nil {
-		return fmt.Errorf("request otp: generate code: %w", err)
+		return false, fmt.Errorf("request otp: generate code: %w", err)
 	}
 
 	if _, err := s.repo.CreateOTP(ctx, req.Phone, hashOTP(code), time.Now().Add(otpValidity)); err != nil {
-		return fmt.Errorf("request otp: store code: %w", err)
+		return false, fmt.Errorf("request otp: store code: %w", err)
 	}
 
 	// Best-effort, matching the exact same pattern booking notifications
@@ -138,7 +145,27 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) error {
 		)
 	}
 
-	return nil
+	// Has WhatsApp actually been reaching this number? Best-effort and never
+	// fatal: a failure to answer the question must not fail the request.
+	//
+	// The code IS queued either way. This only decides whether the caller is
+	// told "sent" or told the truth. Reported at 0% delivery across the whole
+	// platform, "Verification code sent" is a sentence the API has no
+	// evidence for, and the customer sits waiting for a message that is not
+	// coming.
+	return s.channelLooksBroken(ctx), nil
+}
+
+// channelLooksBroken answers the delivery question without ever failing the
+// request. An error here means "cannot tell", which is reported as working -
+// the alternative is announcing an outage because a health query timed out.
+func (s *Service) channelLooksBroken(ctx context.Context) bool {
+	broken, err := s.repo.RecentDeliveryLooksBroken(ctx)
+	if err != nil {
+		s.log.Warn("could not check recent delivery health", zap.Error(err))
+		return false
+	}
+	return broken
 }
 
 // VerifyOTP checks a submitted code and, on success, issues a session

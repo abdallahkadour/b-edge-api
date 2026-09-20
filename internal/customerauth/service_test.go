@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 // ── Mock repository ──────────────────────────────────────────────────────
 
 type mockRepo struct {
+	deliveryLooksBroken    bool
+	deliveryLooksBrokenErr error
+
 	recentOTPCount    int
 	recentOTPCountErr error
 
@@ -90,6 +93,10 @@ func (m *mockRepo) FindOrCreateCustomerByPhone(_ context.Context, phone string) 
 func (m *mockRepo) StoreRefreshToken(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
 	return m.storeRefreshTokenErr
 }
+func (m *mockRepo) RecentDeliveryLooksBroken(_ context.Context) (bool, error) {
+	return m.deliveryLooksBroken, m.deliveryLooksBrokenErr
+}
+
 func (m *mockRepo) EnqueueOTPNotification(_ context.Context, phone, message string) error {
 	m.enqueuedPhone = phone
 	m.enqueuedMessage = message
@@ -128,7 +135,7 @@ func TestRequestOTP_Success_EnqueuesMessageWithCode(t *testing.T) {
 	repo := &mockRepo{}
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
 
 	require.NoError(t, err)
 	assert.Equal(t, "+96170123456", repo.enqueuedPhone,
@@ -147,7 +154,7 @@ func TestRequestOTP_DoesNotCreateUser(t *testing.T) {
 	repo := &mockRepo{}
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
 
 	require.NoError(t, err)
 	assert.False(t, repo.findOrCreateCalled,
@@ -161,7 +168,7 @@ func TestRequestOTP_IneligiblePhone_SilentSuccess(t *testing.T) {
 	repo := &mockRepo{phoneIneligible: true}
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "70123456"})
 
 	require.NoError(t, err, "must look identical to a successful request from outside")
 	assert.Empty(t, repo.enqueuedPhone, "but no code may actually be sent")
@@ -171,7 +178,7 @@ func TestRequestOTP_RateLimited_Rejected(t *testing.T) {
 	repo := &mockRepo{recentOTPCount: 3} // already at the max
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
 
 	assert.Error(t, err)
 }
@@ -186,7 +193,7 @@ func TestRequestOTP_RateLimited_Returns429(t *testing.T) {
 	repo := &mockRepo{recentOTPCount: 3}
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
 
 	require.Error(t, err)
 	var appErr *apperror.AppError
@@ -199,7 +206,7 @@ func TestRequestOTP_UnderRateLimit_Allowed(t *testing.T) {
 	repo := &mockRepo{recentOTPCount: 2} // one under the max of 3
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "+96170123456"})
 
 	require.NoError(t, err)
 }
@@ -208,7 +215,7 @@ func TestRequestOTP_InvalidPhone_ValidationError(t *testing.T) {
 	repo := &mockRepo{}
 	svc := newTestService(repo)
 
-	err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "12"}) // too short
+	_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: "12"}) // too short
 
 	assert.Error(t, err)
 }
@@ -521,7 +528,8 @@ func TestRequestOTP_NormalisesBeforeTheRateLimitLookup(t *testing.T) {
 		repo := &mockRepo{}
 		svc := newTestService(repo)
 
-		require.NoError(t, svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: form}))
+		_, errReq := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: form})
+	require.NoError(t, errReq)
 		assert.Equal(t, "+96170123456", repo.enqueuedPhone,
 			"every way of typing this number must hit the same rate-limit bucket (%q)", form)
 	}
@@ -532,8 +540,8 @@ func TestRequestOTP_NormalisesBeforeTheRateLimitLookup(t *testing.T) {
 func TestRequestOTP_RejectsWhatTheLengthCheckAccepted(t *testing.T) {
 	for _, junk := range []string{"aaaaaaa", "1234567", "-------"} {
 		svc := newTestService(&mockRepo{})
-		assert.Error(t, svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: junk}),
-			"%q must be rejected", junk)
+		_, err := svc.RequestOTP(context.Background(), RequestOTPRequest{Phone: junk})
+		assert.Error(t, err, "%q must be rejected", junk)
 	}
 }
 
@@ -543,7 +551,71 @@ func TestRequestOTP_AcceptsMENANumbers(t *testing.T) {
 	repo := &mockRepo{}
 	svc := newTestService(repo)
 
-	require.NoError(t, svc.RequestOTP(context.Background(),
-		RequestOTPRequest{Phone: "+971501234567"}))
+	_, err := svc.RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+971501234567"})
+	require.NoError(t, err)
 	assert.Equal(t, "+971501234567", repo.enqueuedPhone)
+}
+
+// P0.4: the API used to answer "Verification code sent" unconditionally,
+// while the platform's delivery rate was zero. The customer waited for a
+// message that was never coming and nothing anywhere said otherwise.
+func TestRequestOTP_ReportsWhenTheChannelIsFailing(t *testing.T) {
+	repo := &mockRepo{deliveryLooksBroken: true}
+	svc := newTestService(repo)
+
+	broken, err := svc.RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+96170123456"})
+
+	require.NoError(t, err, "a failing channel must not fail the request - the code is still queued")
+	assert.True(t, broken, "the caller must be told the channel is failing")
+}
+
+func TestRequestOTP_SaysNothingWhenTheChannelIsHealthy(t *testing.T) {
+	repo := &mockRepo{deliveryLooksBroken: false}
+	svc := newTestService(repo)
+
+	broken, err := svc.RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+96170123456"})
+
+	require.NoError(t, err)
+	assert.False(t, broken)
+}
+
+// A health-check failure means "cannot tell", and cannot-tell must not be
+// announced as an outage - nor may it fail the request, which has already
+// queued the code.
+func TestRequestOTP_HealthCheckFailureIsNotAnOutage(t *testing.T) {
+	repo := &mockRepo{deliveryLooksBrokenErr: assert.AnError}
+	svc := newTestService(repo)
+
+	broken, err := svc.RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+96170123456"})
+
+	require.NoError(t, err)
+	assert.False(t, broken, "an unanswerable health check must not be reported as failure")
+}
+
+// THE ENUMERATION PROPERTY. RequestOTP answers identically for a number
+// that belongs to an artist as for one that does not, so the endpoint
+// cannot be used to discover who is registered. The delivery flag is
+// platform-wide precisely so it cannot reintroduce that oracle: a
+// per-number signal is only answerable for numbers the system has messaged,
+// which is itself the leak.
+func TestRequestOTP_DeliveryFlagDoesNotLeakWhetherANumberIsRegistered(t *testing.T) {
+	// An artist's number: ineligible, no code sent.
+	artist := &mockRepo{phoneIneligible: true, deliveryLooksBroken: true}
+	// A customer's number: eligible, code sent.
+	customer := &mockRepo{phoneIneligible: false, deliveryLooksBroken: true}
+
+	a, errA := newTestService(artist).RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+96170123456"})
+	c, errC := newTestService(customer).RequestOTP(context.Background(),
+		RequestOTPRequest{Phone: "+96170123457"})
+
+	require.NoError(t, errA)
+	require.NoError(t, errC)
+	assert.Equal(t, a, c,
+		"the two responses must be indistinguishable, or the endpoint becomes "+
+			"a way to discover which numbers are registered")
 }

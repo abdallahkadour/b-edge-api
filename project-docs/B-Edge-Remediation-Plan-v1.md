@@ -197,15 +197,33 @@ notes) to `sessionStorage`. Never the slot or booking id — the funnel's own
 header explains why a live 10-minute hold must not be resurrectable, and
 that reasoning still holds.
 
-### P2.2 · Surcharge-vs-discount ordering has no test
+### P2.2 · Surcharge-vs-discount ordering — **DONE, and the item was wrong**
 **Cost:** ~1 h
 
-Decision **D3** settled that a surcharge applies before a discount. Nothing
-asserts it. This is a money rule with a named decision and no guard — the
-same shape as every defect this exercise has found.
+**This entry was inaccurate and is corrected rather than quietly deleted.**
+D3.4 *is* tested, and well: `internal/pkg/discount` has 16 tests at 94.7%
+coverage including `TestSurchargeAppliesBeforeDiscount`, which asserts 20%
+of 120 rather than of 100. Writing another unit test would have duplicated
+existing work.
 
-Blocked only by there being no active discount code to test against; create
-one in the fixture.
+The real gap was one layer up. `applyDiscount` passes `subtotal` as the base
+with a **zero surcharge**, on the stated assumption that subtotal already
+includes the early-bird fee. The resolver stays correct and the booking
+becomes wrong if a caller ever passes the raw price instead, and no test
+covered that coupling.
+
+**DONE 2026-09-21.** `verify-uc1` gains **A5**, which books a real
+early-bird slot with a real percentage code through the API and checks the
+arithmetic end to end: base 200 + fee 15 = 215, 20% of **215** = 43, final
+172. It creates the discount code and the early-bird cutoff it needs and
+restores both.
+
+A1 and A5 also stopped skipping. Both previously depended on the test day
+happening to have a slot before the store's cutoff, which most days do not —
+a check that skips is a check that never catches anything. The suite now
+forces the condition. First attempt still skipped because the cutoff was
+computed from a slot list the earlier holds had already consumed; it is now
+derived from what is free at that moment.
 
 ### P2.3 · Payer capture has never been exercised
 **Cost:** observation only

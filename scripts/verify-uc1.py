@@ -285,11 +285,34 @@ def main():
               f"{len(cust)} slots, {cust[0] if cust else '-'}..{cust[-1] if cust else '-'}"
               f" (expect within 14:00-16:00)")
 
-        # ── early-bird surcharge, only if the store has one configured ────────
-        cutoff = sql(f"SELECT coalesce(to_char(early_bird_cutoff,'HH24:MI'),'') "
-                     f"FROM stores WHERE id='{STORE}';")
-        fee = sql(f"SELECT early_bird_fee FROM stores WHERE id='{STORE}';")
-        eb = [s for s in free if s.get("is_early_bird")]
+        # ── early-bird surcharge ──────────────────────────────────────────────
+        #
+        # The condition is CREATED rather than waited for. Left to chance this
+        # skipped on any day whose slots all start after the store's cutoff,
+        # which is most of them - and a check that skips is a check that never
+        # catches anything. The store's own setting is saved and restored.
+        orig_cutoff = sql(f"SELECT coalesce(to_char(early_bird_cutoff,'HH24:MI'),'') "
+                          f"FROM stores WHERE id='{STORE}';")
+        orig_fee = sql(f"SELECT early_bird_fee FROM stores WHERE id='{STORE}';")
+
+        # Derived from the slots that are STILL FREE at this point, not from
+        # the list captured at the top - the holds placed above consumed the
+        # earliest ones, and a cutoff computed from a stale list lands before
+        # every remaining slot and qualifies nothing.
+        free = slots(ARTIST, STORE, SVC, date)
+        if not free:
+            skip("A1", "early-bird surcharge is charged", "no slots left on the test day")
+            skip("A5", "discount comes off the price including the surcharge",
+                 "no slots left on the test day")
+            eb, cutoff, fee = [], "", "0"
+        else:
+            hh, mm = (int(x) for x in free[0]["start_time"][11:16].split(":"))
+            cutoff = f"{min(hh + 1, 23):02d}:{mm:02d}"   # an hour of qualifying slots
+            sql(f"UPDATE stores SET early_bird_cutoff='{cutoff}', early_bird_fee=15 "
+                f"WHERE id='{STORE}';")
+            fee = "15.00"
+            free = slots(ARTIST, STORE, SVC, date)
+            eb = [s for s in free if s.get("is_early_bird")]
         if not cutoff or float(fee) <= 0:
             skip("A1", "early-bird surcharge is charged",
                  "this store has no early-bird cutoff or a zero fee")
@@ -309,6 +332,45 @@ def main():
                 check("A1", "early-bird slot is charged the surcharge",
                       float(final) == float(orig) + float(fee),
                       f"{orig} + {fee} = {final}")
+
+        # ── D3.4 end to end: surcharge applies BEFORE the discount ───────────
+        # internal/pkg/discount tests this rule thoroughly at the resolver
+        # (20% of 120, not of 100). What no test covered is the COUPLING:
+        # applyDiscount passes `subtotal` as the base with a zero surcharge,
+        # on the stated assumption that subtotal already includes the
+        # early-bird fee. The resolver would stay correct and the booking
+        # would be wrong if a caller ever passed the raw price instead, and
+        # nothing would notice. This exercises the real path.
+        if cutoff and float(fee) > 0 and eb:
+            salon = sql(f"SELECT salon_id FROM stores WHERE id='{STORE}';")
+            sql(f"""INSERT INTO discounts (salon_id, code, kind, value, is_active)
+                    VALUES ('{salon}', 'UC1PCT20', 'percentage', 20, true)
+                    ON CONFLICT DO NOTHING;""")
+            try:
+                _, _, did = hold(eb[-1]["start_time"])
+                if did:
+                    r = call("PATCH", f"/bookings/guest/{did}/submit",
+                             {"name": "UC1 Discount", "phone": "71555905",
+                              "discount_code": "UC1PCT20"})[1]
+                    if (r.get("data") or {}).get("customer_id"):
+                        made_users.append(r["data"]["customer_id"])
+                    row = sql(f"""SELECT original_price||'|'||discount_amount||'|'||final_price
+                                    FROM bookings WHERE id='{did}';""")
+                    orig, disc, final = (float(x) for x in row.split("|"))
+                    subtotal = orig + float(fee)          # surcharge first
+                    expected_disc = round(subtotal * 0.20, 2)
+                    check("A5", "discount is taken off the price INCLUDING the surcharge",
+                          abs(disc - expected_disc) < 0.01
+                          and abs(final - (subtotal - expected_disc)) < 0.01,
+                          f"base {orig} + fee {fee} = {subtotal}; "
+                          f"20% = {expected_disc}, got discount {disc}, final {final}")
+            finally:
+                sql("DELETE FROM discount_redemptions WHERE discount_id IN "
+                    "(SELECT id FROM discounts WHERE code='UC1PCT20');")
+                sql("DELETE FROM discounts WHERE code='UC1PCT20';")
+        else:
+            skip("A5", "discount is taken off the price including the surcharge",
+                 "needs an early-bird slot on the test day")
 
         nb = [s for s in free if not s.get("is_early_bird")]
         if nb:
@@ -345,6 +407,12 @@ def main():
         try:
             sql("DELETE FROM business_hours_exceptions WHERE reason='UC1 verify';")
         except RuntimeError:
+            pass
+        try:
+            cut = f"'{orig_cutoff}'" if orig_cutoff else "NULL"
+            sql(f"UPDATE stores SET early_bird_cutoff={cut}, "
+                f"early_bird_fee={orig_fee or 0} WHERE id='{STORE}';")
+        except (RuntimeError, NameError):
             pass
 
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed, {len(SKIP)} skipped")

@@ -131,6 +131,24 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 		return nil, apperror.BadRequest("INVALID_SERVICE_ID", "Invalid service ID")
 	}
 
+	// The same gate the hold path uses, applied here too.
+	//
+	// It was missing, and the result was a dead end rather than a refusal: an
+	// artist whose subscription is past_due, suspended or cancelled was still
+	// offered a full day of bookable times, and the customer only found out
+	// when they tapped one and got ARTIST_NOT_ACCEPTING_BOOKINGS. Measured on
+	// 2026-09-20 against a cancelled subscription: 33 slots offered, hold
+	// refused.
+	//
+	// Refusing here rather than returning an empty list, deliberately. Empty
+	// reads as "fully booked" and sends the funnel to the waitlist - which is
+	// the wrong promise for an artist who is not coming back. The same error
+	// as the hold path tells the customer the truth at the first step instead
+	// of the last.
+	if err := s.checkArtistAcceptsNewBookings(ctx, artistID); err != nil {
+		return nil, err
+	}
+
 	date, err := time.Parse("2006-01-02", req.Date)
 	if err != nil {
 		return nil, apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")

@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify
 
 run:
 	go run cmd/main.go
@@ -54,4 +54,8 @@ verify-uc2:
 	python3 scripts/verify-uc2.py
 
 # Every executable verification suite.
-verify: verify-uc1 verify-uc2
+verify: verify-uc1 verify-uc2 verify-uc6
+
+# Subscription enforcement across all three layers (UC-6).
+verify-uc6:
+	python3 scripts/verify-uc6.py

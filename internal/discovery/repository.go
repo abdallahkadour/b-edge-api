@@ -23,10 +23,25 @@ import (
 // stays correct even so) fails every branch below and is correctly hidden -
 // matching DeriveStatus's own CurrentPeriodEnd==nil => PastDue case.
 //
-// cancelled_at IS NOT NULL is treated as visible here, NOT hidden - the
-// spec's own enforcement table only names past_due/suspended as hidden and
-// says nothing about cancelled, so this does not invent scope beyond what
-// was actually specified. Revisit if that gap gets an explicit answer.
+// cancelled subscriptions are HIDDEN, as of 2026-09-20.
+//
+// This condition used to treat `cancelled_at IS NOT NULL` as VISIBLE, on the
+// reasoning that the monetization spec's enforcement table named only
+// past_due and suspended and this should not invent scope. That gap has
+// since been given an explicit answer: subscription.Enforce(StatusCancelled)
+// returns VisibleInDiscovery: false - "a deliberate exit... they simply stop
+// being sold".
+//
+// So the two disagreed, and the disagreement was live. Measured: an artist
+// cancelled ten days earlier, whose period ended a hundred days earlier, was
+// still listed in Discover, while a hold against them was refused with
+// ARTIST_NOT_ACCEPTING_BOOKINGS. Visible, browsable, and unbookable.
+//
+// Enforce wins because it is the single named source of this policy. The
+// condition is expressed in SQL rather than by calling it - a per-row Go
+// call is not available to a query - so the comment is the only thing
+// keeping them aligned. If Enforce's answer for any status changes, this
+// must change with it.
 //
 // Uses billing.GraceDays (not a locally duplicated literal) so this can
 // never silently drift from the exact boundary DeriveStatus itself uses for
@@ -34,9 +49,9 @@ import (
 var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
 	SELECT 1 FROM subscriptions sub
 	WHERE sub.artist_id = a.id
+	AND sub.cancelled_at IS NULL
 	AND (
-		sub.cancelled_at IS NOT NULL
-		OR sub.plan_code = 'comped'
+		sub.plan_code = 'comped'
 		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
 		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
 	)

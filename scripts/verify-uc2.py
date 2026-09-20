@@ -264,6 +264,24 @@ def main():
             check("M9", "NaN cannot be stored as money", True,
                   "rejected by a database constraint")
 
+        # ── M10: the assumption internal/pkg/money is pinned to ─────────────
+        # bounds_test.go asserts that Parse accepts exactly what NUMERIC(10,2)
+        # can hold - 99999999.99 - and rejects anything wider. That test is
+        # only as true as this schema fact, and a future migration could add
+        # a money column with a narrower type. Then Parse would accept a value
+        # the insert cannot store: a 500 on a booking instead of a 400 on a
+        # form. Checked here because only a live database can answer it.
+        narrow = sql("""
+            SELECT coalesce(string_agg(table_name||'.'||column_name||' NUMERIC('
+                   ||numeric_precision||','||numeric_scale||')', ', '), '')
+              FROM information_schema.columns
+             WHERE data_type='numeric' AND table_schema='public'
+               AND (column_name LIKE '%price%' OR column_name LIKE '%amount%'
+                    OR column_name LIKE '%fee%' OR column_name LIKE '%deposit%')
+               AND NOT (numeric_precision=10 AND numeric_scale=2);""")
+        check("M10", "every money column is still NUMERIC(10,2)", narrow == "",
+              narrow or "18 money columns, all NUMERIC(10,2) — matches money.Parse's bounds")
+
     finally:
         for b in created:
             try:

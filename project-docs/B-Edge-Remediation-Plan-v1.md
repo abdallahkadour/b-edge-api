@@ -8,6 +8,18 @@ on 2026-09-21, not carried over from earlier notes.
 
 ---
 
+> **Read the severities with this in mind (added 2026-09-21):** B-Edge has
+> **no live customers**. Every account, booking and price in the database is
+> a fixture, WhatsApp delivers nothing, and the only human using the product
+> is the launch artist testing it. So **nothing here is losing money today**,
+> and earlier wording in this file that implied otherwise — "wrong prices to
+> real customers", "selling 3am appointments at a premium" — overstated it.
+>
+> What the severities actually rank is **what would cost something the day
+> this goes live**, plus what is blocking that day from arriving. Data
+> hygiene items are cheap to fix precisely because the data is disposable;
+> they are listed for completeness, not urgency.
+
 ## 0. How this is ordered
 
 By **what it costs if left alone**, not by effort. Three of the four P0 items
@@ -53,7 +65,7 @@ normally. Six tests, including one pinned to the exact configuration that
 leaked.
 
 ### P0.2 · Two accounts still hold unnormalised phones
-**Cost:** ~20 min · **Risk if skipped:** silent auth and refund mismatches
+**Cost:** ~20 min · **Risk if skipped:** none today; a latent trap for later
 
 Migration 043 normalised every phone to E.164 except two it deliberately
 skipped, because normalising them would have collided with existing rows:
@@ -77,10 +89,11 @@ and the disabled guard is inert for them today. That correction belongs here
 rather than quietly in a commit.
 
 They are not empty duplicates either: Sarah holds **1 order** and Abdallah
-Kadour **2**. So merging would move order history onto another person's
-account and renumbering invents a number neither of them gave. **That is a
-judgement call about two real records, and it was left to the founder rather
-than decided here.**
+Kadour **2**. In a live system that would make merging a judgement call
+about someone's purchase history — but these are **fixtures in a test
+database**, so the honest position is that either resolution is fine and it
+simply needs someone to pick one. Left open only because it is not mine to
+pick, not because it is delicate.
 
 What was done instead: `verify-uc2` gained **M11**, which fails when any
 customer *with a booking* has a phone the guard cannot parse — the exact
@@ -91,15 +104,17 @@ is how checks get ignored.
 **Done when:** a decision is made per account — merge into the existing
 holder, or assign the number actually belonging to them.
 
-### P0.3 · Rania's opening hours are wrong, and they are also a pricing bug
-**Cost:** 2 min, hers · **Risk if skipped:** wrong prices to real customers
+### P0.3 · Rania's opening hours are wrong
+**Cost:** 2 min, hers · **Risk if skipped:** none today — it is test data
 
 Three days open before 08:00 — Sunday **07:08**, Monday **03:35**, Tuesday
 **03:00**. Almost certainly stray taps.
 
-It is not only cosmetic. Beirut Downtown charges an early-bird surcharge
-before 09:00, so **every pre-9am slot is advertised at +$15**. She is
-currently selling 3am appointments at a premium.
+Beirut Downtown surcharges before 09:00, so those slots also show +$15.
+**No real customer sees this** — it is a test environment — so the actual
+cost is that her own testing happens against nonsense hours, and any demo
+shows 3am availability. Worth two taps, not worth calling a pricing
+incident, which an earlier version of this entry did.
 
 **Fix:** she opens Hours → *Set the same hours for every day* → Apply. Her
 data, her call — deliberately not changed for her.

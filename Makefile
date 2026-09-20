@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify
 
 run:
 	go run cmd/main.go
@@ -48,3 +48,10 @@ docs-facts:
 # See project-docs/B-Edge-UC1-Guest-Booking-Verification-v1.md.
 verify-uc1:
 	python3 scripts/verify-uc1.py
+
+# Money: deposits and refunds (UC-2/UC-3). Needs the API and database up.
+verify-uc2:
+	python3 scripts/verify-uc2.py
+
+# Every executable verification suite.
+verify: verify-uc1 verify-uc2

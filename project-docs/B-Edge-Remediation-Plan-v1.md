@@ -181,7 +181,7 @@ Meta clears, before trusting a green number.
 
 ## P2 — Real gaps, no external blocker
 
-### P2.1 · The booking funnel loses everything on reload
+### P2.1 · The booking funnel loses everything on reload — **DONE**
 **Cost:** ~3 h
 
 Funnel state is in-memory signals on a single route; nothing in
@@ -192,10 +192,30 @@ the live hold, and the name and phone just typed.
 (pull-to-refresh). It did not make the funnel durable against a deliberate
 reload, an iOS tab eviction, or a crash.
 
-**Recommended scope:** persist **only the typed details** (name, phone,
-notes) to `sessionStorage`. Never the slot or booking id — the funnel's own
-header explains why a live 10-minute hold must not be resurrectable, and
-that reasoning still holds.
+**DONE 2026-09-21.** The typed details — name, phone, notes — are mirrored
+to `sessionStorage` as they change and restored on init. Verified in WebKit:
+type, reload, walk back to the details step, and all three are still there.
+
+**Only the typed details.** Not the slot, the hold id or the step. Restoring
+those would resurrect a reservation that has very likely expired and put the
+customer on a screen describing a booking the server no longer has — exactly
+the staleness the no-URL-routing decision exists to prevent. Retyping a name
+is an annoyance; being shown a slot you no longer hold is a broken promise.
+After a reload the funnel correctly returns to the artist profile.
+
+`sessionStorage`, not `localStorage`: this should survive a reload of *this
+tab* and nothing more. A name and phone in `localStorage` would outlive the
+booking, the session, and the phone being handed to someone else. The draft
+is keyed per artist and cleared once the booking is placed or abandoned.
+
+**It uncovered a pre-existing latent bug.** `GuestDetailsScreenComponent`
+seeded its editable fields from `initialName()` / `initialPhone()` /
+`initialNotes()` **in its constructor**, where a signal `input()` is not yet
+bound and returns its declared default. Those four inputs were wired end to
+end and **silently inert** — invisible because the container's values were
+always empty too, so `""` was indistinguishable from working. Moved to
+`ngOnInit`. The same pitfall is already documented on the container's own
+`ngOnInit` for the router-bound `artistId`.
 
 ### P2.2 · Surcharge-vs-discount ordering — **DONE, and the item was wrong**
 **Cost:** ~1 h

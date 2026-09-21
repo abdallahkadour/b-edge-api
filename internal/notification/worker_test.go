@@ -223,3 +223,36 @@ func TestSendWhatsApp_TransportFailure_ReturnsError(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+// SEC: outbound message bodies carry text the recipient did not write.
+//
+// CLAUDE.md's rule is that user-supplied text rendered to a DIFFERENT person
+// goes through internal/pkg/bidi. Share cards, inbox notifications and .ics
+// fields honoured it; the outbound WhatsApp body did not, and it is the one
+// that reaches a customer's phone. A service name containing U+202E reverses
+// the remainder of the sentence, and escaping cannot help - an override is
+// not markup.
+func TestBuildMessageBody_StripsBidiOverrides(t *testing.T) {
+	// U+202E RIGHT-TO-LEFT OVERRIDE, as an artist could put in a service name.
+	payload := []byte(`{"message":"Today: your ‮Glam‬ appointment is at 10:00am."}`)
+
+	body, err := buildMessageBody("booking_reminder_morning", payload)
+
+	require.NoError(t, err)
+	assert.NotContains(t, body, "‮", "RLO must not reach the recipient")
+	assert.NotContains(t, body, "‬", "PDF must not reach the recipient")
+	assert.Contains(t, body, "Glam", "the readable text itself must survive")
+	assert.Contains(t, body, "10:00am")
+}
+
+// Ordinary text, including Arabic, must pass through untouched. Stripping
+// legitimate script would be a worse bug than the one being fixed, in a
+// product whose customers write Arabic.
+func TestBuildMessageBody_LeavesLegitimateTextAlone(t *testing.T) {
+	payload := []byte(`{"message":"موعدك اليوم الساعة 10:00 صباحاً - Rania"}`)
+
+	body, err := buildMessageBody("booking_reminder_morning", payload)
+
+	require.NoError(t, err)
+	assert.Equal(t, "موعدك اليوم الساعة 10:00 صباحاً - Rania", body)
+}

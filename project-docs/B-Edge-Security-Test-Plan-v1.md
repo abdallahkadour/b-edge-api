@@ -266,6 +266,94 @@ Severity is the rating **if the test fails**.
 | **SPAM-04** | Guest booking flood | Abuse | Medium | Create many guest holds across an artist's availability. | Holds expire; per-IP/per-phone caps apply. | Cap concurrent holds per phone; shorten the hold TTL. |
 | **SPAM-05** | Pre-approval artist exposure | Logic | Medium | Register and, without approval, attempt Discover listing, bookings, and a share preview. | Invisible and unbookable until approved. | Keep the approval gate on every public surface, including `/a/:handle`. |
 
+### 3.4b Test cases added 2026-09-21 — features shipped since the second execution
+
+Covering `deposit_payer_phone` (migration 044), delivery reconciliation
+(045), the `APP_ENV` boot guard, subscription enforcement on slot
+generation, the morning reminder, draft persistence, and the 90-day booking
+horizon.
+
+Two of these were **found while writing this table**, not by running it, and
+are marked accordingly. A test plan that only lists hypotheses is worth less
+than one that records what looking already turned up.
+
+| Test ID | Vulnerability / Scenario | Category | Severity | Procedure | Expected secure behaviour | Remediation guidance |
+|---|---|---|---|---|---|---|
+| **AUTH-11** | **Development build reachable from the internet** | Config | **Critical** | Start the API with `APP_ENV=development` and each of `CLIENT_URL`, `API_PUBLIC_URL`, `ARTIST_DASHBOARD_URL` set to a tunnel hostname, a real domain, a public IP; then to `localhost`, `127.0.0.1`, a private range. Also try a public host **second** in a comma-separated `CLIENT_URL`. | Refuses to boot, non-zero exit, naming the offending host, for every public value. Boots normally for every local one. | **Found live 2026-09-21** — a development API was serving the launch artist over a public tunnel and the OTP bypass was exploitable from the internet. Guard added in `config.ValidateEnv`. Prefer also removing the bypass by build tag (see AUTH-08). |
+| **AUTH-12** | Delivery-health flag as a registration oracle | Auth | High | Call `request-otp` for (a) an artist's number, (b) a customer's, (c) a number never seen. Compare `delivery_looks_broken` and the whole body across all three, while the channel is failing and while it is healthy. | Byte-identical bodies. The flag must describe the CHANNEL, never the number. | The check is deliberately platform-wide for this reason. A per-number variant is only answerable for numbers the system has messaged, which is itself the leak. Do not "improve" it to be per-number. |
+| **AUTH-13** | Account creation for a number you do not control | Auth | High | Submit a guest booking with someone else's phone; check whether a `users` row is created and whether that number can then be claimed. Repeat at volume. | A guest row may be created — that is by design — but it must not block the real owner from later verifying by OTP, nor grant any session. | `request-otp` deliberately creates nothing (Aug 2026 fix). Confirm the guest path cannot be used to squat numbers or to deny OTP login to their owner. |
+| **DATA-01** | Provider message id exposure | Info leak | Low | Fetch every booking and notification surface as artist, customer and admin; grep responses for `SM[0-9a-f]{32}`. | The Twilio SID never appears in any API response. | **Verified 2026-09-21: absent from every response model.** It is a join key to the provider and belongs in the database only. |
+| **DATA-02** | Payer phone disclosure | Privacy | Medium | As a customer, read your own booking. As an artist, read a booking. Check `deposit_payer_phone` in both. Attempt to read another customer's booking. | The payer number is visible to the artist who must refund it and to nobody outside the booking. Cross-tenant reads still 404. | It may be a third party's number (a spouse, an OMT counter). It must never be messaged, and must never appear in discovery, share previews or reviews. |
+| **INJ-05** | **Bidi override in an outbound WhatsApp body** | Injection | Medium | Set a service, store or artist name to contain U+202E. Trigger each notification template — reminder, morning reminder, approval, confirmation, review request. Inspect the queued body byte-for-byte. | No bidi control characters reach the recipient; ordinary Arabic is untouched. | **FOUND AND FIXED 2026-09-21.** `buildMessageBody` returned the pre-rendered message verbatim. Share cards, inbox notifications and `.ics` fields all honoured the bidi rule; the outbound WhatsApp body, the one that reaches a customer's phone, did not. Stripped at the single choke point rather than per template. |
+| **INJ-06** | Newline / template injection in a notification body | Injection | Medium | Put `\n`, `%s`, `{{.}}`, and a fake "B-Edge:" prefix into a service name; inspect the rendered WhatsApp text. | No format-string evaluation; the attacker cannot forge what looks like a second, official message. | Bodies are built by SQL concatenation today. Treat any field that lands in a message as hostile. |
+| **FRAUD-08** | Refund gate bypass | Logic | **Critical** | With a payer number different from the customer's, call `PATCH /bookings/:id/refunded` with `customer_contacted` absent, `false`, `"false"`, `0`, `null`, and as a string `"true"`. Then try a second refund after the first succeeds. | Refused with `REFUND_PAYER_MISMATCH` for everything except a real boolean `true`. A refunded booking cannot be refunded twice. | Enforced in the service, not only the UI. Money moves out of band over OMT/Whish with no chargeback. |
+| **FRAUD-09** | Payer-mismatch guard silently disabled | Logic | High | Set a customer's phone to a local-format or unparseable value, then attempt a refund from a different number. | The guard should still refuse, or the system should refuse to proceed — it must not silently treat "cannot parse" as "no mismatch" for a bookable customer. | **Known design trade-off:** `depositPayerMismatch` returns false when either side will not parse, so an unnormalised phone turns the warning OFF. `verify-uc2` M11 fails if any customer *with a booking* is in that state. |
+| **FRAUD-10** | Unsellable artist still sold | Logic | High | For each of cancelled, past_due, suspended: check discovery listing, `GET /bookings/slots`, guest hold, and the share preview `/a/:handle`. | Invisible and unbookable at **every** surface, not just the one that takes money. | **Found 2026-09-20**: `Enforce(StatusCancelled)` said hidden while the discovery SQL said visible, and slot generation consulted no gate at all — 33 slots offered, hold refused at the last step. Both fixed; `verify-uc6` covers it. |
+| **CLIENT-06** | PII left in browser storage | Privacy | Medium | Fill the booking funnel, abandon it, then inspect `sessionStorage` and `localStorage`. Close the tab and reopen. Complete a booking and re-inspect. | Name and phone live in `sessionStorage` only, keyed per artist, and are cleared when the booking completes or is abandoned. Nothing in `localStorage`. Nothing survives closing the tab. | Deliberate scope: a draft must survive a reload and nothing more. `localStorage` would outlive the session and the device being handed to someone else. |
+| **EDGE-05** | Slot-generation amplification, 90-day horizon | DoS | Medium | Request slots for all 90 offered dates across several artists concurrently; compare cost to a single-date baseline and to the old 28-day window. | No disproportionate cost; the limiter engages before the database does. | The horizon tripled on 2026-09-19. Extends EDGE-02 rather than replacing it — re-baseline before assuming the old numbers hold. |
+| **SPAM-06** | Discount code enumeration and redemption race | Abuse | High | Brute-force `discount_code` at checkout and measure whether valid and invalid codes differ in status, body or timing. Then redeem one code concurrently N times, including a `first_time_only` code. | Indistinguishable responses for valid-but-inapplicable vs nonexistent. Exactly one redemption per constraint. | `discount_redemptions` uniqueness is the guard; assert it under concurrency, not by reading the schema. |
+| **SPAM-07** | Bulk hours as a mass-mutation vector | Abuse | Low | Call the per-day hours endpoint at volume via "Apply to all days"; attempt it for another artist's store. | Cross-tenant writes 404. Own-store writes are bounded by the rate limiter. | Seven sequential per-day calls, not a bulk endpoint. Worth confirming it stays that way if a bulk endpoint is ever added. |
+
+### 3.4c How to run these so the results mean something
+
+Added 2026-09-21. Every rule below exists because a test in this project
+**reported a pass it had not earned**, and each one cost real time.
+
+**1. Assert identity before measuring anything.** A UI sweep once reported
+four pages clean; three of the URLs did not exist and it had measured the
+404 page. A render check is not an identity check. Before recording any
+result, assert you are on the thing you think you are.
+
+**2. Verify the effect, never the status field.** `notifications.status =
+'sent'` meant "Twilio returned 2xx". The real delivery rate was zero, for
+six weeks, while every query in the system reported success. If a test can
+ask the provider, the database or the row itself, it must — the
+application's own report of its own success is not evidence.
+
+**3. A test that cannot run must SKIP, loudly.** The same-day-notice check
+once "passed" at 23:51 against zero slots. It proved nothing and looked
+green. Two others silently never ran for weeks because they depended on the
+test day happening to contain an early-bird slot. **Create the condition you
+need rather than waiting for it** — set the cutoff, insert the exception,
+then restore.
+
+**4. Discover fixtures; never hardcode them.** A run once picked a service
+that happened to be `is_active = false` and read the correct empty result as
+a defect. Ask the database for something that satisfies your preconditions.
+
+**5. Surface the errors of your own tooling.** A SQL helper that swallowed
+stderr turned a failed INSERT into a non-existent table into a confident
+false finding. If your harness cannot see its own failures it will report
+the system's behaviour as its own bugs, and vice versa.
+
+**6. Use the engine the user uses.** Three defects that reached the launch
+artist were invisible in desktop Chrome: hour labels clipped to a single
+letter, time values cut mid-character, an iOS-only banner with an
+undersized control. Run UI security checks in **WebKit at 390px**, and set
+an iPhone user-agent where a surface renders conditionally.
+
+**7. Prove the negative as well as the positive.** A guard that refuses
+everything passes every "it refuses" test. Each of AUTH-11, FRAUD-08 and
+FRAUD-10 has an explicit *allowed* case for this reason — the boot guard
+must still boot on localhost, the refund must still go through once
+contact is confirmed, the artist in good standing must still be sold.
+
+**8. Mutation-test the guard itself.** After adding a check, break the thing
+it protects and confirm it fails. The column/scanner drift test was verified
+by adding a column to the SELECT and watching it report
+`34 columns but scanBooking scans 33 fields`. An assertion never seen to
+fail is an assumption.
+
+**9. Restore what you touched, in a `finally`.** Suites here mutate
+subscriptions, business hours and store settings. One left a
+deposit-exceeds-price row behind that was briefly mistaken for corrupt
+production data.
+
+**10. Distinguish defect, gap and decision.** "It does not do what it
+should", "no requirement covers this", and "it behaves this way on purpose,
+recorded here" call for three different responses. Filing the third as the
+first is how a plan loses its reader.
+
 ### 3.5 Pass / fail criteria
 
 A test **fails** if the expected secure behaviour is not observed, *or* if

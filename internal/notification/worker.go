@@ -403,6 +403,26 @@ func (w *Worker) markFailed(ctx context.Context, n *PendingNotification, errMsg 
 // buildMessageBody renders a message from a template name and JSON payload.
 // In Phase 1 the payload contains a "message" field with the pre-rendered text.
 // Phase 3 will add proper template rendering with variable substitution.
+//
+// # WHY THE BODY IS BIDI-STRIPPED HERE
+//
+// Every outbound message interpolates text somebody else typed - the service
+// name, the artist's name, the store name, and in some templates the
+// customer's own name - into a sentence a DIFFERENT person reads on their
+// phone. CLAUDE.md states the rule: user-supplied text rendered to another
+// person goes through internal/pkg/bidi. Open Graph tags, inbox
+// notifications and .ics fields all honour it.
+//
+// This path did not. A service named with U+202E silently reverses the rest
+// of the reminder - "your appointment is at 3pm" can be made to read as
+// something else entirely - and nothing upstream catches it, because a bidi
+// override is not markup and escaping does nothing to it. The morning
+// reminder made this worse by concatenating three such fields directly in
+// SQL.
+//
+// Stripped HERE rather than at each producer because this is the single
+// choke point every outbound message passes through. A rule applied at the
+// call sites is a rule the next template forgets.
 func buildMessageBody(templateName string, payload []byte) (string, error) {
 	if len(payload) == 0 {
 		return templateName, nil
@@ -415,7 +435,7 @@ func buildMessageBody(templateName string, payload []byte) (string, error) {
 
 	// Phase 1: payload contains a pre-rendered "message" field
 	if msg, ok := data["message"].(string); ok && msg != "" {
-		return msg, nil
+		return bidi.StripControls(msg), nil
 	}
 
 	// Fallback - use template name as message

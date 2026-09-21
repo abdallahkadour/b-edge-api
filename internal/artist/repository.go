@@ -30,12 +30,17 @@ import (
 // The alias used in the EXISTS subquery must match the alias used in whatever
 // outer query this is embedded in — both GetArtistByID and the handle/UUID
 // queries below alias artists as 'a', so this works without modification.
+// Cancelled subscriptions are HIDDEN here, matching
+// subscription.Enforce and internal/discovery. This copy was missed when
+// discovery's was corrected on 2026-09-20 and the divergence was found by
+// executing security case FRAUD-10 the next day: the artist was hidden from
+// Discover and refused bookings while this surface still served them.
 var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
 	SELECT 1 FROM subscriptions sub
 	WHERE sub.artist_id = a.id
+	AND sub.cancelled_at IS NULL
 	AND (
-		sub.cancelled_at IS NOT NULL
-		OR sub.plan_code = 'comped'
+		sub.plan_code = 'comped'
 		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
 		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
 	)

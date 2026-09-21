@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify verify-security
 
 run:
 	go run cmd/main.go
@@ -59,3 +59,9 @@ verify: verify-uc1 verify-uc2 verify-uc6
 # Subscription enforcement across all three layers (UC-6).
 verify-uc6:
 	python3 scripts/verify-uc6.py
+
+# Security plan §3.4b, executable. Needs the API and database up.
+# See project-docs/B-Edge-Test-Execution-2026-09-21.md for the last run.
+verify-security:
+	python3 scripts/security-batch1.py
+	python3 scripts/security-batch2.py

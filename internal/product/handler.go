@@ -9,6 +9,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
@@ -58,11 +59,23 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// returns ARTIST_NOT_FOUND. Two segments can't collide with /:id.
 	// This mirrors the existing /artists/salon/services convention exactly.
 	artist := app.Group("/api/v1/artists/salon", auth, artistOnly)
-	artist.Post("/products", handler.CreateProduct)
-	artist.Patch("/products/:id", handler.UpdateProduct)
+
+	// The catalogue is the salon's stock and the salon's prices, so writing
+	// it is the owner's. Confirming payment is guarded with it too, for a
+	// different reason: it asserts that money landed in the salon's OMT or
+	// Whish account, and salon_payment_methods has no artist_id - only the
+	// owner can actually see that account.
+	//
+	// Ship and deliver are deliberately left open to every member. They move
+	// no money, they are reversible, and a member who has the parcel in their
+	// hands is exactly the person who should be marking it shipped.
+	canWriteProducts := middleware.RequireSalonCapability(salonrole.ProductsWrite)
+
+	artist.Post("/products", canWriteProducts, handler.CreateProduct)
+	artist.Patch("/products/:id", canWriteProducts, handler.UpdateProduct)
 	artist.Get("/products", handler.ListMyProducts)
 	artist.Get("/orders", handler.ListSalonOrders)
-	artist.Patch("/orders/:id/confirm-payment", handler.ConfirmOrderPayment)
+	artist.Patch("/orders/:id/confirm-payment", canWriteProducts, handler.ConfirmOrderPayment)
 	artist.Patch("/orders/:id/ship", handler.ShipOrder)
 	artist.Patch("/orders/:id/deliver", handler.DeliverOrder)
 }

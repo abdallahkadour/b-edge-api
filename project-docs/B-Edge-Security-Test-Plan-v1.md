@@ -199,11 +199,20 @@ money never touches the platform.
 ### 3.2 Scope
 
 **In scope**
-- All `/api/v1/*` endpoints (92 route registrations across 14 domains).
+- All `/api/v1/*` endpoints — **142 documented operations** across 23 domains
+  as of 2026-09-21, counted from `docs/swagger.json` rather than by grepping
+  for `.Get(`, which also matches `c.Get("Authorization")` and inflates the
+  figure by about 40%. `internal/membership` is new and adds a **public,
+  unauthenticated endpoint** — see 3.4d.
 - `GET /a/:handle` (non-versioned, HTML-emitting).
+- `GET /invitations/:token` and `POST /invitations/:token/decline` — **public and
+  unauthenticated**, the second of them **mutating**. Added 2026-09-21.
 - Both PWAs as deployed static bundles.
-- Auth boundaries: artist JWT, customer OTP, admin role, review tokens.
-- Business logic: booking lifecycle, product orders, billing invoices.
+- Auth boundaries: artist JWT, customer OTP, admin role, review tokens, **the
+  salon owner/member capability boundary** (`internal/pkg/salonrole`), and
+  **the invitation token as a bearer credential**.
+- Business logic: booking lifecycle, product orders, billing invoices,
+  **salon membership and per-artist availability**.
 - The staging database.
 
 **Out of scope**
@@ -293,6 +302,62 @@ than one that records what looking already turned up.
 | **EDGE-05** | Slot-generation amplification, 90-day horizon | DoS | Medium | Request slots for all 90 offered dates across several artists concurrently; compare cost to a single-date baseline and to the old 28-day window. | No disproportionate cost; the limiter engages before the database does. | The horizon tripled on 2026-09-19. Extends EDGE-02 rather than replacing it — re-baseline before assuming the old numbers hold. |
 | **SPAM-06** | Discount code enumeration and redemption race | Abuse | High | Brute-force `discount_code` at checkout and measure whether valid and invalid codes differ in status, body or timing. Then redeem one code concurrently N times, including a `first_time_only` code. | Indistinguishable responses for valid-but-inapplicable vs nonexistent. Exactly one redemption per constraint. | `discount_redemptions` uniqueness is the guard; assert it under concurrency, not by reading the schema. |
 | **SPAM-07** | Bulk hours as a mass-mutation vector | Abuse | Low | Call the per-day hours endpoint at volume via "Apply to all days"; attempt it for another artist's store. | Cross-tenant writes 404. Own-store writes are bounded by the rate limiter. | Seven sequential per-day calls, not a bulk endpoint. Worth confirming it stays that way if a bulk endpoint is ever added. |
+
+### 3.4d Test cases added 2026-09-21 — multi-artist salons
+
+Migrations 046-048, `internal/membership`, `internal/pkg/salonrole`,
+`internal/pkg/schedule` and the per-artist rota routes together add three
+things this plan has never covered: **a new public endpoint**, **a
+token-as-credential flow**, and **an authorisation boundary between two
+people who are both legitimately signed in**.
+
+`make e2e-suite22` already proves the feature works and that a member is
+refused every owner-only write. **None of that is a security test.** It
+exercises the intended path; everything below attacks it. Where a case
+overlaps suite 22, it is noted so the two do not get confused for each other.
+
+**Two of these are written from known properties of the implementation, not
+from suspicion.** DATA-03 and AUTH-14 describe behaviour I can see in the
+code and have not yet measured the consequences of. They may turn out to be
+acceptable; they should not turn out to be surprises.
+
+---
+
+#### 1.E Salon membership and the role boundary
+
+| ID | Case | Why it matters | Expected |
+|---|---|---|---|
+| **AUTH-14** | **The access token outlives removal.** Sign in as a member, capture the access token, have the owner remove them, then keep using the captured token for the full 15 minutes. | `RemoveMember` and `TransferOwnership` call `RevokeAllForUser`, which stamps `revoked_at` on **refresh** tokens only. The access token is self-contained, still carries `salon_id` and `salon_role`, and is not checked against anything. So a removed member keeps salon reads and their own booking writes for up to `accessTokenDuration`. **Measure the real window and what it permits** — then decide whether 15 minutes is acceptable or whether removal needs a token denylist. | Undecided. Document the window, enumerate what stays reachable, and record a decision. Do not report a pass without one. |
+| **AUTH-15** | **Ownership transfer leaves two owners.** Transfer, then immediately use the former owner's captured access token against an owner-only write. | Same mechanism as AUTH-14 with higher stakes: for up to 15 minutes there can be one `salons.owner_id` and two tokens claiming `salon_role=owner`. Both can edit prices; both can invite. | Same as AUTH-14. The HLD names this as risk R2 and accepts it as the price of not querying a role per request — the test is what turns "accepted" into "measured". |
+| **AUTH-16** | **Accept someone else's invitation.** Obtain a token issued to number A, sign in as unrelated account B, POST accept. | The token IS the authorisation — nothing binds it to the invited phone number. Whoever holds the link joins the salon. | Decide deliberately. Binding acceptance to the invited contact would break the common case (invitee signs up with a different email), so this is likely by design — but it must be a decision, and the owner must be told who actually joined. |
+| **AUTH-17** | **Privilege escalation through re-invitation.** As a removed member, accept a still-live invitation to the same salon. Then: does `artists.status` come back as `active` or `pending`? | `CompleteIntoExistingSalon` refuses when an artist row already exists (`ErrAlreadyOnboarded`). A removed member's artist row survives with `salon_id = NULL`, so this path is untested. | Either a clean refusal or a clean rejoin at `pending`. Never a silent rejoin at `active`. |
+| **AUTH-18** | **`salon_id` in a forged token.** Mint a token with a valid signature but another salon's `salon_id` — or replay a token from an account that has since changed salons. | Every salon-scoped handler trusts `SalonIDFromContext` completely. | Signature verification is the whole defence; confirm it holds and that no route reads `salon_id` from a body or query parameter. |
+
+#### 1.F The invitation as a credential
+
+| ID | Case | Why it matters | Expected |
+|---|---|---|---|
+| **DATA-03** | **The raw token is stored in plaintext next to its own hash.** `salon_invitations.token_hash` stores only a SHA-256 — but `membership.QueueSalonInvitation` writes the full link, token and all, into `notifications.payload`. Query that table and you have working invitation links. | The hash design exists so a database dump yields no usable links. The notification row **defeats it completely**. The plaintext has to exist somewhere until Twilio sends it, so this is not automatically a bug — but right now nothing removes it afterwards, and every notification the platform has ever queued is still `dead`, so they accumulate forever. | Decide: redact `payload` once `status='sent'`, shorten the TTL, or accept and document. Also confirm the token never reaches a log line — check `middleware/logger.go` output for the accept and preview routes, which carry it in the **path**. |
+| **SPAM-08** | **Invitation flooding.** As an owner, issue invitations to 200 distinct numbers in a loop. | Nothing limits invitations per salon per period. Each one writes a `salon_invitations` row and queues a WhatsApp message — so once Meta verification clears, this is a free SMS cannon pointed at arbitrary numbers, sent from B-Edge's verified sender. The reputational damage lands on the platform, not the salon. | A per-salon rate limit, or a cap on live invitations. Currently expected to **FAIL**; this is the case most likely to matter the day WhatsApp starts working. |
+| **SPAM-09** | **Token brute force.** Hammer `GET /invitations/:token` with random 43-character tokens and confirm the 600-per-5-minute limiter is the only thing in the way. | The token is 32 bytes of `crypto/rand`, so guessing is not the risk — the endpoint being an unauthenticated, unthrottled lookup is. | Refused by the global limiter; no per-token lockout needed at 256 bits. Confirm the limiter actually applies to this route rather than being assumed. |
+| **FRAUD-11** | **Public decline as denial of service.** `POST /invitations/:token/decline` needs **no authentication**. Anyone who sees the link — a forwarded WhatsApp message, a shoulder-surfed screen, a shared phone — can kill the invitation. | Declining is destructive and irreversible: the invitation moves to a terminal state and the owner must notice and reissue. The token is the credential, which is defensible, but the asymmetry is not: **reading** the link is harmless, **burning** it is not, and both need only the same thing. | Decide whether decline should require the invitee to be signed in, as accept does. Recommend yes — the invitee needs an account to accept anyway, so requiring one to decline costs nothing. |
+| **FRAUD-12** | **Invitation phone-equivalence.** Invite `70555123`, then try to invite `+96170555123`, ` 70 555 123 ` and `0070555123` into the same salon. | The partial unique index on `(salon_id, phone) WHERE status='pending'` only works because the service normalises to E.164 first. Bypass normalisation and one person can hold five live invitations. Same equivalence FRAUD-09 pinned for deposit payers. | All four collapse to one number; the second attempt returns `INVITATION_EXISTS`. |
+
+#### 1.G Per-artist schedules
+
+| ID | Case | Why it matters | Expected |
+|---|---|---|---|
+| **SPAM-10** | **Write a rota for another salon's store.** As a member of salon A, `PUT /artists/me/schedule` with a `store_id` belonging to salon B. | `SetMyRota` checks `artist_stores` before writing, so this should be refused — but the check is service-layer, not a constraint, and `artist_schedules` has no salon column to contradict a bad write. | `404 STORE_NOT_FOUND`, indistinguishable from a store that does not exist. No row written — **verify by re-reading the table, not by the status code.** |
+| **SPAM-11** | **Rota as an availability oracle.** Set a rota, then have an unauthenticated client read the slots endpoint and infer the artist's personal working pattern across the 90-day horizon. | Availability is necessarily public — it is how booking works. But a 90-day sweep now discloses one identifiable person's weekly schedule and their days off, which is different from disclosing when a shop is open. | Accepted by design, recorded explicitly. Worth a line in the artist-facing terms: setting a rota publishes when you personally work. |
+| **EDGE-06** | **Rota amplification.** 90 dates × a rota and an exception per date, at concurrency, measured against the pre-rota baseline. | Step 1.5 adds **two queries per slot request**. EDGE-05 measured 1 ms per date before this; a regression here is paid by every customer on every date they look at. | Within the EDGE-05 envelope. Regression here is a performance defect, not a security one, but it is measured here because the harness already exists. |
+| **INJ-07** | **Time values through the rota writer.** `PUT /artists/me/schedule` with `start_time` of `"25:00"`, `"09:00'; DROP TABLE"`, `""`, `null`, and a 10,000-character string. | The handler casts to `::time` in SQL with a parameter, so injection should be impossible — but the service compares times as **strings** (`d.StartTime >= d.EndTime`) before the cast, and a value that sorts correctly as a string but is invalid as a time reaches Postgres. | `422` or `400` with a field error. Never a 500, and never a partially written week. |
+
+---
+
+**Not covered here, deliberately:** seat billing. `plans.seat_price` and
+`plans.included_seats` are populated and feed no arithmetic, and
+`InviteRequest.AcceptSeatCharge` is accepted and ignored. There is no
+enforcement to attack yet. These cases get written with Phase 3.
 
 ### 3.4c How to run these so the results mean something
 

@@ -32,3 +32,18 @@ full_project.txt
 # reach a git remote.
 backups/
 *.dump
+
+# Slot-generation baselines (scripts/capture-slot-baseline.py).
+#
+# ~13 MB of generated data, anchored to the date it was captured, and
+# regenerable in about 40 minutes. It is evidence for one comparison, not a
+# fixture: once the change it guards has shipped, the file is history. The
+# result of each run belongs in the plan document; the file does not belong
+# in the repository.
+project-docs/slot-baseline-*.json
+
+# Browser "save page as" output of published artifacts. The page's source of
+# truth is the markdown in project-docs/; a saved copy is a derived duplicate,
+# and committing the HTML without its (ignored) asset folder would be broken.
+project-docs/*_files/
+project-docs/Multi-Artist Salons.html

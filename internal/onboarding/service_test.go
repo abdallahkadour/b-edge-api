@@ -19,11 +19,21 @@ type mockRepo struct {
 
 	statusResult *OnboardingStatus
 	statusErr    error
+
+	joinCalled   bool
+	joinArtistID uuid.UUID
+	joinErr      error
 }
 
 func (m *mockRepo) Complete(_ context.Context, _ uuid.UUID, _ CompleteOnboardingRequest) (uuid.UUID, error) {
 	m.completeCalled = true
 	return m.completeArtistID, m.completeErr
+}
+
+func (m *mockRepo) CompleteIntoExistingSalon(_ context.Context, _, _ uuid.UUID,
+	_ ArtistProfile) (uuid.UUID, error) {
+	m.joinCalled = true
+	return m.joinArtistID, m.joinErr
 }
 
 func (m *mockRepo) GetStatus(_ context.Context, _ uuid.UUID) (*OnboardingStatus, error) {
@@ -36,8 +46,10 @@ func newTestService(repo Repository) *Service { return NewService(repo) }
 // and mutate it to isolate the one field they're testing.
 func validRequest() CompleteOnboardingRequest {
 	return CompleteOnboardingRequest{
-		Handle:             "sarah-beauty",
-		Category:           "makeup",
+		ArtistProfile: ArtistProfile{
+			Handle:   "sarah-beauty",
+			Category: "makeup",
+		},
 		SalonName:          "Sarah Beauty Studio",
 		StoreName:          "Downtown",
 		City:               "Beirut",

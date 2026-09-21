@@ -21,6 +21,19 @@ type Repository interface {
 	// ErrHandleTaken if the requested handle collides with an existing one.
 	Complete(ctx context.Context, userID uuid.UUID, req CompleteOnboardingRequest) (uuid.UUID, error)
 
+	// CompleteIntoExistingSalon creates an artist profile inside a salon
+	// that already exists, for someone accepting an invitation.
+	//
+	// Deliberately the same transaction shape as Complete, minus the three
+	// steps that belong to founding a business: no salon is created, no
+	// store, no first service. Those already exist and are the owner's.
+	//
+	// Returns ErrAlreadyOnboarded if this user already has an artist row,
+	// ErrHandleTaken on a handle collision, and ErrSalonNotFound if the
+	// salon was deleted between the invitation being sent and accepted.
+	CompleteIntoExistingSalon(ctx context.Context, userID, salonID uuid.UUID,
+		profile ArtistProfile) (uuid.UUID, error)
+
 	// GetStatus returns the artist status for a user, or ErrNotOnboarded
 	// if no artist row exists yet.
 	GetStatus(ctx context.Context, userID uuid.UUID) (*OnboardingStatus, error)
@@ -67,19 +80,9 @@ func (r *pgRepo) Complete(ctx context.Context, userID uuid.UUID, req CompleteOnb
 		return uuid.Nil, fmt.Errorf("complete onboarding: create salon: %w", err)
 	}
 
-	var artistID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO artists (user_id, salon_id, handle, bio, instagram, category, status)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-		RETURNING id`,
-		userID, salonID, req.Handle, req.Bio, req.Instagram, req.Category,
-	).Scan(&artistID)
+	artistID, err := insertArtist(ctx, tx, userID, salonID, req.ArtistProfile)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-			return uuid.Nil, ErrHandleTaken
-		}
-		return uuid.Nil, fmt.Errorf("complete onboarding: create artist: %w", err)
+		return uuid.Nil, err
 	}
 
 	var storeID uuid.UUID
@@ -121,6 +124,110 @@ func (r *pgRepo) Complete(ctx context.Context, userID uuid.UUID, req CompleteOnb
 		return uuid.Nil, fmt.Errorf("complete onboarding: commit: %w", err)
 	}
 
+	return artistID, nil
+}
+
+// insertArtist writes the artist row. Shared by both onboarding paths so
+// that founding a salon and joining one cannot drift apart on what an artist
+// actually is - status 'pending' in particular, which is what keeps admin
+// approval a gate rather than a suggestion (BR-7).
+//
+// Takes a pgx.Tx rather than the pool: both callers are mid-transaction and
+// neither may commit an artist without the rest of its setup.
+func insertArtist(ctx context.Context, tx pgx.Tx, userID, salonID uuid.UUID,
+	p ArtistProfile) (uuid.UUID, error) {
+
+	var artistID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		INSERT INTO artists (user_id, salon_id, handle, bio, instagram, category, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+		RETURNING id`,
+		userID, salonID, p.Handle, p.Bio, p.Instagram, p.Category,
+	).Scan(&artistID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return uuid.Nil, ErrHandleTaken
+		}
+		return uuid.Nil, fmt.Errorf("create artist: %w", err)
+	}
+	return artistID, nil
+}
+
+func (r *pgRepo) CompleteIntoExistingSalon(ctx context.Context, userID, salonID uuid.UUID,
+	profile ArtistProfile) (uuid.UUID, error) {
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("join salon: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// Same reasoning as Complete: inside the transaction, as defence in
+	// depth on artists_user_id_unique rather than instead of it, so a
+	// double-submit fails with a specific error instead of a raw unique
+	// violation.
+	var existing uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM artists WHERE user_id = $1`, userID).Scan(&existing)
+	if err == nil {
+		return uuid.Nil, ErrAlreadyOnboarded
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("join salon: check existing: %w", err)
+	}
+
+	// Lock the salon row for the life of the transaction. Without it, an
+	// owner deleting their salon concurrently with someone accepting an
+	// invitation to it would leave an artist pointing at nothing.
+	var exists bool
+	err = tx.QueryRow(ctx,
+		`SELECT true FROM salons WHERE id = $1 AND deleted_at IS NULL FOR SHARE`,
+		salonID,
+	).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrSalonNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("join salon: load salon: %w", err)
+	}
+
+	artistID, err := insertArtist(ctx, tx, userID, salonID, profile)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// Link the new member to every active store the salon has.
+	//
+	// Without an artist_stores row an artist is a ghost: invisible on
+	// Discover, which INNER JOINs artist_stores, and unbookable, because
+	// the funnel's store picker reads the same table. Complete() has a long
+	// comment about exactly this - onboarding's first store was once the
+	// only path that forgot it.
+	//
+	// Every active store is the right default rather than none: the owner
+	// invited this person to the salon, so being bookable at the salon's
+	// locations is what they meant. Narrowing comes later, per store, from
+	// the member's own schedule - and unlike an empty artist_stores, a
+	// narrow schedule is visible and editable in the dashboard rather than
+	// being an invisible absence.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO artist_stores (artist_id, store_id)
+		SELECT $1, s.id FROM stores s
+		 WHERE s.salon_id = $2 AND s.is_active
+		ON CONFLICT DO NOTHING`,
+		artistID, salonID,
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("join salon: link artist to stores: %w", err)
+	}
+
+	// No store and no service are created here. Both belong to the salon
+	// and both are the owner's to define - a member cannot write either
+	// (salonrole.ServicesWrite, salonrole.StoresWrite), so creating one on
+	// their behalf would hand them a row they are not allowed to edit.
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("join salon: commit: %w", err)
+	}
 	return artistID, nil
 }
 

@@ -38,6 +38,11 @@ var (
 	// "active" status so the frontend can tell "hasn't started" from
 	// "started and waiting for review" apart.
 	ErrNotOnboarded = errors.New("onboarding has not been started")
+
+	// ErrSalonNotFound is returned by CompleteIntoExistingSalon when the
+	// salon an invitation points at has been deleted between the invitation
+	// being sent and accepted.
+	ErrSalonNotFound = errors.New("that salon no longer exists")
 )
 
 // handlePattern mirrors the database CHECK constraint on artists.handle
@@ -57,12 +62,28 @@ var artistCategories = map[string]bool{
 // that exists without at least one bookable service, which is the state a
 // multi-step, separately-submitted wizard could otherwise leave behind if
 // someone abandoned it partway through.
-type CompleteOnboardingRequest struct {
-	// Profile
+// ArtistProfile is the part of onboarding that describes the PERSON rather
+// than the business: handle, bio, Instagram, category.
+//
+// It exists because there are now two ways to become an artist and only one
+// of them creates a business. Someone founding their own salon supplies this
+// plus a salon name, a store and a first service. Someone accepting an
+// invitation to an existing salon supplies only this - the salon, its stores
+// and its service menu already exist and belong to the owner.
+//
+// CompleteOnboardingRequest embeds it so the two paths cannot drift: adding a
+// profile field to one is adding it to both.
+type ArtistProfile struct {
 	Handle    string  `json:"handle"    validate:"required,min=3,max=50"`
 	Bio       *string `json:"bio"       validate:"omitempty,max=1000"`
 	Instagram *string `json:"instagram" validate:"omitempty,max=255"`
 	Category  string  `json:"category"  validate:"required"`
+}
+
+type CompleteOnboardingRequest struct {
+	// Profile. Embedded rather than repeated so the founding path and the
+	// invitation path always ask for the same person-shaped fields.
+	ArtistProfile
 
 	// Salon - the business entity. Named separately from the artist's own
 	// display name since a salon can eventually have more than one artist,

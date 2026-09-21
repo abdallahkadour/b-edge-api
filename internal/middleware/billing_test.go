@@ -11,6 +11,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -63,7 +64,7 @@ func newGuardApp(reader SubscriptionReader) *fiber.App {
 
 func tokenForRole(t *testing.T, userID uuid.UUID, role string) string {
 	t.Helper()
-	tok, err := jwt.GenerateAccessToken(userID, nil, role)
+	tok, err := jwt.GenerateAccessToken(userID, nil, role, salonrole.None)
 	require.NoError(t, err)
 	return tok
 }

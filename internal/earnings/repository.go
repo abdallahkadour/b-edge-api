@@ -66,10 +66,9 @@ func (r *pgRepo) GetPeriodSummary(ctx context.Context, artistID uuid.UUID, from,
 			COUNT(*)                          AS total_bookings,
 			COALESCE(SUM(deposit_amount), 0) AS total_deposits
 		FROM bookings
-		WHERE artist_id = $1
-		  AND status IN ('completed', 'no_show')
-		  AND start_time >= $2
-		  AND start_time < $3
+		WHERE `+ArtistScopeCond("", 1)+`
+		  AND `+EarnedCond("")+`
+		  AND `+PeriodCond("", 2, 3)+`
 	`, artistID, from, to).Scan(&totalRevenue, &totalBookings, &totalDeposits)
 	if err != nil {
 		return decimal.Zero, 0, decimal.Zero, fmt.Errorf("get period summary: %w", err)
@@ -106,10 +105,9 @@ func (r *pgRepo) GetDailyBreakdown(ctx context.Context, artistID uuid.UUID, from
 				AT TIME ZONE 'Asia/Beirut')          AS day,
 			COALESCE(SUM(final_price), 0)            AS revenue
 		FROM bookings
-		WHERE artist_id = $1
-		  AND status IN ('completed', 'no_show')
-		  AND start_time >= $2
-		  AND start_time < $3
+		WHERE `+ArtistScopeCond("", 1)+`
+		  AND `+EarnedCond("")+`
+		  AND `+PeriodCond("", 2, 3)+`
 		GROUP BY day
 		ORDER BY day ASC
 	`, artistID, from, to)
@@ -143,10 +141,9 @@ func (r *pgRepo) GetServiceBreakdown(ctx context.Context, artistID uuid.UUID, fr
 			COALESCE(SUM(b.final_price), 0) AS revenue
 		FROM bookings b
 		JOIN services s ON s.id = b.service_id
-		WHERE b.artist_id = $1
-		  AND b.status IN ('completed', 'no_show')
-		  AND b.start_time >= $2
-		  AND b.start_time < $3
+		WHERE `+ArtistScopeCond("b", 1)+`
+		  AND `+EarnedCond("b")+`
+		  AND `+PeriodCond("b", 2, 3)+`
 		GROUP BY b.service_id, s.name
 		ORDER BY revenue DESC
 	`, artistID, from, to)

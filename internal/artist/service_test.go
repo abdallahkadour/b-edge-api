@@ -29,6 +29,19 @@ func TestMain(m *testing.M) {
 // ── Mock repository ───────────────────────────────────────────────────────────
 
 type mockRepo struct {
+	// Per-artist rota (rota.go). Methods live in rota_test.go beside the
+	// tests that exercise them; the fields have to be here because Go only
+	// lets another file add methods, not fields.
+	rotaArtistID   uuid.UUID
+	rotaArtistErr  error
+	rotaLinked     bool
+	rotaLinkedErr  error
+	rotaRows       []*ArtistSchedule
+	rotaSetCalls   []SetRotaRequest
+	rotaExceptions []*ArtistScheduleException
+	rotaUpserted   []CreateScheduleExceptionRequest
+	rotaDeleted    []uuid.UUID
+
 	getArtistByIDProfile          *ArtistProfile
 	getArtistByIDErr              error
 	getArtistByUserIDProfile      *ArtistProfile

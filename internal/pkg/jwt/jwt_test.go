@@ -3,6 +3,7 @@ package jwt
 import (
 	"encoding/base64"
 	"encoding/json"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestAccessToken_RoundTripsWithEveryClaim(t *testing.T) {
 	withSecrets(t)
 	userID, salonID := uuid.New(), uuid.New()
 
-	tok, err := GenerateAccessToken(userID, &salonID, "artist")
+	tok, err := GenerateAccessToken(userID, &salonID, "artist", salonrole.Owner)
 	require.NoError(t, err)
 
 	claims, err := VerifyAccessToken(tok)
@@ -52,7 +53,7 @@ func TestAccessToken_RoundTripsWithEveryClaim(t *testing.T) {
 func TestAccessToken_NilSalonSurvivesAsNil(t *testing.T) {
 	withSecrets(t)
 
-	tok, err := GenerateAccessToken(uuid.New(), nil, "admin")
+	tok, err := GenerateAccessToken(uuid.New(), nil, "admin", salonrole.None)
 	require.NoError(t, err)
 
 	claims, err := VerifyAccessToken(tok)
@@ -77,7 +78,7 @@ func TestGenerateTokenPair_ReturnsBothAndBothVerify(t *testing.T) {
 	withSecrets(t)
 	userID, salonID := uuid.New(), uuid.New()
 
-	pair, err := GenerateTokenPair(userID, &salonID, "artist")
+	pair, err := GenerateTokenPair(userID, &salonID, "artist", salonrole.Owner)
 	require.NoError(t, err)
 	require.NotEmpty(t, pair.AccessToken)
 	require.NotEmpty(t, pair.RefreshToken)
@@ -94,9 +95,9 @@ func TestAccessToken_IsUniquePerIssue(t *testing.T) {
 	withSecrets(t)
 	userID := uuid.New()
 
-	a, err := GenerateAccessToken(userID, nil, "artist")
+	a, err := GenerateAccessToken(userID, nil, "artist", salonrole.None)
 	require.NoError(t, err)
-	b, err := GenerateAccessToken(userID, nil, "artist")
+	b, err := GenerateAccessToken(userID, nil, "artist", salonrole.None)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, a, b)
@@ -112,7 +113,7 @@ func TestTokens_AreNotInterchangeable(t *testing.T) {
 	withSecrets(t)
 	userID := uuid.New()
 
-	access, err := GenerateAccessToken(userID, nil, "artist")
+	access, err := GenerateAccessToken(userID, nil, "artist", salonrole.None)
 	require.NoError(t, err)
 	refresh, err := GenerateRefreshToken(userID)
 	require.NoError(t, err)
@@ -128,7 +129,7 @@ func TestTokens_AreNotInterchangeable(t *testing.T) {
 
 func TestVerifyAccessToken_RejectsAForeignSecret(t *testing.T) {
 	withSecrets(t)
-	tok, err := GenerateAccessToken(uuid.New(), nil, "artist")
+	tok, err := GenerateAccessToken(uuid.New(), nil, "artist", salonrole.None)
 	require.NoError(t, err)
 
 	t.Setenv("JWT_SECRET", "a-completely-different-secret-value-here")
@@ -160,7 +161,7 @@ func TestVerifyAccessToken_RejectsAlgNone(t *testing.T) {
 // Escalating the role in the payload must invalidate the signature.
 func TestVerifyAccessToken_RejectsATamperedRole(t *testing.T) {
 	withSecrets(t)
-	tok, err := GenerateAccessToken(uuid.New(), nil, "artist")
+	tok, err := GenerateAccessToken(uuid.New(), nil, "artist", salonrole.None)
 	require.NoError(t, err)
 
 	parts := strings.Split(tok, ".")
@@ -225,7 +226,7 @@ func TestVerifyRefreshToken_RejectsANonUUIDSubject(t *testing.T) {
 func TestGenerateAccessToken_RefusesWithoutASecret(t *testing.T) {
 	t.Setenv("JWT_SECRET", "")
 
-	_, err := GenerateAccessToken(uuid.New(), nil, "artist")
+	_, err := GenerateAccessToken(uuid.New(), nil, "artist", salonrole.None)
 	assert.Error(t, err)
 }
 

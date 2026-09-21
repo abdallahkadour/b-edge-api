@@ -13,6 +13,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -67,6 +68,13 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	auth := middleware.RequireAuth()
 	artistOnly := middleware.RequireRole("artist", "admin")
 
+	// Salon-scoped WRITES are the owner's. Reads below stay open to every
+	// member of the salon - a member who cannot see the service menu, the
+	// stores or the opening hours cannot work. See internal/pkg/salonrole.
+	canWriteServices := middleware.RequireSalonCapability(salonrole.ServicesWrite)
+	canWriteStores := middleware.RequireSalonCapability(salonrole.StoresWrite)
+	canWriteHours := middleware.RequireSalonCapability(salonrole.StoreHoursWrite)
+
 	const base = "/api/v1/artists"
 
 	// ── Literal paths - must precede every /:id route ────────────────────────
@@ -76,23 +84,34 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 
 	// Stores (own salon)
 	app.Get(base+"/salon/stores", auth, artistOnly, handler.GetStoresBySalon)
-	app.Post(base+"/salon/stores", auth, artistOnly, handler.CreateStore)
+	app.Post(base+"/salon/stores", auth, artistOnly, canWriteStores, handler.CreateStore)
 
 	// Services (artist dashboard - own salon)
 	app.Get(base+"/salon/services", auth, artistOnly, handler.GetServicesBySalon)
-	app.Post(base+"/salon/services", auth, artistOnly, handler.CreateService)
-	app.Patch(base+"/salon/services/:service_id", auth, artistOnly, handler.UpdateService)
-	app.Delete(base+"/salon/services/:service_id", auth, artistOnly, handler.DeleteService)
+	app.Post(base+"/salon/services", auth, artistOnly, canWriteServices, handler.CreateService)
+	app.Patch(base+"/salon/services/:service_id", auth, artistOnly, canWriteServices, handler.UpdateService)
+	app.Delete(base+"/salon/services/:service_id", auth, artistOnly, canWriteServices, handler.DeleteService)
+
+	// My own working hours. Distinct from store hours above: those say when
+	// the STORE is open and are the owner's (StoreHoursWrite); these say
+	// when this artist works inside that window and belong to whoever is
+	// working (OwnScheduleWrite, which every member holds).
+	canWriteOwnSchedule := middleware.RequireSalonCapability(salonrole.OwnScheduleWrite)
+	app.Get(base+"/me/schedule", auth, artistOnly, handler.GetMyRota)
+	app.Put(base+"/me/schedule", auth, artistOnly, canWriteOwnSchedule, handler.SetMyRota)
+	app.Get(base+"/me/schedule/exceptions", auth, artistOnly, handler.GetMyScheduleExceptions)
+	app.Post(base+"/me/schedule/exceptions", auth, artistOnly, canWriteOwnSchedule, handler.SetMyScheduleException)
+	app.Delete(base+"/me/schedule/exceptions/:id", auth, artistOnly, canWriteOwnSchedule, handler.DeleteMyScheduleException)
 
 	// Business hours
 	app.Get(base+"/stores/:store_id/hours", auth, artistOnly, handler.GetBusinessHours)
-	app.Post(base+"/stores/:store_id/hours", auth, artistOnly, handler.SetBusinessHours)
+	app.Post(base+"/stores/:store_id/hours", auth, artistOnly, canWriteHours, handler.SetBusinessHours)
 	app.Get(base+"/stores/:store_id/exceptions", auth, artistOnly, handler.GetExceptions)
-	app.Post(base+"/stores/:store_id/exceptions", auth, artistOnly, handler.CreateException)
-	app.Delete(base+"/stores/:store_id/exceptions/:date", auth, artistOnly, handler.DeleteException)
+	app.Post(base+"/stores/:store_id/exceptions", auth, artistOnly, canWriteHours, handler.CreateException)
+	app.Delete(base+"/stores/:store_id/exceptions/:date", auth, artistOnly, canWriteHours, handler.DeleteException)
 
 	// ── Public parametric - no JWT, read by the guest booking funnel ─────────
-	app.Patch(base+"/stores/:store_id", auth, artistOnly, handler.UpdateStore)
+	app.Patch(base+"/stores/:store_id", auth, artistOnly, canWriteStores, handler.UpdateStore)
 	app.Get(base+"/:id/services", handler.GetPublicServicesByArtist)
 	app.Get(base+"/:id/stores", handler.GetStoresByArtist)
 	app.Get(base+"/:id", handler.GetArtistByID)

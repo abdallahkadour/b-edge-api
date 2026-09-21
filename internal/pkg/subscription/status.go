@@ -146,21 +146,28 @@ type Enforcement struct {
 	// VisibleInDiscovery - the artist appears in Discover and is reachable
 	// by direct profile link.
 	//
-	// ⚠️ NOT WIRED, AND IT DISAGREES WITH THE SQL FOR ONE STATE.
+	// Enforced in SQL by VisibleArtistCond in this package, because
+	// discovery has to answer this for a whole result set inside one query
+	// rather than one artist at a time. The two forms are pinned together
+	// by TestVisibleArtistCond_AgreesWithEnforce; do not let them drift.
 	//
-	// Visibility is currently enforced by `subscriptionVisibleCond`, a SQL
-	// fragment duplicated in internal/discovery, internal/artist and
-	// internal/share. Nothing reads this field yet - it states the intent
-	// so the ladder is complete and reviewable in one place.
+	// ── History, because the note that used to sit here was wrong ────────
 	//
-	// Before wiring it, resolve this: that SQL lists
-	// `cancelled_at IS NOT NULL` as a VISIBLE condition, so a cancelled
-	// artist still appears on Discover today. This field says the opposite.
-	// Swapping the SQL for this function would therefore silently change
-	// behaviour for cancelled artists, which is a product decision (does
-	// leaving remove your listing immediately, or at period end?) and not
-	// a refactor. E2E-TEST-PLAN.md's billing known-gaps section has flagged
-	// this ambiguity since 2026-08-29; it is still open.
+	// This comment previously warned that the SQL listed
+	// `cancelled_at IS NOT NULL` as a VISIBLE condition and therefore
+	// disagreed with this field for cancelled artists, and that reconciling
+	// them was a product decision rather than a refactor.
+	//
+	// It was a straightforward bug, and it is fixed. The SQL now reads
+	// `cancelled_at IS NULL`, matching this field: a cancelled subscription
+	// hides the artist. Corrected in discovery on 2026-09-20 and in artist
+	// and share on 2026-09-21, after FRAUD-10 found a cancelled artist's
+	// share link still rendering a card while Discover already hid them.
+	//
+	// Left here rather than deleted because the stale version survived long
+	// enough to be load-bearing: it told the next reader that doing the
+	// right thing would be a silent behaviour change, which is a good way
+	// to keep a bug.
 	VisibleInDiscovery bool
 	// AcceptsNewBookings - customers can book NEW appointments. Existing
 	// confirmed bookings are always honoured regardless of this flag; a

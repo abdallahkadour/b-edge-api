@@ -130,26 +130,33 @@ func (r *repo) CreateUser(ctx context.Context, user *User) error {
 
 // GetUserByEmail returns the user matching the given email, excluding soft-deleted rows.
 //
-// For artist accounts, salon_id is fetched from the artists table via LEFT JOIN so
-// the caller (auth service) can embed it in the JWT access token without a second
-// database round-trip. For customers and admins, artists.salon_id will be NULL and
-// User.SalonID will be nil.
+// For artist accounts, salon_id is fetched from the artists table via LEFT JOIN,
+// and the salon's owner_id alongside it, so the caller (auth service) can embed
+// both the salon and the holder's role within it in the JWT access token without
+// a second database round-trip. For customers and admins, artists.salon_id will
+// be NULL and both User.SalonID and User.SalonOwnerID will be nil.
+//
+// owner_id is read here, rather than anywhere a request is served, because
+// salons.owner_id is an authorisation primitive: internal/pkg/salonrole owns
+// the derivation and TestNoInlineOwnerChecks enforces that this file and a
+// short allowlist are the only places that touch the column.
 //
 // Returns ErrUserNotFound if no match exists.
 func (r *repo) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	const q = `
 		SELECT u.id, u.name, u.email, u.password_hash, u.role, u.phone, u.status,
 		       u.created_at, u.updated_at, u.deleted_at,
-		       a.salon_id
+		       a.salon_id, s.owner_id
 		FROM   users u
 		LEFT   JOIN artists a ON a.user_id = u.id
+		LEFT   JOIN salons  s ON s.id = a.salon_id AND s.deleted_at IS NULL
 		WHERE  u.email = $1 AND u.deleted_at IS NULL`
 
 	u := &User{}
 	err := r.db.QueryRow(ctx, q, email).Scan(
 		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role,
 		&u.Phone, &u.Status, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
-		&u.SalonID,
+		&u.SalonID, &u.SalonOwnerID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -162,26 +169,33 @@ func (r *repo) GetUserByEmail(ctx context.Context, email string) (*User, error) 
 
 // GetUserByID returns the user with the given primary key, excluding soft-deleted rows.
 //
-// For artist accounts, salon_id is fetched from the artists table via LEFT JOIN so
-// the caller (auth service) can embed it in the JWT access token without a second
-// database round-trip. For customers and admins, artists.salon_id will be NULL and
-// User.SalonID will be nil.
+// For artist accounts, salon_id is fetched from the artists table via LEFT JOIN,
+// and the salon's owner_id alongside it, so the caller (auth service) can embed
+// both the salon and the holder's role within it in the JWT access token without
+// a second database round-trip. For customers and admins, artists.salon_id will
+// be NULL and both User.SalonID and User.SalonOwnerID will be nil.
+//
+// owner_id is read here, rather than anywhere a request is served, because
+// salons.owner_id is an authorisation primitive: internal/pkg/salonrole owns
+// the derivation and TestNoInlineOwnerChecks enforces that this file and a
+// short allowlist are the only places that touch the column.
 //
 // Returns ErrUserNotFound if not found.
 func (r *repo) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	const q = `
 		SELECT u.id, u.name, u.email, u.password_hash, u.role, u.phone, u.status,
 		       u.created_at, u.updated_at, u.deleted_at,
-		       a.salon_id
+		       a.salon_id, s.owner_id
 		FROM   users u
 		LEFT   JOIN artists a ON a.user_id = u.id
+		LEFT   JOIN salons  s ON s.id = a.salon_id AND s.deleted_at IS NULL
 		WHERE  u.id = $1 AND u.deleted_at IS NULL`
 
 	u := &User{}
 	err := r.db.QueryRow(ctx, q, id).Scan(
 		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role,
 		&u.Phone, &u.Status, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
-		&u.SalonID,
+		&u.SalonID, &u.SalonOwnerID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -9,6 +9,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -42,9 +43,16 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
 
 	g := app.Group("/api/v1/artists/salon",
 		middleware.RequireAuth(), middleware.RequireRole("artist", "admin"))
+
+	// The OMT/Whish account every customer deposit is paid into. Changing it
+	// redirects the salon's incoming money, which makes it the single most
+	// consequential write a salon member could make and the clearest case
+	// for the owner boundary.
+	canWritePaymentMethods := middleware.RequireSalonCapability(salonrole.PaymentMethodsWrite)
+
 	g.Get("/payment-methods", handler.List)
-	g.Put("/payment-methods", handler.Upsert)
-	g.Patch("/payment-methods/:id", handler.SetActive)
+	g.Put("/payment-methods", canWritePaymentMethods, handler.Upsert)
+	g.Patch("/payment-methods/:id", canWritePaymentMethods, handler.SetActive)
 }
 
 // ListPublic godoc

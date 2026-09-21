@@ -42,6 +42,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/admin"
 	"github.com/abdallahkadour/b-edge-api/internal/media"
+	"github.com/abdallahkadour/b-edge-api/internal/membership"
 	"github.com/abdallahkadour/b-edge-api/internal/onboarding"
 
 	"github.com/abdallahkadour/b-edge-api/internal/earnings"
@@ -190,6 +191,18 @@ func main() {
 	onboarding.RegisterRoutes(app, pool, logger)
 	admin.RegisterRoutes(app, pool, logger)
 	billing.RegisterRoutes(app, pool, logger)
+
+	// Invitation links point at the artist dashboard, which is where the
+	// accept flow lives. Falls back to localhost so a developer who has not
+	// set ARTIST_DASHBOARD_URL gets a link that works on their machine
+	// rather than one that silently points nowhere - the link is the only
+	// channel that functions while WhatsApp delivery is blocked on Meta
+	// verification.
+	inviteBase := os.Getenv("ARTIST_DASHBOARD_URL")
+	if inviteBase == "" {
+		inviteBase = "http://localhost:4300"
+	}
+	membership.RegisterRoutes(app, pool, logger, inviteBase)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

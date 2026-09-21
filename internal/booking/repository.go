@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
 )
 
 // exclusionViolationCode is the PostgreSQL error code for GIST exclusion violations.
@@ -44,6 +46,15 @@ const uniqueViolationCode = "23505"
 
 // Repository defines all database operations for the booking domain.
 type Repository interface {
+	// ── Per-artist working hours (artist_rota.go) ───────────────────────
+	//
+	// Both return nil when the artist has declared nothing, which is not
+	// unavailability - internal/pkg/schedule reads nil as "no personal
+	// restriction" and leaves the store's window untouched. Every artist
+	// on the platform is in that state today.
+	GetArtistRotaDay(ctx context.Context, artistID, storeID uuid.UUID, dayOfWeek int) (*schedule.DayRota, error)
+	GetArtistRotaException(ctx context.Context, artistID, storeID uuid.UUID, date time.Time) (*schedule.DayException, error)
+
 	// ── Slot algorithm queries ──────────────────────────────────────────
 
 	// GetStore fetches the store configuration needed by the slot algorithm.
@@ -200,7 +211,7 @@ type Repository interface {
 	// refund gate.
 	DepositPayerMismatch(ctx context.Context, bookingID uuid.UUID) (bool, error)
 
-// MarkRefunded transitions refund_due → refunded, recording the
+	// MarkRefunded transitions refund_due → refunded, recording the
 	// artist's assertion that they sent the money. Without it refund_due
 	// is terminal and the refund alert can never be cleared.
 	MarkRefunded(ctx context.Context, id uuid.UUID, reference *string) error

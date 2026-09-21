@@ -24,6 +24,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
 )
 
 // toDayHours adapts this domain's BusinessHours row onto the shared
@@ -188,6 +189,46 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	}
 	openTime, closeTime := window.OpenAt, window.CloseAt
 
+	// ── Step 1.5: Narrow to this artist's own working hours ───────────────
+	//
+	// The store's window says when the premises are open. It says nothing
+	// about which of the salon's artists is working, and until migration
+	// 047 there was nowhere to record that - business_hours is keyed on
+	// store_id, so two artists at one store were forced to share one
+	// schedule.
+	//
+	// THE DEFAULT IS LOAD-BEARING. An artist with no rows in
+	// artist_schedules is available for the WHOLE store window, because
+	// absence means "no personal restriction", not "never available".
+	// Every artist on the platform is in that state today, so for all of
+	// them ResolveDay returns the store window unchanged and this step is
+	// an identity operation. scripts/capture-slot-baseline.py exists to
+	// prove that: slot output captured before this change is compared byte
+	// for byte against the same output after it.
+	//
+	// An artist's rota can only ever NARROW availability. Nothing here can
+	// open a store early or keep it open late - see schedule.Intersect,
+	// where a closed store stays closed whatever an artist declares.
+	rotaDay, err := s.repo.GetArtistRotaDay(ctx, artistID, storeID, int(date.Weekday()))
+	if err != nil {
+		return nil, fmt.Errorf("get available slots: artist rota: %w", err)
+	}
+	rotaException, err := s.repo.GetArtistRotaException(ctx, artistID, storeID, date)
+	if err != nil {
+		return nil, fmt.Errorf("get available slots: artist rota exception: %w", err)
+	}
+
+	artistWindow := schedule.ResolveDay(
+		schedule.Window{Start: openTime, End: closeTime}, rotaDay, rotaException)
+	if artistWindow.IsZero() {
+		// This artist does not work this date, even though the store is
+		// open. Empty rather than an error: the store genuinely has no
+		// availability with THIS artist, which is the same answer a fully
+		// booked day gives, and the funnel already handles it.
+		return []*TimeSlot{}, nil
+	}
+	openTime, closeTime = artistWindow.Start, artistWindow.End
+
 	// ── Step 2: Same-day minimum notice ──────────────────────────────────
 
 	storeLoc := openinghours.Location(store.Timezone)
@@ -322,7 +363,22 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	// ── Step 7: Generate valid slots ──────────────────────────────────────
 
-	var slots []*TimeSlot
+	// make(), not `var slots []*TimeSlot`. A nil slice marshals to JSON
+	// null, which no Angular @for can iterate - CLAUDE.md states this as an
+	// enforced convention and this function was the exception.
+	//
+	// The bug was invisible from the outside because the two early returns
+	// above already send []*TimeSlot{}, so "store closed" answered [] while
+	// "open, but nothing left today" answered null. It only surfaced when
+	// the T2.7 slot-baseline comparison captured a same-day window before
+	// the last slot passed and re-read it afterwards, and the two runs
+	// disagreed on the shape rather than the content.
+	//
+	// customer-pwa never saw it because ApiService.getArray coalesces null
+	// to [] - which is precisely the fragility the convention warns about:
+	// correctness depending on which client helper the caller happened to
+	// pick.
+	slots := make([]*TimeSlot, 0)
 	current := earliestStart
 
 	for current.Add(serviceDuration).Before(closeTime) || current.Add(serviceDuration).Equal(closeTime) {

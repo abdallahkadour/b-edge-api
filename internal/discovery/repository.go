@@ -11,51 +11,18 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/abdallahkadour/b-edge-api/internal/billing"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
-// subscriptionVisibleCond is a SQL EXISTS clause mirroring
-// billing.DeriveStatus's Active/Grace/Trialing/Comped/Cancelled branches -
-// deliberately NOT PastDue or Suspended, which is exactly what this excludes
-// from Discover per B-Edge-Monetization-Implementation-Spec-v1.md section
-// 6.1's enforcement table. An artist with no subscriptions row at all (should
-// not happen after admin.Service.Approve creates one on approval, but this
-// stays correct even so) fails every branch below and is correctly hidden -
-// matching DeriveStatus's own CurrentPeriodEnd==nil => PastDue case.
+// subscriptionVisibleCond is THE rule, not a copy of it.
 //
-// cancelled subscriptions are HIDDEN, as of 2026-09-20.
-//
-// This condition used to treat `cancelled_at IS NOT NULL` as VISIBLE, on the
-// reasoning that the monetization spec's enforcement table named only
-// past_due and suspended and this should not invent scope. That gap has
-// since been given an explicit answer: subscription.Enforce(StatusCancelled)
-// returns VisibleInDiscovery: false - "a deliberate exit... they simply stop
-// being sold".
-//
-// So the two disagreed, and the disagreement was live. Measured: an artist
-// cancelled ten days earlier, whose period ended a hundred days earlier, was
-// still listed in Discover, while a hold against them was refused with
-// ARTIST_NOT_ACCEPTING_BOOKINGS. Visible, browsable, and unbookable.
-//
-// Enforce wins because it is the single named source of this policy. The
-// condition is expressed in SQL rather than by calling it - a per-row Go
-// call is not available to a query - so the comment is the only thing
-// keeping them aligned. If Enforce's answer for any status changes, this
-// must change with it.
-//
-// Uses billing.GraceDays (not a locally duplicated literal) so this can
-// never silently drift from the exact boundary DeriveStatus itself uses for
-// Active/Grace vs PastDue.
-var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
-	SELECT 1 FROM subscriptions sub
-	WHERE sub.artist_id = a.id
-	AND sub.cancelled_at IS NULL
-	AND (
-		sub.plan_code = 'comped'
-		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
-		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
-	)
-)`, billing.GraceDays)
+// It resolves once at package init from internal/pkg/subscription, which
+// owns both the grace window and this fragment. It used to be a
+// hand-written duplicate here; two of the three copies were still wrong a
+// day after the third was fixed, leaving a cancelled artist reachable
+// through their share link. TestNoDuplicateVisibilityRule fails the build
+// if anyone writes the SQL out again.
+var subscriptionVisibleCond = subscription.VisibleArtistCond("a")
 
 // Repository defines all database operations for the discovery domain.
 type Repository interface {

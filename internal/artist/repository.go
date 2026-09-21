@@ -13,44 +13,37 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/abdallahkadour/b-edge-api/internal/billing"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
-// subscriptionVisibleCond mirrors discovery.subscriptionVisibleCond exactly —
-// an artist is publicly reachable only when their subscription is in a visible
-// state (comped, trialing, active, or grace). past_due and suspended artists
-// are hidden from Discover AND unreachable via direct artist-domain lookups,
-// so there is no gap between search and direct-URL navigation.
+// subscriptionVisibleCond is THE rule, not a copy of it.
 //
-// Uses billing.GraceDays (not a locally duplicated literal) so this can never
-// drift from DeriveStatus's own grace/past_due boundary, for the same reason
-// discovery.subscriptionVisibleCond does the same. If either the grace window
-// or this condition changes, both usages update from one constant.
-//
-// The alias used in the EXISTS subquery must match the alias used in whatever
-// outer query this is embedded in — both GetArtistByID and the handle/UUID
-// queries below alias artists as 'a', so this works without modification.
-// Cancelled subscriptions are HIDDEN here, matching
-// subscription.Enforce and internal/discovery. This copy was missed when
-// discovery's was corrected on 2026-09-20 and the divergence was found by
-// executing security case FRAUD-10 the next day: the artist was hidden from
-// Discover and refused bookings while this surface still served them.
-var subscriptionVisibleCond = fmt.Sprintf(`EXISTS (
-	SELECT 1 FROM subscriptions sub
-	WHERE sub.artist_id = a.id
-	AND sub.cancelled_at IS NULL
-	AND (
-		sub.plan_code = 'comped'
-		OR (sub.trial_ends_at IS NOT NULL AND NOW() < sub.trial_ends_at)
-		OR (sub.current_period_end IS NOT NULL AND NOW() < sub.current_period_end + INTERVAL '%d days')
-	)
-)`, billing.GraceDays)
+// It resolves once at package init from internal/pkg/subscription, which
+// owns both the grace window and this fragment. It used to be a
+// hand-written duplicate here; two of the three copies were still wrong a
+// day after the third was fixed, leaving a cancelled artist reachable
+// through their share link. TestNoDuplicateVisibilityRule fails the build
+// if anyone writes the SQL out again.
+var subscriptionVisibleCond = subscription.VisibleArtistCond("a")
 
 // uniqueViolationCode is the PostgreSQL error code for unique constraint violations.
 const uniqueViolationCode = "23505"
 
 // Repository defines all database operations for the artist domain.
 type Repository interface {
+	// ── Per-artist working hours (rota.go) ──────────────────────────────
+	//
+	// Distinct from the business-hours methods below: those say when a
+	// STORE is open, these say when one artist works inside that window.
+	// internal/pkg/schedule intersects the two at slot generation.
+	ArtistIDForUser(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
+	ArtistWorksAtStore(ctx context.Context, artistID, storeID uuid.UUID) (bool, error)
+	GetRota(ctx context.Context, artistID uuid.UUID) ([]*ArtistSchedule, error)
+	SetRota(ctx context.Context, artistID uuid.UUID, req SetRotaRequest) error
+	GetScheduleExceptions(ctx context.Context, artistID uuid.UUID, from time.Time) ([]*ArtistScheduleException, error)
+	UpsertScheduleException(ctx context.Context, artistID uuid.UUID, req CreateScheduleExceptionRequest) error
+	DeleteScheduleException(ctx context.Context, artistID, id uuid.UUID) error
+
 	GetArtistByID(ctx context.Context, artistID uuid.UUID) (*ArtistProfile, error)
 	GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*ArtistProfile, error)
 	// GetArtistIDByHandle resolves a public handle (e.g. "rania") to the

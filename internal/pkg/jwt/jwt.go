@@ -9,6 +9,8 @@ import (
 
 	gojwt "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 )
 
 // accessTokenDuration is the lifetime of a JWT access token.
@@ -26,6 +28,28 @@ type Claims struct {
 	UserID  uuid.UUID  `json:"user_id"`
 	SalonID *uuid.UUID `json:"salon_id,omitempty"`
 	Role    string     `json:"role"`
+
+	// SalonRole is the holder's standing within SalonID - owner or member.
+	//
+	// Distinct from Role, which is the platform role (artist, admin,
+	// customer). An artist is always Role "artist"; whether they may change
+	// the salon's prices depends on SalonRole.
+	//
+	// Derived from salons.owner_id at issue time by salonrole.Resolve and
+	// never stored. Two consequences follow from embedding it rather than
+	// looking it up per request:
+	//
+	//  1. Transferring ownership must invalidate both parties' tokens, or
+	//     the former owner keeps owner capabilities until this access token
+	//     expires - at most accessTokenDuration.
+	//  2. A token issued before this field existed decodes with the zero
+	//     value, salonrole.None, which holds no capabilities. Old tokens
+	//     therefore lose salon writes rather than keeping them, which is the
+	//     safe direction: the holder re-authenticates and gets a correct
+	//     token. This is why the field is omitempty-free - an absent claim
+	//     and an explicit None must mean the same thing.
+	SalonRole salonrole.Role `json:"salon_role"`
+
 	gojwt.RegisteredClaims
 }
 
@@ -36,17 +60,26 @@ type TokenPair struct {
 }
 
 // GenerateAccessToken creates a signed JWT access token for the given user.
-// The token embeds user_id, salon_id, and role so handlers never query the DB for this.
-func GenerateAccessToken(userID uuid.UUID, salonID *uuid.UUID, role string) (string, error) {
+// The token embeds user_id, salon_id, role and salon_role so handlers never
+// query the DB for this.
+//
+// salonRole must come from salonrole.Resolve. An unrecognised value is
+// coerced to salonrole.None rather than signed as-is, so a bug upstream
+// cannot mint a token carrying a role the matrix does not know.
+func GenerateAccessToken(userID uuid.UUID, salonID *uuid.UUID, role string, salonRole salonrole.Role) (string, error) {
+	if !salonrole.Valid(salonRole) {
+		salonRole = salonrole.None
+	}
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		return "", fmt.Errorf("JWT_SECRET is not configured")
 	}
 
 	claims := Claims{
-		UserID:  userID,
-		SalonID: salonID,
-		Role:    role,
+		UserID:    userID,
+		SalonID:   salonID,
+		Role:      role,
+		SalonRole: salonRole,
 		RegisteredClaims: gojwt.RegisteredClaims{
 			ExpiresAt: gojwt.NewNumericDate(time.Now().Add(accessTokenDuration)),
 			IssuedAt:  gojwt.NewNumericDate(time.Now()),
@@ -99,8 +132,8 @@ func GenerateRefreshToken(userID uuid.UUID) (string, error) {
 }
 
 // GenerateTokenPair creates both an access token and a refresh token for a user.
-func GenerateTokenPair(userID uuid.UUID, salonID *uuid.UUID, role string) (*TokenPair, error) {
-	accessToken, err := GenerateAccessToken(userID, salonID, role)
+func GenerateTokenPair(userID uuid.UUID, salonID *uuid.UUID, role string, salonRole salonrole.Role) (*TokenPair, error) {
+	accessToken, err := GenerateAccessToken(userID, salonID, role, salonRole)
 	if err != nil {
 		return nil, err
 	}

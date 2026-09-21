@@ -12,6 +12,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -68,9 +69,17 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	m.Patch("/reorder", handler.Reorder) // must be before /:id to avoid route conflict
 	// /products/:product_id/... registered BEFORE /:id so a literal
 	// "products" path segment never gets swallowed as a media UUID.
-	m.Post("/products/:product_id/photos", handler.AddProductPhoto)
-	m.Patch("/products/:product_id/photos/reorder", handler.ReorderProductPhotos)
-	m.Delete("/product-photos/:id", handler.DeleteProductPhoto)
+	//
+	// Product photos are salon stock, so they follow the catalogue and need
+	// ProductsWrite. Everything else in this group is the artist's OWN
+	// portfolio - media rows are artist-scoped (owner_type='artist') - and
+	// stays open to every member, including SetMediaServices, which tags an
+	// artist's own photo with the services it shows.
+	canWriteProducts := middleware.RequireSalonCapability(salonrole.ProductsWrite)
+
+	m.Post("/products/:product_id/photos", canWriteProducts, handler.AddProductPhoto)
+	m.Patch("/products/:product_id/photos/reorder", canWriteProducts, handler.ReorderProductPhotos)
+	m.Delete("/product-photos/:id", canWriteProducts, handler.DeleteProductPhoto)
 	m.Delete("/:id", handler.DeletePhoto)
 	m.Patch("/:id/cover", handler.SetCover)
 	m.Put("/:id/services", handler.SetMediaServices)

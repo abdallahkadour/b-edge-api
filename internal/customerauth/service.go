@@ -17,6 +17,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -231,7 +232,7 @@ func (s *Service) issueSession(ctx context.Context, phone string) (*VerifyOTPRes
 		return nil, fmt.Errorf("verify otp: resolve customer: %w", err)
 	}
 
-	accessToken, err := internaljwt.GenerateAccessToken(customer.ID, nil, "customer")
+	accessToken, err := internaljwt.GenerateAccessToken(customer.ID, nil, "customer", salonrole.None)
 	if err != nil {
 		return nil, fmt.Errorf("verify otp: generate access token: %w", err)
 	}
@@ -287,7 +288,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*VerifyO
 		return nil, fmt.Errorf("refresh: get customer: %w", err)
 	}
 
-	accessToken, err := internaljwt.GenerateAccessToken(customer.ID, nil, "customer")
+	accessToken, err := internaljwt.GenerateAccessToken(customer.ID, nil, "customer", salonrole.None)
 	if err != nil {
 		return nil, fmt.Errorf("refresh: generate access token: %w", err)
 	}

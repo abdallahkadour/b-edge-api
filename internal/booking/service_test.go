@@ -5,6 +5,7 @@ package booking
 import (
 	"context"
 	"errors"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
 	"os"
 	"strings"
 	"testing"
@@ -45,6 +46,14 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
+	// Per-artist working hours. nil is the default and the norm: it means
+	// the artist declared no rota, so slot generation uses the store's
+	// window unchanged. Methods live in artist_rota_test.go.
+	rotaDays         map[int]*schedule.DayRota
+	rotaDayErr       error
+	rotaException    *schedule.DayException
+	rotaExceptionErr error
+
 	artistUserID          uuid.UUID
 	artistUserIDErr       error
 	rescheduleRows        int64

@@ -8,6 +8,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -42,9 +43,15 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
 	// first, so a single-segment path would be swallowed and "discounts"
 	// treated as an artist handle.
 	g := app.Group("/api/v1/artists/salon", auth, artistOnly)
+
+	// Discounts reduce what the salon charges, so they are the owner's to
+	// set. Listing stays open: a member needs to know which codes are live
+	// when a customer quotes one at them.
+	canWriteDiscounts := middleware.RequireSalonCapability(salonrole.DiscountsWrite)
+
 	g.Get("/discounts", handler.ListDiscounts)
-	g.Post("/discounts", handler.CreateDiscount)
-	g.Patch("/discounts/:id", handler.UpdateDiscount)
+	g.Post("/discounts", canWriteDiscounts, handler.CreateDiscount)
+	g.Patch("/discounts/:id", canWriteDiscounts, handler.UpdateDiscount)
 }
 
 // ListDiscounts godoc

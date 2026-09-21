@@ -19,6 +19,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/hash"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -450,6 +451,20 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
+// resolveSalonRole derives the user's standing within their salon.
+//
+// A user with no salon - a customer, an admin, or an artist part-way through
+// onboarding - gets salonrole.None, which holds no capabilities. That is also
+// what the one pre-existing artist row with a NULL salon_id resolves to, and
+// it is the correct answer for them: every salon-scoped guard refuses with the
+// existing NO_SALON error rather than with anything new.
+func resolveSalonRole(user *User) salonrole.Role {
+	if user.SalonID == nil || user.SalonOwnerID == nil {
+		return salonrole.None
+	}
+	return salonrole.Resolve(user.ID.String(), user.SalonOwnerID.String(), true)
+}
+
 // tokenPair holds a raw access token and a raw refresh token.
 type tokenPair struct {
 	AccessToken  string
@@ -457,8 +472,14 @@ type tokenPair struct {
 }
 
 // generateAndStoreTokens creates a new JWT pair and stores the refresh token hash.
+//
+// The salon role is derived here, once, at issue time. It is the only place in
+// the request path that turns salons.owner_id into a permission, and it does so
+// through salonrole.Resolve rather than by comparing IDs inline - see
+// internal/pkg/salonrole for why that distinction is enforced by a test.
 func (s *Service) generateAndStoreTokens(ctx context.Context, user *User) (*tokenPair, error) {
-	accessToken, err := internaljwt.GenerateAccessToken(user.ID, user.SalonID, user.Role)
+	accessToken, err := internaljwt.GenerateAccessToken(
+		user.ID, user.SalonID, user.Role, resolveSalonRole(user))
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}

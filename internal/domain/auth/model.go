@@ -83,6 +83,14 @@ type User struct {
 	// SalonID is fetched from artists.salon_id via LEFT JOIN.
 	// Nil for non-artists and artists without a salon.
 	SalonID *uuid.UUID `db:"salon_id"`
+
+	// SalonOwnerID is salons.owner_id for SalonID, fetched by the same
+	// LEFT JOIN chain. It exists solely so generateAndStoreTokens can call
+	// salonrole.Resolve without a second round-trip, and is never returned
+	// to a client.
+	//
+	// Nil whenever SalonID is nil.
+	SalonOwnerID *uuid.UUID `db:"salon_owner_id"`
 }
 
 // RefreshToken represents a stored hashed refresh token entry in the refresh_tokens table.

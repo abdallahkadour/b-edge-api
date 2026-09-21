@@ -108,6 +108,32 @@ func (r *pgRepo) Complete(ctx context.Context, userID uuid.UUID, req CompleteOnb
 		return uuid.Nil, fmt.Errorf("complete onboarding: link artist to store: %w", err)
 	}
 
+	// Seed the week from the store's default opening hours.
+	//
+	// Without this a brand-new artist is completely unbookable and nothing
+	// says so: openinghours.Resolve finds no business_hours row for the
+	// weekday, reports the store closed, and slot generation returns an
+	// empty list for every date forever. They appear on Discover, a
+	// customer opens the profile, and there is nothing to book. Two stores
+	// on the development database reached that state before this existed.
+	//
+	// All seven days open, from stores.default_open_time to
+	// default_close_time (09:00-18:00 by migration 049). Closing a day is
+	// one tap in the bulk hours editor; discovering that you have been
+	// silently closed all week is not. Being open on a day you do not work
+	// costs a cancellation, being closed on a day you do work costs every
+	// booking you never hear about - and the second failure is invisible,
+	// which is what makes it the worse default.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO business_hours (store_id, day_of_week, open_time, close_time, is_open)
+		SELECT $1, d, s.default_open_time, s.default_close_time, TRUE
+		  FROM stores s, generate_series(0, 6) AS d
+		 WHERE s.id = $1`,
+		storeID,
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("complete onboarding: seed business hours: %w", err)
+	}
+
 	// deposit_amount and deposit_deadline_hours are both omitted
 	// deliberately - the database defaults (0.00, 48h; migration 001)
 	// apply, so a brand-new artist isn't asked to reason about deposit

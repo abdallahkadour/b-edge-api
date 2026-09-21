@@ -52,6 +52,9 @@ type Repository interface {
 	// unavailability - internal/pkg/schedule reads nil as "no personal
 	// restriction" and leaves the store's window untouched. Every artist
 	// on the platform is in that state today.
+	// ArtistIsApproved gates the booking path on admin review - see
+	// checkArtistAcceptsNewBookings.
+	ArtistIsApproved(ctx context.Context, artistID uuid.UUID) (bool, error)
 	GetArtistRotaDay(ctx context.Context, artistID, storeID uuid.UUID, dayOfWeek int) (*schedule.DayRota, error)
 	GetArtistRotaException(ctx context.Context, artistID, storeID uuid.UUID, date time.Time) (*schedule.DayException, error)
 

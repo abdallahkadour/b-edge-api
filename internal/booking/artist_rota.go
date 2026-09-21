@@ -88,3 +88,23 @@ func (r *pgRepo) GetArtistRotaException(ctx context.Context, artistID, storeID u
 	}
 	return exc, nil
 }
+
+// ArtistIsApproved reports whether the artist has cleared admin review.
+//
+// artists.status is the platform's own gate: 'pending' until an admin looks
+// at the profile, 'rejected' if they refuse it. internal/discovery,
+// internal/artist and internal/share all filter on it. Until 2026-09-21 the
+// booking path did not, which meant a rejected artist could still have slots
+// held and deposits requested against them.
+func (r *pgRepo) ArtistIsApproved(ctx context.Context, artistID uuid.UUID) (bool, error) {
+	var ok bool
+	err := r.db.QueryRow(ctx,
+		`SELECT (status = 'active') FROM artists WHERE id = $1`, artistID).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("artist is approved: %w", err)
+	}
+	return ok, nil
+}

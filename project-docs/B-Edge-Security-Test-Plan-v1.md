@@ -354,6 +354,28 @@ acceptable; they should not turn out to be surprises.
 
 ---
 
+#### 1.H Found by execution, 2026-09-21
+
+| ID | Case | Result |
+|---|---|---|
+| **FRAUD-13** | **An artist admin review has refused can still take a deposit.** `artists.status` is filtered by `internal/discovery`, by handle lookup, by UUID lookup and by the share preview — and by **nothing on the booking path**. `checkArtistAcceptsNewBookings` read the *subscription* and not the status. Measured with a live subscription: `pending` → HELD, **`rejected` → HELD**, `active` → HELD. | **FOUND AND FIXED** 2026-09-21 by E2E suite 23 case 23.7e. The gate now sits in `checkArtistAcceptsNewBookings`, which both the slots path and the hold path already call, and returns the same `ARTIST_NOT_ACCEPTING_BOOKINGS` as the billing branch so an artist's standing with the platform is not disclosed to anyone holding their ID. Re-measured live: pending refused, rejected refused, active held. |
+
+**Why this one mattered.** Reaching an unapproved artist through the funnel
+was already impossible — every lookup filters on status. But *unreachable*
+was doing the work of *forbidden*, and an artist always knows their own ID.
+On a platform where the customer pays a deposit out of band to a number the
+artist controls, admin rejection is the only thing between a fraudulent
+artist and real money, and it was enforced where people browse rather than
+where they pay.
+
+**Twice during this investigation a coincidental zero read as a guard.** The
+first conclusion — "pending artists are refused, 0 slots offered" — came from
+a store that had no business hours. The second — "the hold is refused, 403" —
+came from a subscription my own cleanup had deleted. Neither had anything to
+do with approval status. Establishing the condition explicitly (live
+subscription, each status in turn) is what produced the real answer, and it
+was the opposite of both.
+
 **Not covered here, deliberately:** seat billing. `plans.seat_price` and
 `plans.included_seats` are populated and feed no arithmetic, and
 `InviteRequest.AcceptSeatCharge` is accepted and ignored. There is no

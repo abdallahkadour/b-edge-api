@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify verify-security
 
 run:
 	go run cmd/main.go
@@ -82,6 +82,20 @@ verify-uc7:
 ## Run it against a stack you are willing to have briefly changed.
 e2e-suite22:
 	python3 scripts/e2e-suite22.py
+
+## e2e-suite23: a salon over time, with an adversary in it
+##
+## Six people, one continuous story: three artists joining and leaving, two
+## customers booking, and an attacker going after the deposit reference -
+## which on this platform is the entire financial attack surface, because
+## money moves out of band to whatever OMT or Whish number the salon
+## publishes.
+##
+## Builds and destroys its own salon rather than borrowing the launch
+## artist's. Found the missing artists.status gate on the booking path
+## (case 23.7e).
+e2e-suite23:
+	python3 scripts/e2e-suite23.py
 
 # Security plan §3.4b, executable. Needs the API and database up.
 # See project-docs/B-Edge-Test-Execution-2026-09-21.md for the last run.

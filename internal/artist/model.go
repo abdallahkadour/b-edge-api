@@ -97,7 +97,15 @@ type Store struct {
 	EarlyBirdFee       decimal.Decimal `db:"early_bird_fee"        json:"early_bird_fee"`
 	WeekdayBufferMin   int             `db:"weekday_buffer_min"    json:"weekday_buffer_min"`
 	WeekendBufferMin   int             `db:"weekend_buffer_min"    json:"weekend_buffer_min"`
-	IsActive           bool            `db:"is_active"             json:"is_active"`
+
+	// DefaultOpenTime and DefaultCloseTime seed business_hours when the
+	// store is created and are the starting point the bulk hours editor
+	// offers. They are NOT a trading rule - slot generation reads
+	// business_hours, never these.
+	DefaultOpenTime  string `db:"default_open_time"  json:"default_open_time"`
+	DefaultCloseTime string `db:"default_close_time" json:"default_close_time"`
+
+	IsActive bool `db:"is_active"             json:"is_active"`
 	// Timezone is the store's IANA zone (e.g. "Asia/Beirut"). early_bird_cutoff
 	// and this store's business hours are wall-clock LOCAL times in this zone.
 	Timezone string `db:"timezone"   json:"timezone"`
@@ -248,6 +256,13 @@ type UpdateStoreRequest struct {
 	EarlyBirdFee       *string `json:"early_bird_fee"         validate:"omitempty"`
 	WeekdayBufferMin   *int    `json:"weekday_buffer_min"     validate:"omitempty,min=0,max=480"`
 	WeekendBufferMin   *int    `json:"weekend_buffer_min"     validate:"omitempty,min=0,max=480"`
+
+	// Changing these does NOT rewrite the week already in business_hours.
+	// They are the default a future reset or a new store starts from;
+	// silently rewriting a salon's live trading hours because someone
+	// adjusted a default would be the worst kind of surprise.
+	DefaultOpenTime  *string `json:"default_open_time"  validate:"omitempty,len=5"`
+	DefaultCloseTime *string `json:"default_close_time" validate:"omitempty,len=5"`
 	// Timezone must be a valid IANA identifier ("Asia/Beirut", "Asia/Dubai").
 	// Validated in the service layer via time.LoadLocation - a raw UTC offset
 	// like "+03:00" is rejected because offsets do not encode DST rules.

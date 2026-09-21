@@ -235,3 +235,45 @@ func TestGoldenRota_EmptyResult_IsAnEmptySliceNotNil(t *testing.T) {
 		}
 	}
 }
+
+// ── Admin approval gates the money path ───────────────────────────────────
+
+// TestGoldenRota_UnapprovedArtist_OffersNoSlots and its hold counterpart
+// pin E2E suite 23 case 23.7e.
+//
+// artists.status is filtered by discovery, by handle lookup, by UUID lookup
+// and by the share preview. It was filtered by NOTHING on the booking path,
+// so with a live subscription an artist whose status was 'pending' - or
+// 'rejected', meaning an admin had seen the profile and refused it - could
+// still have a slot held and a deposit requested against them.
+//
+// Measured before the fix: pending HELD, rejected HELD, active HELD.
+//
+// On a platform where the customer pays a deposit out of band to a number
+// the artist controls, admin rejection is the only thing standing between a
+// fraudulent artist and real money. It has to be enforced where the money
+// is, not only where the browsing is.
+func TestGoldenRota_UnapprovedArtist_OffersNoSlots(t *testing.T) {
+	repo := goldenRepo()
+	repo.artistNotApproved = true
+
+	slots, err := newTestService(repo).GetAvailableSlots(context.Background(), goldenReq())
+
+	require.Error(t, err, "an unapproved artist must be refused, not silently empty")
+	assert.Contains(t, err.Error(), "accepting new bookings")
+	assert.Empty(t, slots)
+}
+
+// The refusal must be indistinguishable from the unpaid-subscription case.
+// Telling a stranger holding an artist ID whether that artist is unapproved
+// or merely overdue discloses their standing with the platform.
+func TestGoldenRota_UnapprovedAndUnpaid_AreIndistinguishable(t *testing.T) {
+	unapproved := goldenRepo()
+	unapproved.artistNotApproved = true
+	_, errUnapproved := newTestService(unapproved).
+		GetAvailableSlots(context.Background(), goldenReq())
+
+	require.Error(t, errUnapproved)
+	assert.Contains(t, errUnapproved.Error(), "accepting new bookings",
+		"both refusals must carry the same message and code")
+}

@@ -103,12 +103,15 @@ func (r *pgRepo) CreateStore(ctx context.Context, store *Store, artistID uuid.UU
 		INSERT INTO stores (salon_id, name, name_ar, address, city, phone)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, country, same_day_notice_hours, early_bird_cutoff, early_bird_fee,
-		          weekday_buffer_min, weekend_buffer_min, timezone, latitude, longitude, is_active,
+		          weekday_buffer_min, weekend_buffer_min,
+		          to_char(default_open_time,'HH24:MI'), to_char(default_close_time,'HH24:MI'),
+		          timezone, latitude, longitude, is_active,
 		          created_at, updated_at`,
 		store.SalonID, store.Name, store.NameAr, store.Address, store.City, store.Phone,
 	).Scan(
 		&store.ID, &store.Country, &store.SameDayNoticeHours, &store.EarlyBirdCutoff, &store.EarlyBirdFee,
-		&store.WeekdayBufferMin, &store.WeekendBufferMin, &store.Timezone,
+		&store.WeekdayBufferMin, &store.WeekendBufferMin,
+		&store.DefaultOpenTime, &store.DefaultCloseTime, &store.Timezone,
 		&store.Latitude, &store.Longitude, &store.IsActive,
 		&store.CreatedAt, &store.UpdatedAt,
 	)
@@ -133,8 +136,34 @@ func (r *pgRepo) CreateStore(ctx context.Context, store *Store, artistID uuid.UU
 // early_bird_cutoff is the exception: it is nullable, and COALESCE alone
 // cannot clear a column - passing NULL preserves rather than clears. The
 // CASE branch lets an explicit empty string mean "remove the cutoff".
+// UpdateStore applies the patch. When the caller changes a default opening
+// time it ALSO rewrites every day's hours, which is why this is a
+// transaction rather than one statement.
+//
+// ── Why changing the default moves the whole week ───────────────────────
+//
+// "Default opening hours" that only apply the day the store is created is a
+// setting that does nothing, and a settings screen whose controls do nothing
+// is worse than not having them. The artist's expectation - change it to
+// 10:00 and I now open at 10:00 - is the right one, and it is the whole
+// point of the launch artist's original complaint: she should not have to go
+// day by day.
+//
+// ── The one thing it deliberately does NOT touch ────────────────────────
+//
+// is_open per day. The times change; which days the salon trades does not.
+// Opening a never-open Sunday because someone adjusted a time would make the
+// salon bookable on a day nobody is there, and the first anyone would know
+// is a customer arriving. The dashboard's "Apply to all days" control has
+// always had this property; the default now shares it.
 func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error {
-	tag, err := r.db.Exec(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update store: begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE stores SET
 			name                  = COALESCE($2, name),
 			name_ar               = COALESCE($3, name_ar),
@@ -152,6 +181,8 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 			-- not clearing, COALESCE keeps the existing pin if none is sent.
 			latitude              = CASE WHEN $13 THEN NULL ELSE COALESCE($14, latitude) END,
 			longitude             = CASE WHEN $13 THEN NULL ELSE COALESCE($15, longitude) END,
+			default_open_time     = COALESCE($16::TIME, default_open_time),
+			default_close_time    = COALESCE($17::TIME, default_close_time),
 			updated_at            = NOW()
 		WHERE id = $1`,
 		storeID,
@@ -160,6 +191,7 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 		req.WeekdayBufferMin, req.WeekendBufferMin,
 		req.Timezone, req.IsActive,
 		req.ClearLocation, req.Latitude, req.Longitude,
+		req.DefaultOpenTime, req.DefaultCloseTime,
 	)
 	if err != nil {
 		return fmt.Errorf("update store: %w", err)
@@ -167,7 +199,23 @@ func (r *pgRepo) UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateS
 	if tag.RowsAffected() == 0 {
 		return ErrStoreNotFound
 	}
-	return nil
+
+	// Propagate to the week, in the same transaction, so the store's stated
+	// default and its actual trading hours can never disagree.
+	if req.DefaultOpenTime != nil || req.DefaultCloseTime != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE business_hours bh
+			   SET open_time  = s.default_open_time,
+			       close_time = s.default_close_time
+			  FROM stores s
+			 WHERE s.id = $1 AND bh.store_id = s.id`,
+			storeID,
+		); err != nil {
+			return fmt.Errorf("update store: apply default hours to the week: %w", err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // ── Artist profile ────────────────────────────────────────────────────────────
@@ -319,6 +367,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		SELECT id, salon_id, name, name_ar, address, city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
+		       to_char(default_open_time,'HH24:MI'), to_char(default_close_time,'HH24:MI'),
 		       timezone, latitude, longitude, is_active, created_at, updated_at
 		FROM stores
 		WHERE id = $1`,
@@ -327,6 +376,7 @@ func (r *pgRepo) GetStoreByID(ctx context.Context, storeID uuid.UUID) (*Store, e
 		&s.ID, &s.SalonID, &s.Name, &s.NameAr, &s.Address, &s.City, &s.Country, &s.Phone,
 		&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 		&s.WeekdayBufferMin, &s.WeekendBufferMin,
+		&s.DefaultOpenTime, &s.DefaultCloseTime,
 		&s.Timezone, &s.Latitude, &s.Longitude, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
@@ -344,6 +394,7 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 		       s.city, s.country, s.phone,
 		       s.same_day_notice_hours, s.early_bird_cutoff, s.early_bird_fee,
 		       s.weekday_buffer_min, s.weekend_buffer_min,
+		       to_char(s.default_open_time,'HH24:MI'), to_char(s.default_close_time,'HH24:MI'),
 		       s.timezone, s.latitude, s.longitude, s.is_active, s.created_at, s.updated_at
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
@@ -373,6 +424,7 @@ func (r *pgRepo) GetStoresBySalon(ctx context.Context, salonID uuid.UUID) ([]*St
 		       city, country, phone,
 		       same_day_notice_hours, early_bird_cutoff, early_bird_fee,
 		       weekday_buffer_min, weekend_buffer_min,
+		       to_char(default_open_time,'HH24:MI'), to_char(default_close_time,'HH24:MI'),
 		       timezone, latitude, longitude, is_active, created_at, updated_at
 		FROM stores
 		WHERE salon_id = $1
@@ -638,6 +690,7 @@ func scanStores(rows pgx.Rows) ([]*Store, error) {
 			&s.City, &s.Country, &s.Phone,
 			&s.SameDayNoticeHours, &s.EarlyBirdCutoff, &s.EarlyBirdFee,
 			&s.WeekdayBufferMin, &s.WeekendBufferMin,
+			&s.DefaultOpenTime, &s.DefaultCloseTime,
 			&s.Timezone, &s.Latitude, &s.Longitude, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan store: %w", err)

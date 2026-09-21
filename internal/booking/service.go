@@ -189,6 +189,34 @@ func errBookingNotFound() error {
 }
 
 func (s *Service) checkArtistAcceptsNewBookings(ctx context.Context, artistID uuid.UUID) error {
+	// Admin review first. This check was absent until 2026-09-21, and its
+	// absence was not academic: with a live subscription, an artist whose
+	// status was 'pending' - or 'rejected', meaning an admin had looked at
+	// the profile and refused it - could still have a slot held and a
+	// deposit requested against them.
+	//
+	// Nothing else on this path covers it. internal/discovery,
+	// internal/artist's handle and UUID lookups and internal/share all
+	// filter on artists.status, so an unapproved artist is unreachable
+	// through the funnel - but "unreachable" was doing the work of
+	// "forbidden", and an artist always knows their own ID. On a platform
+	// where deposits are paid out of band to a number the artist controls,
+	// that is the whole fake-artist fraud in one missing WHERE clause.
+	//
+	// Found by E2E suite 23, case 23.7e.
+	approved, err := s.repo.ArtistIsApproved(ctx, artistID)
+	if err != nil {
+		return fmt.Errorf("check artist approval: %w", err)
+	}
+	if !approved {
+		// The same error the subscription branch returns. A customer does
+		// not need to know whether an artist is unapproved or unpaid, and
+		// distinguishing them would disclose an artist's standing with the
+		// platform to anyone holding their ID.
+		return apperror.Forbidden("ARTIST_NOT_ACCEPTING_BOOKINGS",
+			"This artist isn't accepting new bookings right now")
+	}
+
 	sub, err := s.subReader.GetSubscriptionByArtistID(ctx, artistID)
 	if err != nil && !errors.Is(err, billing.ErrSubscriptionNotFound) {
 		return fmt.Errorf("check artist subscription status: %w", err)

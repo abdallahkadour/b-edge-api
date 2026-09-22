@@ -354,6 +354,43 @@ acceptable; they should not turn out to be surprises.
 
 ---
 
+#### 1.I Section 3.4d executed — 2026-09-22
+
+`make verify-security-salon` · **8 pass, 0 fail, 3 undecided, 1 informational.**
+
+Three defects were found and fixed in the same run; one of them had been
+concealing another.
+
+| ID | Outcome |
+|---|---|
+| **DATA-03** | **FOUND, then FOUND AGAIN, then FIXED.** The first run reported PASS — and it was wrong. `salon_invitations` stores only a SHA-256, but `QueueSalonInvitation` writes the full link into `notifications.payload`, so the hash design is defeated by the row beside it. The case passed only because **no notification row was ever written**: the INSERT failed on a missing `::text` cast inside `jsonb_build_object` (Postgres 42P18), and `Invite` discarded the error with `_ =`. Queueing had therefore never once succeeded, and nothing said so. Both fixed. The token still has to be queued while the invitation is live — the message *is* the link — but it is now redacted on **all four** terminal transitions, including lazy expiry, which happens on a read and is the one most easily missed. Exposure is bounded to the invitation's own lifetime, which is the exposure the recipient's message thread already carries. |
+| **SPAM-08** | **FOUND AND FIXED.** 30 invitations to 30 distinct numbers, no limit. Now capped at 20 live and 50 per day, checked *after* the duplicate refusal so an owner re-sending to one person is never told they have hit a limit. |
+| **INJ-07** | **FOUND AND FIXED.** `25:00`, a SQL-injection string and a 5,000-character string all reached Postgres as `$n::time` and returned **500**. No injection succeeded — the table was intact and no partial week was written — but a 500 is the wrong contract twice over: the caller cannot tell a bad field from a broken server, and development mode returns a stack trace. The service compared times lexicographically, which is meaningless for anything that is not HH:MM. Format is now validated before the cast; all four values return 400 or 422. |
+
+**Three results are UNDECIDED, and must not be read as passes.** Each measured
+a real behaviour that needs a decision rather than a fix:
+
+- **FRAUD-11** — an unauthenticated caller holding a link killed the invitation
+  (204). Reading it is harmless, burning it is not, and both need only the
+  link. Accept already requires an account; decline arguably should too.
+- **AUTH-16** — an invitation addressed to one number was redeemed by an
+  unrelated account. The token *is* the credential, so this may be intended,
+  but it is a phishing primitive. The owner can at least see who joined.
+- **AUTH-14** — a removed member's access token still reads the menu, roster
+  and payment reference for up to 15 minutes. **No writes get through.**
+  `RevokeAllForUser` revokes refresh tokens only, and the access token is
+  self-contained.
+
+**DATA-03b is informational and still open:** the token travels in the URL
+**path** of `GET /invitations/:token` and `POST …/accept`, so any access log
+or reverse-proxy log captures a working credential. Check before production.
+
+**A note on method.** Two cases in this run initially reported the opposite of
+the truth, both because a zero was read as a guard: DATA-03 passed on an empty
+table, and an earlier probe read "0 slots" from a store with no opening hours.
+Establishing the condition explicitly — a live subscription, a written
+notification row — is what produced the real answers.
+
 #### 1.H Found by execution, 2026-09-21
 
 | ID | Case | Result |

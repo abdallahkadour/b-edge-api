@@ -37,6 +37,8 @@ type mockRepo struct {
 	transferredTo  *uuid.UUID
 	detachErr      error
 	transferCalled bool
+	liveCount      int
+	dayCount       int
 }
 
 func newMockRepo() *mockRepo {
@@ -88,6 +90,14 @@ func (m *mockRepo) ListInvitations(_ context.Context, _ uuid.UUID) ([]*Invitatio
 		out = append(out, i)
 	}
 	return out, nil
+}
+
+func (m *mockRepo) CountLiveInvitations(_ context.Context, _ uuid.UUID) (int, error) {
+	return m.liveCount, nil
+}
+
+func (m *mockRepo) CountInvitationsSince(_ context.Context, _ uuid.UUID, _ time.Time) (int, error) {
+	return m.dayCount, nil
 }
 
 func (m *mockRepo) SetInvitationStatus(_ context.Context, id uuid.UUID,
@@ -165,13 +175,19 @@ func (m *mockOnboarding) CompleteIntoExistingSalon(_ context.Context, _, salonID
 }
 
 type mockNotifier struct {
-	calls int
-	err   error
+	calls    int
+	err      error
+	redacted []uuid.UUID
 }
 
-func (m *mockNotifier) QueueSalonInvitation(_ context.Context, _, _, _ string) error {
+func (m *mockNotifier) QueueSalonInvitation(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	m.calls++
 	return m.err
+}
+
+func (m *mockNotifier) RedactInvitationMessage(_ context.Context, id uuid.UUID) error {
+	m.redacted = append(m.redacted, id)
+	return nil
 }
 
 type mockTokens struct{ revoked []uuid.UUID }
@@ -183,7 +199,7 @@ func (m *mockTokens) RevokeAllForUser(_ context.Context, id uuid.UUID) error {
 
 func newTestService(repo Repository, ob OnboardingPort) (*Service, *mockNotifier, *mockTokens) {
 	n, tk := &mockNotifier{}, &mockTokens{}
-	s := NewService(repo, ob, n, tk, nil, "https://app.b-edge.com")
+	s := NewService(repo, ob, n, tk, nil, "https://app.b-edge.com", nil)
 	return s, n, tk
 }
 
@@ -658,4 +674,124 @@ func TestListInvitations_AppliesLazyExpiryOnRead(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, StatusExpired, got[0].Status,
 		"the roster must never show a pending invitation that is actually dead")
+}
+
+// ── SPAM-08: invitation volume ────────────────────────────────────────────
+
+// Nothing bounded this until the security run measured 30 invitations to 30
+// distinct numbers going through. Every one queues a WhatsApp message, so
+// once delivery works an owner account is an SMS cannon firing from B-Edge's
+// verified sender.
+
+func TestInvite_TooManyLiveInvitations_Refused(t *testing.T) {
+	repo := newMockRepo()
+	repo.liveCount = MaxLiveInvitations
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "INVITATION_LIMIT", code(t, err))
+	assert.Nil(t, repo.created, "nothing may be written once the cap is reached")
+}
+
+func TestInvite_TooManyInvitationsToday_Refused(t *testing.T) {
+	repo := newMockRepo()
+	repo.dayCount = MaxInvitationsPerDay
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "INVITATION_LIMIT", code(t, err))
+}
+
+// One below each cap still works. A limit that fires early would stop a
+// salon onboarding a team, which is the feature.
+func TestInvite_JustUnderBothCaps_Succeeds(t *testing.T) {
+	repo := newMockRepo()
+	repo.liveCount = MaxLiveInvitations - 1
+	repo.dayCount = MaxInvitationsPerDay - 1
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	res, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	require.NoError(t, err)
+	assert.NotNil(t, res.Invitation)
+}
+
+// The cap is checked AFTER the duplicate refusal, so an owner re-sending to
+// one person is never told they have hit a limit.
+func TestInvite_DuplicateIsReportedBeforeTheLimit(t *testing.T) {
+	repo := newMockRepo()
+	repo.liveCount = MaxLiveInvitations
+	repo.liveContact = &Invitation{Status: StatusPending, ExpiresAt: time.Now().Add(time.Hour)}
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "INVITATION_EXISTS", code(t, err),
+		"re-sending to one person must not surface as a rate limit")
+}
+
+// ── DATA-03: the raw token must stop being recoverable ────────────────────
+
+// salon_invitations stores only a SHA-256 so a database dump yields no
+// working links. The queued WhatsApp message held the full link, token
+// included, in cleartext - defeating that design entirely. The plaintext has
+// to exist until the message is sent, so the exposure is bounded to the
+// invitation's own lifetime instead: the moment it can no longer be
+// redeemed, the payload is replaced.
+
+func TestAccept_RedactsTheQueuedToken(t *testing.T) {
+	repo := newMockRepo()
+	repo.artistErr = ErrNotFound
+	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
+	svc, notif, _ := newTestService(repo, &mockOnboarding{artistID: uuid.New()})
+
+	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+		onboarding.ArtistProfile{Handle: "a", Category: "makeup"}, "")
+
+	require.NoError(t, err)
+	assert.Len(t, notif.redacted, 1,
+		"an accepted invitation's token is spent and must not stay readable")
+}
+
+func TestDecline_RedactsTheQueuedToken(t *testing.T) {
+	repo := newMockRepo()
+	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
+	svc, notif, _ := newTestService(repo, &mockOnboarding{})
+
+	require.NoError(t, svc.Decline(context.Background(), raw))
+	assert.Len(t, notif.redacted, 1)
+}
+
+func TestRevoke_RedactsTheQueuedToken(t *testing.T) {
+	repo := newMockRepo()
+	salonID := uuid.New()
+	seedInvitation(repo, salonID, StatusPending, time.Now().Add(time.Hour))
+	var invID uuid.UUID
+	for id := range repo.byID {
+		invID = id
+	}
+	svc, notif, _ := newTestService(repo, &mockOnboarding{})
+
+	require.NoError(t, svc.Revoke(context.Background(), salonID, uuid.New(), invID, ""))
+	assert.Len(t, notif.redacted, 1)
+}
+
+// Lazy expiry is a terminal transition too, and it happens on a READ - the
+// path most likely to be forgotten.
+func TestExpiry_RedactsTheQueuedToken(t *testing.T) {
+	repo := newMockRepo()
+	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(-time.Hour))
+	svc, notif, _ := newTestService(repo, &mockOnboarding{})
+
+	_, err := svc.Preview(context.Background(), raw)
+
+	require.Error(t, err, "an expired invitation is not previewable")
+	assert.Len(t, notif.redacted, 1,
+		"expiry retires the token and must redact it too")
 }

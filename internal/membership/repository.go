@@ -26,6 +26,8 @@ type Repository interface {
 	InvitationByID(ctx context.Context, salonID, id uuid.UUID) (*Invitation, error)
 	LiveInvitationForContact(ctx context.Context, salonID uuid.UUID, phone, email *string) (*Invitation, error)
 	ListInvitations(ctx context.Context, salonID uuid.UUID) ([]*Invitation, error)
+	CountLiveInvitations(ctx context.Context, salonID uuid.UUID) (int, error)
+	CountInvitationsSince(ctx context.Context, salonID uuid.UUID, since time.Time) (int, error)
 	SetInvitationStatus(ctx context.Context, id uuid.UUID, st InvitationStatus, acceptedBy *uuid.UUID) error
 
 	ListMembers(ctx context.Context, salonID uuid.UUID, from time.Time) ([]*Member, error)
@@ -135,6 +137,30 @@ func (r *pgRepo) ListInvitations(ctx context.Context, salonID uuid.UUID) ([]*Inv
 		out = append(out, i)
 	}
 	return out, rows.Err()
+}
+
+func (r *pgRepo) CountLiveInvitations(ctx context.Context, salonID uuid.UUID) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*) FROM salon_invitations
+		 WHERE salon_id = $1 AND status = 'pending' AND expires_at > NOW()`,
+		salonID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count live invitations: %w", err)
+	}
+	return n, nil
+}
+
+func (r *pgRepo) CountInvitationsSince(ctx context.Context, salonID uuid.UUID,
+	since time.Time) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx,
+		`SELECT count(*) FROM salon_invitations WHERE salon_id = $1 AND created_at >= $2`,
+		salonID, since).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count invitations since: %w", err)
+	}
+	return n, nil
 }
 
 func (r *pgRepo) SetInvitationStatus(ctx context.Context, id uuid.UUID,

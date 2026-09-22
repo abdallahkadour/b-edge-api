@@ -34,17 +34,51 @@ func newNotifier(db *pgxpool.Pool) Notifier { return &pgNotifier{db: db} }
 // recipient_phone is set explicitly rather than resolved from a user_id,
 // because the invitee frequently has no account yet - that is the whole
 // point of an invitation.
-func (n *pgNotifier) QueueSalonInvitation(ctx context.Context, toPhone, salonName, link string) error {
+func (n *pgNotifier) QueueSalonInvitation(ctx context.Context, invitationID uuid.UUID,
+	toPhone, salonName, link string) error {
+
+	// invitation_id rides in the payload rather than in a column: it is
+	// only ever needed to find this row again for redaction, and a jsonb
+	// key costs no migration.
+	//
+	// $1::text, not $1. Postgres cannot infer a parameter's type inside
+	// jsonb_build_object and answers 42P18, "could not determine data type
+	// of parameter $1". That single missing cast meant queueing had never
+	// once succeeded - invisible because the caller discarded the error.
 	_, err := n.db.Exec(ctx, `
 		INSERT INTO notifications (template_name, channel, payload, recipient_phone)
 		VALUES ('salon_invitation', 'whatsapp',
-		        jsonb_build_object('message', $1), $2)`,
+		        jsonb_build_object('message', $1::text,
+		                           'invitation_id', $3::text), $2)`,
 		fmt.Sprintf("You have been invited to join %s on B-Edge. "+
 			"Open this link to accept: %s", salonName, link),
-		toPhone,
+		toPhone, invitationID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("queue salon invitation: %w", err)
+	}
+	return nil
+}
+
+// RedactInvitationMessage replaces the queued message once the invitation is
+// spent, so the raw token stops being recoverable from the database.
+//
+// Only touches rows that have NOT been delivered as well as those that have:
+// a sent message already sits in the recipient's WhatsApp thread, and the
+// copy here adds nothing but risk. Security case DATA-03.
+func (n *pgNotifier) RedactInvitationMessage(ctx context.Context, invitationID uuid.UUID) error {
+	_, err := n.db.Exec(ctx, `
+		UPDATE notifications
+		   SET payload = jsonb_build_object(
+		           'message', 'This invitation is no longer valid.',
+		           'invitation_id', $1::text,
+		           'redacted', true)
+		 WHERE template_name = 'salon_invitation'
+		   AND payload->>'invitation_id' = $1::text
+		   AND coalesce((payload->>'redacted')::boolean, false) = false`,
+		invitationID.String())
+	if err != nil {
+		return fmt.Errorf("redact invitation message: %w", err)
 	}
 	return nil
 }

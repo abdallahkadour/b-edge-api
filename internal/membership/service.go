@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/onboarding"
@@ -41,7 +42,13 @@ type OnboardingPort interface {
 // tested without Twilio, and so a delivery failure cannot roll back an
 // invitation - see Invite for why that ordering matters.
 type Notifier interface {
-	QueueSalonInvitation(ctx context.Context, toPhone, salonName, link string) error
+	QueueSalonInvitation(ctx context.Context, invitationID uuid.UUID,
+		toPhone, salonName, link string) error
+
+	// RedactInvitationMessage removes the raw token from a queued message
+	// once the invitation can no longer be redeemed. See
+	// redactDeliveredInvitation for why the token has to be there at all.
+	RedactInvitationMessage(ctx context.Context, invitationID uuid.UUID) error
 }
 
 // TokenInvalidator revokes refresh tokens. Ownership transfer must call it
@@ -65,20 +72,29 @@ type Service struct {
 	tokens     TokenInvalidator
 	audit      audit.Repository
 	inviteBase string
+	log        *zap.Logger
 	now        func() time.Time
 }
 
 func NewService(repo Repository, ob OnboardingPort, n Notifier, ti TokenInvalidator,
-	a audit.Repository, inviteBase string) *Service {
+	a audit.Repository, inviteBase string, log *zap.Logger) *Service {
 
 	if a == nil {
 		a = audit.NopRepository{}
 	}
 	return &Service{
-		repo: repo, onboarding: ob, notifier: n, tokens: ti, audit: a,
+		repo: repo, onboarding: ob, notifier: n, tokens: ti, audit: a, log: log,
 		validate:   validation.New(),
 		inviteBase: strings.TrimRight(inviteBase, "/"),
 		now:        time.Now,
+	}
+}
+
+// logf records a non-fatal failure. Nil-safe so tests can construct the
+// service without a logger.
+func (s *Service) logf(format string, args ...any) {
+	if s.log != nil {
+		s.log.Warn(fmt.Sprintf(format, args...))
 	}
 }
 
@@ -153,7 +169,22 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	//    InviteRequest.AcceptSeatCharge is accepted and ignored so the wire
 	//    contract does not change under the frontend when T3.5 lands.
 
-	// 5. Generate the token; store only its hash.
+	// 5. Bound the volume (SPAM-08). Checked after the duplicate and
+	//    cross-salon refusals so an owner re-sending to one person is never
+	//    told they have hit a limit.
+	if live, err := s.repo.CountLiveInvitations(ctx, salonID); err != nil {
+		return nil, err
+	} else if live >= MaxLiveInvitations {
+		return nil, errTooManyInvitations("that are still waiting")
+	}
+	if day, err := s.repo.CountInvitationsSince(ctx, salonID,
+		s.now().Add(-24*time.Hour)); err != nil {
+		return nil, err
+	} else if day >= MaxInvitationsPerDay {
+		return nil, errTooManyInvitations("today")
+	}
+
+	// 6. Generate the token; store only its hash.
 	token, hash, err := newInvitationToken()
 	if err != nil {
 		return nil, err
@@ -182,15 +213,23 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 
 	link := s.inviteLink(token)
 
-	// 6. Queue the notification OUTSIDE the transaction and ignore its
+	// 8. Queue the notification OUTSIDE the transaction and ignore its
 	//    error. Delivery is currently impossible - Meta verification is
 	//    pending and 100% of queued notifications are dead - so letting a
 	//    send failure roll back the invitation would mean no invitation
 	//    could be created at all. The link above is the working channel.
+	//    Non-fatal, but NOT silent. The first version discarded both errors
+	//    with `_ =`, and the result was that queueing had never once
+	//    succeeded and nothing said so - the security case written to check
+	//    whether the raw token leaks into notifications passed because no
+	//    notification was ever written at all. A swallowed error on a path
+	//    that cannot fail loudly is a feature that quietly does not exist.
 	if s.notifier != nil && ph != nil {
-		salonName, err := s.repo.SalonName(ctx, salonID)
-		if err == nil {
-			_ = s.notifier.QueueSalonInvitation(ctx, *ph, salonName, link)
+		if salonName, err := s.repo.SalonName(ctx, salonID); err != nil {
+			s.logf("invite %s: could not read the salon name, no message queued: %v",
+				inv.ID, err)
+		} else if err := s.notifier.QueueSalonInvitation(ctx, inv.ID, *ph, salonName, link); err != nil {
+			s.logf("invite %s: could not queue the WhatsApp message: %v", inv.ID, err)
 		}
 	}
 
@@ -274,6 +313,7 @@ func (s *Service) Accept(ctx context.Context, rawToken string, userID uuid.UUID,
 	if err := s.repo.SetInvitationStatus(ctx, inv.ID, StatusAccepted, &userID); err != nil {
 		return uuid.Nil, err
 	}
+	s.redactDeliveredInvitation(ctx, inv.ID)
 
 	_ = s.audit.Log(ctx, audit.Event{
 		SalonID: &inv.SalonID, ActorID: &userID, ActorRole: "artist",
@@ -288,7 +328,11 @@ func (s *Service) Decline(ctx context.Context, rawToken string) error {
 	if err != nil {
 		return err
 	}
-	return s.repo.SetInvitationStatus(ctx, inv.ID, StatusDeclined, nil)
+	if err := s.repo.SetInvitationStatus(ctx, inv.ID, StatusDeclined, nil); err != nil {
+		return err
+	}
+	s.redactDeliveredInvitation(ctx, inv.ID)
+	return nil
 }
 
 func (s *Service) Revoke(ctx context.Context, salonID, actorID, invID uuid.UUID, ip string) error {
@@ -305,6 +349,7 @@ func (s *Service) Revoke(ctx context.Context, salonID, actorID, invID uuid.UUID,
 	if err := s.repo.SetInvitationStatus(ctx, inv.ID, StatusRevoked, nil); err != nil {
 		return err
 	}
+	s.redactDeliveredInvitation(ctx, inv.ID)
 	_ = s.audit.Log(ctx, audit.Event{
 		SalonID: &salonID, ActorID: &actorID, ActorRole: "artist",
 		EntityType: "salon_invitation", EntityID: inv.ID, Action: "revoke",
@@ -472,6 +517,38 @@ func (s *Service) TransferOwnership(ctx context.Context, salonID, actorID uuid.U
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+// redactDeliveredInvitation removes the raw token from the queued message
+// once the invitation can no longer be used.
+//
+// ── DATA-03, and what this does and does not fix ─────────────────────────
+//
+// salon_invitations stores only a SHA-256, so a database dump yields no
+// working links. The notification row next to it held the FULL link,
+// token included, in cleartext - and defeated that design entirely. Anyone
+// who could read `notifications` had working invitations.
+//
+// The token cannot simply be left out: the outbound WhatsApp message IS the
+// link, so the plaintext has to exist until it is sent. What was
+// indefensible was that it then stayed forever, and every notification this
+// platform has ever queued is still undelivered.
+//
+// So the exposure is bounded to the invitation's own lifetime, which is the
+// same exposure the recipient's message thread already carries. Once an
+// invitation is accepted, declined, revoked or expired, the token is worth
+// nothing and the payload is replaced with a message that says so.
+//
+// Best-effort: a failure here must not fail the caller's action, but it is
+// logged rather than discarded - discarding an error on this exact path is
+// what hid the queueing bug for a day.
+func (s *Service) redactDeliveredInvitation(ctx context.Context, invID uuid.UUID) {
+	if s.notifier == nil {
+		return
+	}
+	if err := s.notifier.RedactInvitationMessage(ctx, invID); err != nil {
+		s.logf("invitation %s: could not redact the queued token: %v", invID, err)
+	}
+}
+
 // loadRedeemable resolves a raw token to a usable invitation, collapsing
 // every failure into one indistinguishable answer.
 func (s *Service) loadRedeemable(ctx context.Context, rawToken string) (*Invitation, error) {
@@ -490,6 +567,7 @@ func (s *Service) loadRedeemable(ctx context.Context, rawToken string) (*Invitat
 		// the owner can issue a fresh invitation to the same person.
 		if inv.Status == StatusPending {
 			_ = s.repo.SetInvitationStatus(ctx, inv.ID, StatusExpired, nil)
+			s.redactDeliveredInvitation(ctx, inv.ID)
 		}
 		return nil, errInvitationNotFound()
 	}

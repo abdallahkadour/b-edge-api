@@ -564,6 +564,10 @@ def main():
                 f"(SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id "
                 f" WHERE u.email LIKE '{TAG}.%')")
             sql(f"DELETE FROM salon_invitations WHERE salon_id='{salon}'")
+            # The queued WhatsApp messages too. This suite invites several
+            # times and its first version left them behind - harmless rows,
+            # but "0 residual" has to mean zero or it stops being a signal.
+            sql("DELETE FROM notifications WHERE template_name='salon_invitation'")
             sql(f"DELETE FROM artist_stores WHERE store_id IN "
                 f"(SELECT id FROM stores WHERE salon_id='{salon}')")
             sql(f"DELETE FROM subscriptions WHERE artist_id IN "

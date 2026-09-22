@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify-security-salon verify verify-security
 
 run:
 	go run cmd/main.go
@@ -96,6 +96,18 @@ e2e-suite22:
 ## (case 23.7e).
 e2e-suite23:
 	python3 scripts/e2e-suite23.py
+
+## verify-security-salon: security plan section 3.4d
+##
+## The multi-artist salon attack surface: the invitation as a bearer
+## credential, the owner/member boundary, and the per-artist rota writer.
+## Builds its own salon; restores in a finally block.
+##
+## UNDECIDED is not a pass. It means a real behaviour was measured that needs
+## a product decision, and the run exits 0 only because it is not a defect -
+## read the lines.
+verify-security-salon:
+	python3 scripts/verify-security-salon.py
 
 # Security plan §3.4b, executable. Needs the API and database up.
 # See project-docs/B-Edge-Test-Execution-2026-09-21.md for the last run.

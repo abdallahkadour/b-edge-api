@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 )
 
 // rota.go: an artist's own working hours, per store.
@@ -238,6 +241,23 @@ func (r *pgRepo) DeleteScheduleException(ctx context.Context, artistID, id uuid.
 	return nil
 }
 
+// clockTime matches a 24-hour HH:MM. Anchored, and length-bounded by the
+// pattern itself.
+var clockTime = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
+
+// validClock rejects anything that is not a real time of day.
+//
+// The string comparison below it (start < end) is lexicographic, which is
+// correct for well-formed HH:MM and meaningless for anything else: "25:00"
+// sorts after "18:00" perfectly happily, and a 5,000-character string sorts
+// somewhere too. Both then reached Postgres as $n::time and came back as a
+// 500 - security case INJ-07 measured three of them.
+//
+// A 500 is the wrong answer twice over: the caller cannot tell a bad field
+// from a broken server, and in development mode the generic handler returns
+// a stack trace. The format belongs here, before the cast.
+func validClock(v string) bool { return clockTime.MatchString(v) }
+
 // ── Service ───────────────────────────────────────────────────────────────
 
 // GetMyRota returns the caller's declared working hours across every store.
@@ -277,11 +297,17 @@ func (s *Service) SetMyRota(ctx context.Context, userID uuid.UUID, req SetRotaRe
 	seen := make(map[int]bool, len(req.Days))
 	for _, d := range req.Days {
 		if seen[d.DayOfWeek] {
-			return fmt.Errorf("day %d appears twice in one submission", d.DayOfWeek)
+			return apperror.BadRequest("INVALID_SCHEDULE",
+				fmt.Sprintf("day %d appears twice in one submission", d.DayOfWeek))
 		}
 		seen[d.DayOfWeek] = true
+		if !validClock(d.StartTime) || !validClock(d.EndTime) {
+			return apperror.BadRequest("INVALID_TIME",
+				fmt.Sprintf("day %d: times must be HH:MM between 00:00 and 23:59", d.DayOfWeek))
+		}
 		if d.StartTime >= d.EndTime {
-			return fmt.Errorf("day %d: start time must be before end time", d.DayOfWeek)
+			return apperror.BadRequest("INVALID_SCHEDULE",
+				fmt.Sprintf("day %d: start time must be before end time", d.DayOfWeek))
 		}
 	}
 	return s.repo.SetRota(ctx, artistID, req)
@@ -322,9 +348,13 @@ func (s *Service) SetMyScheduleException(ctx context.Context, userID uuid.UUID,
 	if req.IsUnavailable {
 		req.StartTime, req.EndTime = nil, nil
 	} else if req.StartTime == nil || req.EndTime == nil {
-		return errors.New("an exception that is not a day off needs a start and end time")
+		return apperror.BadRequest("INVALID_TIME",
+			"an exception that is not a day off needs a start and end time")
+	} else if !validClock(*req.StartTime) || !validClock(*req.EndTime) {
+		return apperror.BadRequest("INVALID_TIME",
+			"times must be HH:MM between 00:00 and 23:59")
 	} else if *req.StartTime >= *req.EndTime {
-		return errors.New("start time must be before end time")
+		return apperror.BadRequest("INVALID_TIME", "start time must be before end time")
 	}
 
 	return s.repo.UpsertScheduleException(ctx, artistID, req)

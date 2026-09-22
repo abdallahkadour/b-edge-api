@@ -40,6 +40,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, inviteB
 		newTokenInvalidator(pool),
 		audit.NewRepository(pool),
 		inviteBase,
+		log,
 	)
 	h := NewHandler(svc, log)
 

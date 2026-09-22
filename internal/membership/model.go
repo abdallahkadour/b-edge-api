@@ -34,6 +34,24 @@ const (
 	StatusExpired  InvitationStatus = "expired"
 )
 
+// MaxLiveInvitations and MaxInvitationsPerDay bound how many invitations one
+// salon can issue.
+//
+// Nothing bounded this until security case SPAM-08 measured it: 30
+// invitations to 30 distinct numbers went through without a limit. Every one
+// queues a WhatsApp message, so the day Meta verification clears, an owner
+// account - or anyone who takes one over - is a free SMS cannon firing from
+// B-Edge's verified sender. The reputational damage lands on the platform,
+// not the salon.
+//
+// The numbers are generous on purpose. A real salon onboarding a team might
+// invite five or six people in an afternoon and re-send a couple; twenty
+// live at once, or fifty in a day, is not a salon hiring.
+const (
+	MaxLiveInvitations   = 20
+	MaxInvitationsPerDay = 50
+)
+
 // InvitationTTL is how long an invitation link stays usable.
 //
 // Seven days rather than 24 hours: delivery is over WhatsApp to a working
@@ -202,6 +220,12 @@ func errLastMember() *apperror.AppError {
 func errTargetNotActiveMember() *apperror.AppError {
 	return apperror.Conflict("TARGET_NOT_ACTIVE_MEMBER",
 		"Ownership can only be transferred to an active member of this salon")
+}
+
+func errTooManyInvitations(what string) *apperror.AppError {
+	return apperror.TooManyRequests("INVITATION_LIMIT",
+		"This salon has issued too many invitations "+what+
+			". Revoke some, or try again tomorrow")
 }
 
 func errInvalidContact() *apperror.AppError {

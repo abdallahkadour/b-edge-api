@@ -16,7 +16,11 @@ import (
 // subscription starts on. 'starter' - the entry paid tier - matching how
 // competitor booking platforms (Fresha, Vagaro, Booksy) default a new
 // trial to their lowest paid tier rather than their top one.
-const defaultTrialPlanCode = "starter"
+// 'solo' is the entry paid tier as of migration 050. It was 'starter' ($7),
+// retired when the ladder was repriced: below roughly $45/month an invoice
+// costs more founder time to chase and confirm over OMT than it returns,
+// and there are no card rails to automate it away.
+const defaultTrialPlanCode = "solo"
 
 // defaultTrialDays is the length of a new artist's trial, starting at
 // admin approval rather than at signup - see

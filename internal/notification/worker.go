@@ -36,6 +36,12 @@ const maxAttempts = 3
 const leaseDuration = "5 minutes"
 
 // twilioAPIBase is the Twilio Messages API endpoint.
+// The two transports, as written to notifications.channel.
+const (
+	transportWhatsApp = "whatsapp"
+	transportSMS      = "sms"
+)
+
 const twilioAPIBase = "https://api.twilio.com/2010-04-01/Accounts"
 
 // PendingNotification holds the fields needed to send one notification.
@@ -231,7 +237,7 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 	// Send via Twilio WhatsApp. The SID it returns is the ONLY link between
 	// this row and the message the provider now owns - without it, "did this
 	// actually arrive?" is a question the system cannot ask. See migration 045.
-	sid, err := w.sendWhatsApp(phone, body)
+	sid, transport, err := w.sendVia(phone, body)
 	if err != nil {
 		w.log.Warn("notification worker: send failed",
 			zap.String("notification_id", n.ID),
@@ -241,7 +247,7 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 		return
 	}
 
-	w.markSent(ctx, n, sid)
+	w.markSent(ctx, n, sid, transport)
 	w.log.Info("notification worker: sent",
 		zap.String("notification_id", n.ID),
 		zap.String("template", n.TemplateName),
@@ -249,21 +255,79 @@ func (w *Worker) send(ctx context.Context, n *PendingNotification) {
 }
 
 // sendWhatsApp sends a WhatsApp message via Twilio REST API.
-func (w *Worker) sendWhatsApp(to, body string) (string, error) {
+// send delivers a message, preferring WhatsApp and falling back to SMS.
+//
+// ── Why a fallback exists at all ─────────────────────────────────────────
+//
+// TWILIO_WHATSAPP_FROM requires Meta business verification, which has been
+// pending since error 63051 and needs company registration documents. Until
+// it clears, EVERY notification this platform queues is undeliverable: 61 of
+// 61 at last count, including customer login codes, booking confirmations,
+// review requests and the morning reminders.
+//
+// That was tolerable while nobody paid. It stops being tolerable the moment
+// artists are charged: "it doesn't message my clients" becomes the reason
+// every one of them leaves, and it would be true.
+//
+// SMS is the same Twilio account and the same REST endpoint - only the From
+// number and the To prefix differ. A Lebanese long code or alphanumeric
+// sender needs no Meta involvement.
+//
+// ── Ordering, and why it is not configurable ─────────────────────────────
+//
+// WhatsApp first, always, when it is configured: it is free to the
+// recipient, it threads, and it is where this market already lives. SMS is
+// the floor, not a preference. Making the order a setting would invite
+// someone to pick the expensive one by accident.
+//
+// Returns the transport actually used alongside the provider SID, so a
+// delivered message can be reconciled against the right channel later.
+func (w *Worker) sendVia(to, body string) (sid, transport string, err error) {
 	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
-	from := os.Getenv("TWILIO_WHATSAPP_FROM")
+	waFrom := os.Getenv("TWILIO_WHATSAPP_FROM")
+	smsFrom := os.Getenv("TWILIO_SMS_FROM")
 
-	if accountSID == "" || authToken == "" || from == "" {
-		// Twilio not configured - log and skip in development
-		return "", fmt.Errorf("twilio not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM required)")
+	if accountSID == "" || authToken == "" {
+		return "", "", fmt.Errorf("twilio not configured " +
+			"(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN required)")
+	}
+	if waFrom == "" && smsFrom == "" {
+		return "", "", fmt.Errorf("no transport configured: set " +
+			"TWILIO_WHATSAPP_FROM, TWILIO_SMS_FROM, or both")
 	}
 
+	if waFrom != "" {
+		sid, err = w.deliver(accountSID, authToken, "whatsapp:"+waFrom, "whatsapp:"+to, body)
+		if err == nil {
+			return sid, transportWhatsApp, nil
+		}
+		if smsFrom == "" {
+			return "", "", err
+		}
+		// Fall through. The WhatsApp attempt is logged rather than
+		// discarded: a fallback that hides why the primary failed turns a
+		// configuration problem into a permanent silent downgrade, and
+		// nobody would notice B-Edge paying for SMS forever.
+		w.log.Warn("notification worker: whatsapp failed, falling back to SMS",
+			zap.Error(err))
+	}
+
+	sid, err = w.deliver(accountSID, authToken, smsFrom, to, body)
+	if err != nil {
+		return "", "", err
+	}
+	return sid, transportSMS, nil
+}
+
+// deliver posts one message to Twilio. The only difference between WhatsApp
+// and SMS at this layer is the "whatsapp:" prefix on both addresses.
+func (w *Worker) deliver(accountSID, authToken, from, to, body string) (string, error) {
 	endpoint := fmt.Sprintf("%s/%s/Messages.json", twilioAPIBase, accountSID)
 
 	data := url.Values{}
-	data.Set("To", "whatsapp:"+to)
-	data.Set("From", "whatsapp:"+from)
+	data.Set("To", to)
+	data.Set("From", from)
 	data.Set("Body", body)
 
 	req, err := http.NewRequest("POST", endpoint, strings.NewReader(data.Encode()))
@@ -285,9 +349,8 @@ func (w *Worker) sendWhatsApp(to, body string) (string, error) {
 		return "", fmt.Errorf("twilio returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Pull the SID out of a response the worker previously read only for its
-	// status code. A missing sid is not an error - the message WAS accepted -
-	// but it does mean this one can never be reconciled, so it is logged.
+	// A missing sid is not an error - the message WAS accepted - but it does
+	// mean this one can never be reconciled, so it is logged.
 	var parsed struct {
 		SID string `json:"sid"`
 	}
@@ -339,7 +402,13 @@ func (w *Worker) getPhoneNumber(ctx context.Context, userID string) (string, err
 // in delivery_status, via the reconciler in delivery.go.
 //
 // provider_message_id is the join key that makes that possible at all.
-func (w *Worker) markSent(ctx context.Context, n *PendingNotification, sid string) {
+// markSent records delivery, including WHICH transport carried it.
+//
+// The channel column says what was intended; this records what actually
+// happened. Without it a WhatsApp outage looks identical to normal
+// operation in the data, and nobody notices the platform quietly paying for
+// SMS for months.
+func (w *Worker) markSent(ctx context.Context, n *PendingNotification, sid, transport string) {
 	var sidArg any
 	if sid != "" {
 		sidArg = sid
@@ -350,9 +419,10 @@ func (w *Worker) markSent(ctx context.Context, n *PendingNotification, sid strin
 		    sent_at         = NOW(),
 		    attempts        = attempts + 1,
 		    last_attempted_at = NOW(),
+		    channel         = COALESCE($3, channel),
 		    provider_message_id = COALESCE($2, provider_message_id)
 		WHERE id = $1`,
-		n.ID, sidArg,
+		n.ID, sidArg, transport,
 	)
 	if err != nil {
 		w.log.Error("notification worker: mark sent failed",

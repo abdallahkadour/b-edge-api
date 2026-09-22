@@ -1,13 +1,13 @@
-api_migrations=48
-api_migration_latest=048_salon_owner_comment
+api_migrations=50
+api_migration_latest=050_price_ladder
 api_tables=35
 api_domains_total=25
 api_domains_routed=19
 api_leaf_packages=16
 api_route_registrations=158
 api_swagger_paths=128
-api_go_tests=978
-api_env_vars=24
+api_go_tests=993
+api_env_vars=25
 web_help_customer_topics=15
 web_help_customer_sections=5
 web_help_artist_topics=26

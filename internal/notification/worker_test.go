@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func TestSendWhatsApp_MissingCredentials_ReturnsErrorWithoutRequest(t *testing.T
 		rw.WriteHeader(http.StatusOK)
 	}))
 
-	_, err := w.sendWhatsApp("+96170123456", "hello")
+	_, _, err := w.sendVia("+96170123456", "hello")
 
 	require.Error(t, err)
 	assert.False(t, called, "must not attempt delivery when Twilio isn't configured")
@@ -175,7 +176,7 @@ func TestSendWhatsApp_TwilioAccepts_Succeeds(t *testing.T) {
 		rw.WriteHeader(http.StatusCreated)
 	}))
 
-	_, err := w.sendWhatsApp("+96170123456", "hello")
+	_, _, err := w.sendVia("+96170123456", "hello")
 
 	require.NoError(t, err)
 	assert.True(t, ok, "request must carry basic auth")
@@ -193,7 +194,7 @@ func TestSendWhatsApp_TwilioRejects_ReturnsErrorWithBody(t *testing.T) {
 		_, _ = rw.Write([]byte(`{"message":"invalid number"}`))
 	}))
 
-	_, err := w.sendWhatsApp("+96170123456", "hello")
+	_, _, err := w.sendVia("+96170123456", "hello")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
@@ -219,7 +220,7 @@ func TestSendWhatsApp_TransportFailure_ReturnsError(t *testing.T) {
 		},
 	}
 
-	_, err = w.sendWhatsApp("+96170123456", "hello")
+	_, _, err = w.sendVia("+96170123456", "hello")
 
 	require.Error(t, err)
 }
@@ -255,4 +256,137 @@ func TestBuildMessageBody_LeavesLegitimateTextAlone(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "موعدك اليوم الساعة 10:00 صباحاً - Rania", body)
+}
+
+// ── SMS fallback ──────────────────────────────────────────────────────────
+//
+// TWILIO_WHATSAPP_FROM needs Meta business verification, pending since error
+// 63051. Until it clears every notification this platform queues is
+// undeliverable - 61 of 61 at last count, including customer login codes.
+// That is survivable while nobody pays and indefensible the moment they do:
+// "it doesn't message my clients" would be both the reason artists leave and
+// entirely true.
+
+// The case that matters today: WhatsApp unconfigured, SMS configured. It
+// must deliver rather than fail.
+func TestSendVia_NoWhatsAppButSMSConfigured_SendsSMS(t *testing.T) {
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test")
+	t.Setenv("TWILIO_AUTH_TOKEN", "token_test")
+	t.Setenv("TWILIO_WHATSAPP_FROM", "")
+	t.Setenv("TWILIO_SMS_FROM", "+15005550006")
+
+	var to, from string
+	w := testWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		to, from = r.FormValue("To"), r.FormValue("From")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte(`{"sid":"SM_test"}`))
+	}))
+
+	sid, transport, err := w.sendVia("+96170123456", "hello")
+
+	require.NoError(t, err)
+	assert.Equal(t, "SM_test", sid)
+	assert.Equal(t, transportSMS, transport)
+	assert.Equal(t, "+96170123456", to, "an SMS address carries no whatsapp: prefix")
+	assert.Equal(t, "+15005550006", from)
+}
+
+// WhatsApp is preferred whenever it works: free to the recipient, threaded,
+// and where this market already lives. SMS is the floor, not a preference.
+func TestSendVia_WhatsAppConfigured_PrefersWhatsApp(t *testing.T) {
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test")
+	t.Setenv("TWILIO_AUTH_TOKEN", "token_test")
+	t.Setenv("TWILIO_WHATSAPP_FROM", "+15005550001")
+	t.Setenv("TWILIO_SMS_FROM", "+15005550006")
+
+	var to string
+	w := testWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		to = r.FormValue("To")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte(`{"sid":"SM_wa"}`))
+	}))
+
+	_, transport, err := w.sendVia("+96170123456", "hello")
+
+	require.NoError(t, err)
+	assert.Equal(t, transportWhatsApp, transport)
+	assert.Equal(t, "whatsapp:+96170123456", to)
+}
+
+// A WhatsApp failure must fall through rather than strand the message. This
+// is the path that runs on the day Meta verification lapses or the sender is
+// rate-limited.
+func TestSendVia_WhatsAppRejected_FallsBackToSMS(t *testing.T) {
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test")
+	t.Setenv("TWILIO_AUTH_TOKEN", "token_test")
+	t.Setenv("TWILIO_WHATSAPP_FROM", "+15005550001")
+	t.Setenv("TWILIO_SMS_FROM", "+15005550006")
+
+	var attempts []string
+	w := testWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		attempts = append(attempts, r.FormValue("To"))
+		if strings.HasPrefix(r.FormValue("To"), "whatsapp:") {
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = rw.Write([]byte(`{"code":63051,"message":"not verified"}`))
+			return
+		}
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write([]byte(`{"sid":"SM_fallback"}`))
+	}))
+
+	sid, transport, err := w.sendVia("+96170123456", "hello")
+
+	require.NoError(t, err, "a WhatsApp rejection must not strand the message")
+	assert.Equal(t, "SM_fallback", sid)
+	assert.Equal(t, transportSMS, transport)
+	assert.Equal(t, []string{"whatsapp:+96170123456", "+96170123456"}, attempts,
+		"WhatsApp must be tried first, then SMS - in that order, once each")
+}
+
+// No fallback configured: the WhatsApp error must surface as itself, not be
+// replaced by a confusing SMS error.
+func TestSendVia_WhatsAppFailsWithNoSMSConfigured_ReturnsTheRealError(t *testing.T) {
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test")
+	t.Setenv("TWILIO_AUTH_TOKEN", "token_test")
+	t.Setenv("TWILIO_WHATSAPP_FROM", "+15005550001")
+	t.Setenv("TWILIO_SMS_FROM", "")
+
+	calls := 0
+	w := testWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		calls++
+		rw.WriteHeader(http.StatusBadRequest)
+		_, _ = rw.Write([]byte(`{"code":63051}`))
+	}))
+
+	_, _, err := w.sendVia("+96170123456", "hello")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "63051", "the real reason must survive")
+	assert.Equal(t, 1, calls, "no pointless second attempt without a fallback")
+}
+
+// Neither transport configured is a configuration error, and must say so
+// rather than silently doing nothing - which is the state the platform has
+// been in.
+func TestSendVia_NoTransportConfigured_SaysSo(t *testing.T) {
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test")
+	t.Setenv("TWILIO_AUTH_TOKEN", "token_test")
+	t.Setenv("TWILIO_WHATSAPP_FROM", "")
+	t.Setenv("TWILIO_SMS_FROM", "")
+
+	called := false
+	w := testWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		called = true
+		rw.WriteHeader(http.StatusOK)
+	}))
+
+	_, _, err := w.sendVia("+96170123456", "hello")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TWILIO_SMS_FROM",
+		"the error must name the way out")
+	assert.False(t, called)
 }

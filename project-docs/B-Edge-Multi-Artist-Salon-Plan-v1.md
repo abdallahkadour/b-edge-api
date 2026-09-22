@@ -253,6 +253,28 @@ and cannot touch the salon's prices, stores, hours, discounts or billing.
 
 ---
 
+## Phase 3 — Seat billing — **MOSTLY CANCELLED 2026-09-23**
+
+> **Read `B-Edge-Pricing-Decision-v1.md` before doing anything in this phase.**
+>
+> Two independent advisory reviews rejected per-seat billing, and the price
+> ladder was repriced from $7–$80 to $45–$249 (migration 050). `seat_price`
+> is now 0 on every plan and `included_seats` is a **ceiling**, not a
+> quantity billed for.
+>
+> **T3.4 (seat arithmetic) is cancelled.** It would have implemented a charge
+> the business has decided not to make.
+>
+> **What survives:** the subscription regrain from `artist_id` to `salon_id`
+> (T3.1–T3.3, T3.6) — still wanted, because the owner should receive one
+> bill — plus a single ceiling check on the add-artist path in place of
+> T3.5's seat quote.
+>
+> The product reason for the rejection is worth carrying: salon staffing in
+> Lebanon is fluid, and charging per artist makes an owner register two of
+> six to keep the bill down. The calendar is then wrong, the product looks
+> broken, and she churns. B-Edge's entire value is a complete calendar.
+
 ## Phase 3 — Seat billing (closes G4)
 
 Gated on **T0.1**. Deferrable: a two-artist salon paying two subscriptions is wrong but not

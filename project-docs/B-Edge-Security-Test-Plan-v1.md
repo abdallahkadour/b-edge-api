@@ -354,6 +354,60 @@ acceptable; they should not turn out to be surprises.
 
 ---
 
+### 3.4e Test cases added 2026-09-23 — pricing, ceilings and delivery
+
+Migrations 049–050 and the pricing decision changed three things with a
+security or abuse surface: an artist **ceiling** replaced per-seat billing, a
+**second delivery transport** was added, and **store opening hours** became
+writable from a new field.
+
+**EXECUTED 2026-09-23 — 12 pass, 0 fail, 3 undecided, 1 informational.**
+Five of the eight are automated in `make verify-security-salon`; SPAM-12,
+SPAM-13 and FRAUD-15 remain manual.
+
+**Two defects were found and fixed in the same run:**
+
+- **FRAUD-14 — the ceiling was enforced by nothing.** `included_seats` was
+  redefined as a ceiling by migration 050 and read only by the billing CRUD
+  endpoints. A $45 Solo salon could invite an unlimited number of artists,
+  which made every tier above the entry price unsellable. Now checked on
+  **invite** rather than acceptance — telling an owner she is at her limit
+  before she sends the message is a price conversation; telling the invitee
+  after they accept is a broken promise made in the owner's name. Pending
+  invitations count toward the ceiling, or an owner at her limit queues
+  twenty and lets them all land. A salon whose plan cannot be resolved is
+  treated as **unlimited**, deliberately: an under-charged salon is a far
+  better failure than one that cannot hire.
+
+- **INJ-08 — `"25:00"` returned a 500.** `validate:"len=5"` passes any
+  five-character string straight into `$16::TIME`. This is the same defect
+  INJ-07 found in the rota writer, in a field added two days later —
+  validating length and calling it format. It mattered more here, because
+  changing a default rewrites every day in `business_hours`.
+
+**A note on what the fix did to the test suites.** Once the ceiling was
+enforced, `e2e-suite23` and this suite both began failing every membership
+case: new salons land on `solo` (ceiling 1), so each invite was correctly
+refused. Both harnesses now put their own salon on a plan with room before
+hiring, rather than disabling the check — the enforcement under test stays
+the code that runs in production.
+
+| ID | Case | Why it matters | Expected |
+|---|---|---|---|
+| **FRAUD-14** | **The plan ceiling is not enforced.** A salon on Solo ($45, `included_seats` 1) invites a second, fifth, twentieth artist. | `included_seats` was redefined as a ceiling when per-seat billing was rejected, and **nothing consults it**: it is read only by the billing CRUD endpoints. `internal/membership` never looks at it. So every tier above Solo is currently unsellable — a $45 salon has what a $249 salon has. This is not an attack, it is the price list failing open, and any owner who notices can take the whole team on the entry tier. | Refused at the ceiling with an error naming the upgrade. Verify by **re-reading `salon_invitations`**, not by the status code. `comped` (999) must never be limited. **Currently expected to FAIL.** |
+| **FRAUD-15** | **Downgrade beneath your own team.** A Studio salon with 4 artists is moved to Solo by an admin. | Enforcement must apply to *adding*, never to removing. If a downgrade retroactively locked out artists, an admin mistake would take a working salon off the air and cancel real bookings. | Existing artists keep working. Only the next invite is refused. |
+| **DATA-04** | **The retired tiers stay resolvable.** Query a subscription on `starter`, `growth`, `enterprise` or `comped`. | They were retired from the public list rather than deleted, because `subscriptions.plan_code` is a foreign key and `internal/admin` assigns a plan on approval. Deleting them dangles the key and breaks artist approval. All six live subscriptions are `comped`. | Absent from `GET /billing/plans`, still joinable. `seat_price` 0 on every row. |
+| **INJ-08** | **Hostile store default hours.** `PATCH /artists/stores/:id` with `default_open_time` of `"25:00"`, `"18:00'; DROP TABLE business_hours; --"`, `""`, and a 10,000-character string. | This field **rewrites every day in `business_hours`** when it changes — it is the highest-blast-radius string field added this month. INJ-07 found the equivalent rota writer returning 500s because times were compared lexicographically before the `::time` cast. | 400 or 422 with a field error. Never a 500, never a partially rewritten week, and `stores_default_hours_check` must still hold. |
+| **SPAM-12** | **Default hours as a write amplifier.** Repeatedly PATCH the default on a store with many `business_hours` rows, at concurrency. | One request rewrites seven rows inside a transaction. Cheap at seven; worth measuring before a salon has several stores and someone scripts it. | Within the EDGE-05 envelope. Not expected to be a problem — recorded so nobody has to guess later. |
+| **AUTH-19** | **Who may change the salon's opening hours.** A member PATCHes a store's `default_open_time`. | The default propagates to the whole week, so this is `stores:write` territory, not a personal setting. A member rewriting when the salon trades is the same class of harm as editing prices. | **403 `SALON_ROLE_FORBIDDEN`**, and the week is byte-identical afterwards. |
+| **DATA-05** | **Which transport carried a message.** Send with only SMS configured, then with both, then with WhatsApp rejecting. | `notifications.channel` now records what actually delivered, not what was intended. If it does not, a WhatsApp outage is invisible in the data and B-Edge silently pays for SMS indefinitely. | `channel` reads `sms` or `whatsapp` matching reality. A failed WhatsApp attempt is logged, never swallowed. |
+| **SPAM-13** | **SMS as a cost amplifier.** With SMS configured, drive the flows that queue messages — OTP requests, invitations, booking confirmations — and count outbound messages per unit of user action. | WhatsApp is free to the recipient; **SMS costs B-Edge money per message**. Every send path written on the assumption of free delivery becomes a bill. OTP is the sharpest: it is unauthenticated and the per-phone limiter is the only thing between a stranger and B-Edge's Twilio balance. | No path sends more than one message per user action. The OTP limiter holds under the fallback exactly as it does under WhatsApp. |
+
+**A note on FRAUD-14.** It was found by asking what enforces the ceiling
+rather than by a test failing, and the honest summary is that the pricing
+work changed the *data* and not the *behaviour*. Until it is fixed, the tier
+table is decorative and the multi-artist feature is free at every tier.
+
 #### 1.I Section 3.4d executed — 2026-09-22
 
 `make verify-security-salon` · **8 pass, 0 fail, 3 undecided, 1 informational.**

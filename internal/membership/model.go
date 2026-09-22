@@ -12,6 +12,7 @@ package membership
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -226,6 +227,12 @@ func errTooManyInvitations(what string) *apperror.AppError {
 	return apperror.TooManyRequests("INVITATION_LIMIT",
 		"This salon has issued too many invitations "+what+
 			". Revoke some, or try again tomorrow")
+}
+
+func errAtArtistCeiling(planCode string, ceiling int) *apperror.AppError {
+	return apperror.Conflict("PLAN_LIMIT_REACHED",
+		fmt.Sprintf("Your %s plan covers %s. Upgrade to add more artists",
+			planCode, plural(ceiling, "%d artist", "%d artists")))
 }
 
 func errInvalidContact() *apperror.AppError {

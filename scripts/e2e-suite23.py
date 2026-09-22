@@ -149,6 +149,21 @@ def onboard(email, salon_name, handle):
     return artist_id
 
 
+def seatPlan(salon_id, code="multi"):
+    """Puts a test salon on a plan with room.
+
+    New artists land on 'solo' (ceiling 1) since migration 050, and the
+    ceiling is enforced on invite. A suite that exercises membership needs a
+    plan that permits members - otherwise every invite is correctly refused
+    and the suite tests nothing but the ceiling.
+
+    Set explicitly rather than by disabling the check, so the enforcement
+    under test is the same code that runs in production.
+    """
+    sql(f"""UPDATE subscriptions SET plan_code='{code}'
+             WHERE artist_id IN (SELECT id FROM artists WHERE salon_id='{salon_id}')""")
+
+
 def approve(artist_id, admin_tok):
     if admin_tok:
         call("POST", f"/admin/artists/{artist_id}/approve", {}, admin_tok)
@@ -217,6 +232,10 @@ def main():
         salon = sql(f"SELECT salon_id FROM artists WHERE id='{amal}'")
         store = sql(f"SELECT id FROM stores WHERE salon_id='{salon}' LIMIT 1")
         service = sql(f"SELECT id FROM services WHERE salon_id='{salon}' LIMIT 1")
+
+        # Amal's salon needs a plan that permits a team. New artists land on
+        # 'solo' (ceiling 1) and the ceiling is enforced on invite.
+        seatPlan(salon)
 
         amal_tok = login(CAST["amal"][1])
         n = sql(f"SELECT count(*) FROM artists WHERE salon_id='{salon}'")

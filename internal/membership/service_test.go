@@ -39,6 +39,8 @@ type mockRepo struct {
 	transferCalled bool
 	liveCount      int
 	dayCount       int
+	ceiling        int
+	ceilingPlan    string
 }
 
 func newMockRepo() *mockRepo {
@@ -90,6 +92,10 @@ func (m *mockRepo) ListInvitations(_ context.Context, _ uuid.UUID) ([]*Invitatio
 		out = append(out, i)
 	}
 	return out, nil
+}
+
+func (m *mockRepo) ArtistCeiling(_ context.Context, _ uuid.UUID) (int, string, error) {
+	return m.ceiling, m.ceilingPlan, nil
 }
 
 func (m *mockRepo) CountLiveInvitations(_ context.Context, _ uuid.UUID) (int, error) {
@@ -794,4 +800,77 @@ func TestExpiry_RedactsTheQueuedToken(t *testing.T) {
 	require.Error(t, err, "an expired invitation is not previewable")
 	assert.Len(t, notif.redacted, 1,
 		"expiry retires the token and must redact it too")
+}
+
+// ── FRAUD-14: the plan's artist ceiling ───────────────────────────────────
+//
+// included_seats stopped being "seats you pay for" and became a ceiling when
+// per-seat billing was rejected (migration 050). It was then enforced by
+// nothing, which made every tier above the $45 entry unsellable - a Solo
+// salon had exactly what a $249 Multi salon had.
+
+func TestInvite_AtThePlanCeiling_Refused(t *testing.T) {
+	repo := newMockRepo()
+	repo.ceiling, repo.ceilingPlan, repo.activeCount = 1, "solo", 1
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "PLAN_LIMIT_REACHED", code(t, err))
+	assert.Nil(t, repo.created, "no invitation may be written at the ceiling")
+}
+
+// Pending invitations count toward the ceiling, or an owner at her limit
+// queues twenty and lets them all land.
+func TestInvite_PendingInvitationsCountTowardTheCeiling(t *testing.T) {
+	repo := newMockRepo()
+	repo.ceiling, repo.ceilingPlan = 4, "studio"
+	repo.activeCount, repo.liveCount = 2, 2
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "PLAN_LIMIT_REACHED", code(t, err),
+		"2 active + 2 pending fills a ceiling of 4")
+}
+
+func TestInvite_BelowTheCeiling_Succeeds(t *testing.T) {
+	repo := newMockRepo()
+	repo.ceiling, repo.ceilingPlan = 4, "studio"
+	repo.activeCount, repo.liveCount = 2, 1
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	res, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	require.NoError(t, err)
+	assert.NotNil(t, res.Invitation)
+}
+
+// A billing lookup that finds nothing must not silently stop a salon
+// hiring. An under-charged salon is a far better failure than a blocked one.
+func TestInvite_NoPlanFound_TreatedAsUnlimited(t *testing.T) {
+	repo := newMockRepo()
+	repo.ceiling, repo.activeCount = 0, 50 // ceiling 0 == "no plan resolved"
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	require.NoError(t, err, "a missing plan must not block hiring")
+}
+
+// comped is 999 and must never be a limit: the launch artist and the whole
+// internal roster run on it.
+func TestInvite_CompedCeiling_NeverBinds(t *testing.T) {
+	repo := newMockRepo()
+	repo.ceiling, repo.ceilingPlan, repo.activeCount = 999, "comped", 40
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	require.NoError(t, err)
 }

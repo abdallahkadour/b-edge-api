@@ -542,6 +542,24 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 		return nil, mapValidationError(err)
 	}
 
+	// Default opening hours are cast to ::time in SQL, so a five-character
+	// string that is not a time reaches Postgres and comes back a 500.
+	// `validate:"len=5"` passes "25:00" happily. This is the same defect
+	// INJ-07 found in the rota writer, in a field added two days later -
+	// validating length and calling it format.
+	//
+	// It matters more here: changing a default rewrites EVERY day in
+	// business_hours, so this string has the widest blast radius of anything
+	// added this month.
+	if req.DefaultOpenTime != nil && !validClock(*req.DefaultOpenTime) {
+		return nil, apperror.BadRequest("INVALID_TIME",
+			"default_open_time must be HH:MM between 00:00 and 23:59")
+	}
+	if req.DefaultCloseTime != nil && !validClock(*req.DefaultCloseTime) {
+		return nil, apperror.BadRequest("INVALID_TIME",
+			"default_close_time must be HH:MM between 00:00 and 23:59")
+	}
+
 	// A pin is a pair. One coordinate without the other is not a location,
 	// and storing half of one would put a store on the equator or the prime
 	// meridian rather than where it actually is.

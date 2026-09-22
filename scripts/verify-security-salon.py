@@ -90,6 +90,21 @@ def onboard(email, salon, handle):
     return (r.get("data") or {}).get("artist_id")
 
 
+def seatPlan(salon_id, code="multi"):
+    """Puts a test salon on a plan with room.
+
+    New artists land on 'solo' (ceiling 1) since migration 050, and the
+    ceiling is enforced on invite. A suite that exercises membership needs a
+    plan that permits members - otherwise every invite is correctly refused
+    and the suite tests nothing but the ceiling.
+
+    Set explicitly rather than by disabling the check, so the enforcement
+    under test is the same code that runs in production.
+    """
+    sql(f"""UPDATE subscriptions SET plan_code='{code}'
+             WHERE artist_id IN (SELECT id FROM artists WHERE salon_id='{salon_id}')""")
+
+
 def approve(aid, admin_tok):
     call("POST", f"/admin/artists/{aid}/approve", {}, admin_tok)
     if sql(f"SELECT status FROM artists WHERE id='{aid}'") != "active":
@@ -121,6 +136,25 @@ def main():
         owner_tok = login(f"{TAG}.owner@test.bedge.com")
         call("PUT", "/artists/salon/payment-methods",
              {"method": "omt", "account_name": "Owner", "account_ref": "70345678"}, owner_tok)
+
+        # A real member, so the owner/member cases below have someone to test
+        # with. Without this AUTH-19 skips and reports nothing.
+        seatPlan(salon)   # room to hire; FRAUD-14 below drops back to 'solo'
+
+        member_a = None
+        st, r, mtok, minv = invite(owner_tok, "+96176340002")
+        if st == 201:
+            jt = login(f"{TAG}.member@test.bedge.com")
+            st2, r2 = call("POST", f"/invitations/{mtok}/accept",
+                           {"handle": f"{TAG}-member", "category": "makeup"}, jt)
+            if st2 == 201:
+                member_a = sql(f"""SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id
+                                    WHERE u.email='{TAG}.member@test.bedge.com'""")
+                approve(member_a, admin_tok)
+            else:
+                print(f"  could not seat a member: accept {st2} {err(r2)}")
+        else:
+            print(f"  could not seat a member: invite {st} {err(r)}")
 
         # ── FRAUD-12 phone equivalence ─────────────────────────────────────
         st1, r1, tok1, inv1 = invite(owner_tok, "76340099")
@@ -325,6 +359,121 @@ def main():
             f"25 random tokens -> {sorted(set(codes))}; rate limiter engaged={limited}. "
             f"The token is 32 bytes of crypto/rand, so guessing is not the risk; the "
             f"endpoint being unauthenticated is.")
+
+        # ══ 3.4e — pricing, ceilings and delivery ══════════════════════════
+
+        # ── FRAUD-14 the plan ceiling ──────────────────────────────────────
+        #
+        # included_seats was redefined as a CEILING when per-seat billing was
+        # rejected (migration 050). If nothing consults it, every tier above
+        # Solo is unsellable: a $45 salon has what a $249 salon has.
+        sql(f"""UPDATE subscriptions SET plan_code='solo'
+                 WHERE artist_id='{owner_a}'""")
+        ceiling = int(sql("SELECT included_seats FROM plans WHERE code='solo'"))
+        members = int(sql(f"SELECT count(*) FROM artists WHERE salon_id='{salon}'"))
+        before_inv = sql(f"SELECT count(*) FROM salon_invitations WHERE salon_id='{salon}'")
+        st, r, _, iid = invite(owner_tok, "+96176340111")
+        after_inv = sql(f"SELECT count(*) FROM salon_invitations WHERE salon_id='{salon}'")
+
+        if members >= ceiling and st == 201:
+            rec("FRAUD-14", "FAIL",
+                f"a salon on 'solo' (ceiling {ceiling}) already has {members} artist(s) "
+                f"and was allowed to invite another. Nothing consults "
+                f"plans.included_seats - the tier table is decorative and the "
+                f"multi-artist feature is free at every price point")
+        elif st >= 400 and before_inv == after_inv:
+            rec("FRAUD-14", "PASS",
+                f"refused at the ceiling ({st} {err(r)}) and no invitation row written")
+        else:
+            rec("FRAUD-14", "INFO",
+                f"salon has {members} of {ceiling} - below the ceiling, so this run "
+                f"could not test enforcement")
+        if iid:
+            call("DELETE", f"/artists/salon/invitations/{iid}", None, owner_tok)
+        sql(f"""UPDATE subscriptions SET plan_code='comped' WHERE artist_id='{owner_a}'""")
+
+        # ── AUTH-19 who may move the salon's opening hours ─────────────────
+        #
+        # default_open_time rewrites EVERY day in business_hours when it
+        # changes, so it is stores:write territory, not a personal setting.
+        member_tok = login(f"{TAG}.member@test.bedge.com")
+        m_role = claim(member_tok, "salon_role") if member_tok else None
+        if m_role != "member":
+            rec("AUTH-19", "SKIP",
+                f"no member account in this salon to test with (role={m_role})")
+        else:
+            week_before = sql(f"""SELECT md5(string_agg(day_of_week||open_time::text,
+                                                        '' ORDER BY day_of_week))
+                                    FROM business_hours WHERE store_id='{store}'""")
+            st, r = call("PATCH", f"/artists/stores/{store}",
+                         {"default_open_time": "11:00"}, member_tok)
+            week_after = sql(f"""SELECT md5(string_agg(day_of_week||open_time::text,
+                                                       '' ORDER BY day_of_week))
+                                   FROM business_hours WHERE store_id='{store}'""")
+            if st == 403 and err(r) == "SALON_ROLE_FORBIDDEN" and week_before == week_after:
+                rec("AUTH-19", "PASS",
+                    "a member cannot move the salon's opening hours, and the week "
+                    "is byte-identical afterwards")
+            else:
+                rec("AUTH-19", "FAIL",
+                    f"{st} {err(r)}; week changed={week_before != week_after}")
+
+        # ── INJ-08 hostile store default hours ─────────────────────────────
+        #
+        # The highest-blast-radius string field added this month: one write
+        # rewrites seven business_hours rows.
+        hostile = {"25:00": None,
+                   "18:00'; DROP TABLE business_hours; --": None,
+                   "": None,
+                   "x" * 10000: None}
+        for v in list(hostile):
+            st, _ = call("PATCH", f"/artists/stores/{store}",
+                         {"default_open_time": v}, owner_tok)
+            hostile[v] = st
+        alive = sql("SELECT to_regclass('public.business_hours') IS NOT NULL")
+        rows = sql(f"SELECT count(*) FROM business_hours WHERE store_id='{store}'")
+        fives = [v for v, st in hostile.items() if st >= 500]
+        if alive == "t" and not fives and rows == "7":
+            rec("INJ-08", "PASS",
+                f"all 4 hostile defaults rejected without a 500, table intact, "
+                f"week still {rows} days: {sorted(set(hostile.values()))}")
+        else:
+            rec("INJ-08", "FAIL",
+                f"alive={alive} 500s={len(fives)} rows={rows} "
+                f"{ {k[:30]: v for k, v in hostile.items()} }")
+
+        # ── DATA-04 retired tiers stay resolvable ──────────────────────────
+        st, r = call("GET", "/billing/plans")
+        public = {p["code"] for p in (r.get("data") or [])}
+        joinable = sql("""SELECT count(*) FROM subscriptions s
+                           JOIN plans p ON p.code = s.plan_code""")
+        total_subs = sql("SELECT count(*) FROM subscriptions")
+        nonzero_seat = sql("SELECT count(*) FROM plans WHERE seat_price <> 0")
+        retired_hidden = not ({"starter", "growth", "enterprise", "comped"} & public)
+        if public == {"solo", "studio", "salon", "multi"} and retired_hidden \
+                and joinable == total_subs and nonzero_seat == "0":
+            rec("DATA-04", "PASS",
+                f"public list is exactly {sorted(public)}; retired tiers hidden but "
+                f"all {joinable} subscriptions still resolve; seat_price 0 everywhere")
+        else:
+            rec("DATA-04", "FAIL",
+                f"public={sorted(public)} joinable={joinable}/{total_subs} "
+                f"plans_with_seat_price={nonzero_seat}")
+
+        # ── DATA-05 which transport carried a message ──────────────────────
+        import os as _os
+        if not _os.getenv("TWILIO_SMS_FROM"):
+            rec("DATA-05", "SKIP",
+                "TWILIO_SMS_FROM is unprovisioned, so no delivery path can be "
+                "exercised end to end. This is procurement, not code - the fallback "
+                "itself is covered by 5 unit tests in internal/notification. "
+                "A silent pass here would report a delivery path that has never "
+                "sent anything.")
+        else:
+            rec("DATA-05", "INFO",
+                "TWILIO_SMS_FROM is set - run the worker against a real queued "
+                "notification and confirm notifications.channel records the "
+                "transport that actually delivered")
 
         # ── AUTH-18 salon_id from a request body is inert ──────────────────
         other_salon = sql(f"SELECT salon_id FROM stores WHERE id='{other_store}'")

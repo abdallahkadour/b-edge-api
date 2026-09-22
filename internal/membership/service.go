@@ -169,7 +169,40 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	//    InviteRequest.AcceptSeatCharge is accepted and ignored so the wire
 	//    contract does not change under the frontend when T3.5 lands.
 
-	// 5. Bound the volume (SPAM-08). Checked after the duplicate and
+	// 5. The plan's artist ceiling.
+	//
+	//    included_seats stopped being "seats you pay for" and became a
+	//    ceiling when per-seat billing was rejected (migration 050). It was
+	//    then enforced by nothing - security case FRAUD-14 found a $45 Solo
+	//    salon inviting freely, which made every tier above it unsellable.
+	//
+	//    Counts ACTIVE artists only. Someone mid-approval should not consume
+	//    a place that an admin might never grant, and a pending artist takes
+	//    no bookings.
+	//
+	//    Checked on the INVITE rather than on acceptance: telling an owner
+	//    she is at her limit before she sends the message is a price
+	//    conversation, telling the invitee after they accept is a broken
+	//    promise made in the owner's name.
+	if ceiling, planCode, err := s.repo.ArtistCeiling(ctx, salonID); err != nil {
+		return nil, err
+	} else if ceiling > 0 {
+		active, err := s.repo.ActiveMemberCount(ctx, salonID)
+		if err != nil {
+			return nil, err
+		}
+		// Pending invitations count. Otherwise an owner at the ceiling can
+		// queue twenty and let them all land.
+		pending, err := s.repo.CountLiveInvitations(ctx, salonID)
+		if err != nil {
+			return nil, err
+		}
+		if active+pending >= ceiling {
+			return nil, errAtArtistCeiling(planCode, ceiling)
+		}
+	}
+
+	// 6. Bound the volume (SPAM-08). Checked after the duplicate and
 	//    cross-salon refusals so an owner re-sending to one person is never
 	//    told they have hit a limit.
 	if live, err := s.repo.CountLiveInvitations(ctx, salonID); err != nil {
@@ -184,7 +217,7 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 		return nil, errTooManyInvitations("today")
 	}
 
-	// 6. Generate the token; store only its hash.
+	// 7. Generate the token; store only its hash.
 	token, hash, err := newInvitationToken()
 	if err != nil {
 		return nil, err
@@ -213,7 +246,7 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 
 	link := s.inviteLink(token)
 
-	// 8. Queue the notification OUTSIDE the transaction and ignore its
+	// 9. Queue the notification OUTSIDE the transaction and ignore its
 	//    error. Delivery is currently impossible - Meta verification is
 	//    pending and 100% of queued notifications are dead - so letting a
 	//    send failure roll back the invitation would mean no invitation

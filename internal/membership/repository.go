@@ -32,6 +32,11 @@ type Repository interface {
 
 	ListMembers(ctx context.Context, salonID uuid.UUID, from time.Time) ([]*Member, error)
 	ActiveMemberCount(ctx context.Context, salonID uuid.UUID) (int, error)
+
+	// ArtistCeiling returns the most artists this salon's plan permits, and
+	// the plan's code for the upgrade message. 0 means no plan was found,
+	// which is treated as unlimited rather than as zero - see Invite.
+	ArtistCeiling(ctx context.Context, salonID uuid.UUID) (int, string, error)
 	MemberByArtistID(ctx context.Context, salonID, artistID uuid.UUID, from time.Time) (*Member, error)
 	ArtistIDForUser(ctx context.Context, userID uuid.UUID) (uuid.UUID, *uuid.UUID, error)
 	DetachArtist(ctx context.Context, salonID, artistID uuid.UUID) error
@@ -229,6 +234,36 @@ func (r *pgRepo) ListMembers(ctx context.Context, salonID uuid.UUID, from time.T
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ArtistCeiling reads plans.included_seats for the salon's live
+// subscription.
+//
+// Joined through the OWNER's artist row, because billing is still keyed on
+// artists.id - it moves to salons.id when the subscription regrain lands.
+// Written as one query so the ceiling and the plan code can never disagree.
+func (r *pgRepo) ArtistCeiling(ctx context.Context, salonID uuid.UUID) (int, string, error) {
+	var ceiling int
+	var code string
+	err := r.db.QueryRow(ctx, `
+		SELECT p.included_seats, p.code
+		  FROM salons s
+		  JOIN artists a  ON a.user_id = s.owner_id AND a.salon_id = s.id
+		  JOIN subscriptions sub ON sub.artist_id = a.id AND sub.cancelled_at IS NULL
+		  JOIN plans p ON p.code = sub.plan_code
+		 WHERE s.id = $1
+		 LIMIT 1`, salonID).Scan(&ceiling, &code)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No live subscription, or an owner who is not an artist in their
+		// own salon. Treated as unlimited, deliberately: refusing here would
+		// mean a billing lookup failure silently stops a salon hiring, and
+		// an under-charged salon is a far better failure than a blocked one.
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("artist ceiling: %w", err)
+	}
+	return ceiling, code, nil
 }
 
 func (r *pgRepo) MemberByArtistID(ctx context.Context, salonID, artistID uuid.UUID,

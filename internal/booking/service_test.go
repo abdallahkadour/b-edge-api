@@ -889,6 +889,7 @@ func TestCancelBooking_CustomerLateCancelNoRefund(t *testing.T) {
 // TestCancelBooking_ArtistCancelAlwaysRefund - artist cancels any booking.
 // Deposit must always be refunded regardless of timing.
 func TestCancelBooking_ArtistCancelAlwaysRefund(t *testing.T) {
+	paidAt := time.Now().Add(-48 * time.Hour)
 	artistID := uuid.New()
 	customerID := uuid.New()
 
@@ -903,6 +904,10 @@ func TestCancelBooking_ArtistCancelAlwaysRefund(t *testing.T) {
 		StartTime:     startTime,
 		Status:        StatusConfirmed,
 		DepositAmount: decimal.NewFromFloat(50.00),
+		// Stamped only by ConfirmDeposit / ConfirmDepositReceived - the
+		// artist confirming she has SEEN the transfer land. Without it there
+		// is no money to give back; see the sibling test below.
+		DepositPaidAt: &paidAt,
 	}
 
 	repo := &mockRepo{
@@ -921,8 +926,76 @@ func TestCancelBooking_ArtistCancelAlwaysRefund(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	// Artist cancels → always refund_due
+	// Artist cancels a booking whose deposit ARRIVED → refund_due
 	assert.Equal(t, StatusRefundDue, result.Status)
+}
+
+// TestCancelBooking_DepositNeverPaid_NoRefundDue is the correction to the
+// test above, which asserted "artist cancels -> always refund_due" and was
+// encoding a defect.
+//
+// deposit_amount is what the service ASKS for. It is set from the moment a
+// booking is created, long before anyone pays. Keying the refund decision on
+// it put bookings nobody had paid for into the artist's "Refund due" filter,
+// telling her to send money to a customer who never sent her any.
+//
+// That is not a cosmetic mislabel. B-Edge moves no money and there is no
+// gateway to reverse anything: a refund is the artist making a manual OMT
+// transfer out of her own pocket, and it does not come back.
+//
+// Measured against the running stack on 2026-09-23: cancelling from
+// pending, approved, deposit_paid and confirmed - all with deposit_paid_at
+// NULL - produced refund_due in all four cases.
+func TestCancelBooking_DepositNeverPaid_NoRefundDue(t *testing.T) {
+	artistID := uuid.New()
+
+	for _, status := range []string{
+		StatusPending, StatusApproved, StatusDepositPaid, StatusConfirmed,
+	} {
+		booking := &Booking{
+			ID:            uuid.New(),
+			ArtistID:      artistID,
+			CustomerID:    uuid.New(),
+			Status:        status,
+			StartTime:     time.Now().Add(72 * time.Hour),
+			DepositAmount: decimal.NewFromFloat(50.00),
+			DepositPaidAt: nil, // nobody has paid
+		}
+		repo := &mockRepo{
+			getBookingByIDBooking:       booking,
+			getArtistIDByUserIDArtistID: artistID,
+		}
+
+		result, err := newTestService(repo).CancelBooking(context.Background(),
+			booking.ID, artistID, RoleArtist, CancelBookingRequest{})
+
+		require.NoError(t, err, status)
+		assert.Equal(t, StatusCancelled, result.Status,
+			"cancelling from %s with deposit_paid_at NULL must NOT ask the artist "+
+				"to refund money she never received", status)
+	}
+}
+
+// The same rule from the customer's side. A customer cancelling well before
+// the appointment is blameless, but blameless does not conjure a deposit.
+func TestCancelBooking_CustomerCancelsEarly_DepositNeverPaid_NoRefundDue(t *testing.T) {
+	customerID := uuid.New()
+	booking := &Booking{
+		ID:            uuid.New(),
+		ArtistID:      uuid.New(),
+		CustomerID:    customerID,
+		Status:        StatusConfirmed,
+		StartTime:     time.Now().Add(72 * time.Hour),
+		DepositAmount: decimal.NewFromFloat(50.00),
+		DepositPaidAt: nil,
+	}
+	repo := &mockRepo{getBookingByIDBooking: booking}
+
+	result, err := newTestService(repo).CancelBooking(context.Background(),
+		booking.ID, customerID, RoleCustomer, CancelBookingRequest{})
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusCancelled, result.Status)
 }
 
 // TestCancelBooking_TriggersWaitlistCheck guards the actual integration
@@ -972,12 +1045,18 @@ func TestCancelBooking_TriggersWaitlistCheck(t *testing.T) {
 // best-effort principle as every notification tonight.
 func TestCancelBooking_WaitlistCheckFails_StillSucceeds(t *testing.T) {
 	artistID := uuid.New()
+	waitlistPaidAt := time.Now().Add(-24 * time.Hour)
 	booking := &Booking{
 		ID:            uuid.New(),
 		ArtistID:      artistID,
 		StartTime:     time.Now().UTC().Add(48 * time.Hour),
 		Status:        StatusConfirmed,
 		DepositAmount: decimal.NewFromFloat(50.00),
+		// A deposit that actually arrived, so the refund_due assertion below
+		// still means what it was written to mean. Without it this booking
+		// now cancels to StatusCancelled, which would be correct but would
+		// stop this test exercising the refund path at all.
+		DepositPaidAt: &waitlistPaidAt,
 	}
 
 	repo := &mockRepo{

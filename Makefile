@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify-security-salon verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify-security-salon chaos-booking verify verify-security
 
 run:
 	go run cmd/main.go
@@ -108,6 +108,22 @@ e2e-suite23:
 ## read the lines.
 verify-security-salon:
 	python3 scripts/verify-security-salon.py
+
+## chaos-booking: aggressive E2E against the booking state machine
+##
+## 3 salons x (3,3,2) artists + 2 solo artists + 20 customers, then attacks
+## the state machine: payload mutation, simultaneous terminal transitions,
+## reschedule into the past, clock tampering, cascading day shift with a
+## concurrent cancel, mutual no-show, concurrent double refund, and a
+## 20-client siege on one slot.
+##
+## Reports NOT APPLICABLE - never a pass - for the parts of a marketplace
+## B-Edge deliberately does not have: gateway pre-auth, wallets, commission
+## splits, payouts ledger, escrow, webhook idempotency.
+##
+## MUTATES the database and restores in a finally block.
+chaos-booking:
+	python3 scripts/chaos-booking.py
 
 # Security plan §3.4b, executable. Needs the API and database up.
 # See project-docs/B-Edge-Test-Execution-2026-09-21.md for the last run.

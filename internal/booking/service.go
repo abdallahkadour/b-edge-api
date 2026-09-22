@@ -982,23 +982,45 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 	// Determine if a refund is due, and - separately - whether the customer
 	// keeps their promo code.
 	//
-	// These two look identical and are NOT. refundDue additionally requires a
-	// positive deposit, because with nothing paid there is nothing to refund.
-	// D3.5's rule is about blame, not money: "a customer is not penalised for
-	// a booking they did not break". An artist cancelling a no-deposit booking
-	// owes no refund and must still hand the code back.
+	// These two look identical and are NOT. refundDue additionally requires
+	// that a deposit was actually RECEIVED. D3.5's rule is about blame, not
+	// money: "a customer is not penalised for a booking they did not break".
+	// An artist cancelling a booking nobody has paid for owes no refund and
+	// must still hand the code back.
+	//
+	// ── deposit RECEIVED, not deposit REQUIRED ─────────────────────────
+	//
+	// This condition was `b.DepositAmount.IsPositive()` alone, which is the
+	// amount the service ASKS for - set on every booking from the moment it
+	// is created, long before anyone pays. Measured 2026-09-23: cancelling
+	// from pending, approved, deposit_paid or confirmed with
+	// deposit_paid_at NULL produced `refund_due` in all four cases.
+	//
+	// That put bookings nobody had paid for into the artist's "Refund due"
+	// filter, telling her to send money to a customer who never sent her
+	// any. B-Edge moves no money and there is no gateway to reverse a
+	// mistake - a refund here is the artist making a manual OMT transfer out
+	// of her own pocket, and it does not come back.
+	//
+	// deposit_paid_at is the honest signal: it is stamped only by
+	// ConfirmDeposit and ConfirmDepositReceived, both of which are the
+	// artist confirming she has SEEN the transfer land. A customer claiming
+	// to have paid does not set it, which is correct - their claim is not
+	// evidence.
+	depositReceived := b.DepositAmount.IsPositive() && b.DepositPaidAt != nil
+
 	refundDue := false
 	blameless := false
 
 	if isArtist || isAdmin {
-		// Artist cancelling always triggers a refund
-		refundDue = b.DepositAmount.IsPositive()
+		// Artist cancelling always triggers a refund - of money that exists.
+		refundDue = depositReceived
 		blameless = true
 	} else if isCustomer {
 		// Customer cancelling: refund only if >24h before appointment
 		timeUntilAppointment := time.Until(b.StartTime)
 		if timeUntilAppointment > cancellationWindow {
-			refundDue = b.DepositAmount.IsPositive()
+			refundDue = depositReceived
 			blameless = true
 		}
 	}

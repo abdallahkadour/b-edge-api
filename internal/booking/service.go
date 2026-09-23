@@ -1170,7 +1170,7 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
 	if ctxErr == nil {
-		reviewURL := fmt.Sprintf("%s/review/%s", customerPWAURL, reviewToken)
+		reviewURL := fmt.Sprintf("%s/review/%s", customerPWAURL(), reviewToken)
 		message := fmt.Sprintf(
 			"Hi %s! Thanks for booking your %s with us. We'd love to hear how it went - leave a quick review here: %s",
 			customerName, serviceName, reviewURL,
@@ -1264,7 +1264,7 @@ func (s *Service) announceConfirmed(ctx context.Context, b *Booking, customerNam
 	// putting that in someone's calendar first would leave a ghost
 	// appointment they then have to clear themselves.
 	if b.CalendarToken != nil && *b.CalendarToken != "" {
-		message += fmt.Sprintf(" Add it to your calendar: %s/c/%s", apiPublicURL, *b.CalendarToken)
+		message += fmt.Sprintf(" Add it to your calendar: %s/c/%s", apiPublicURL(), *b.CalendarToken)
 	}
 	s.enqueueNotification(ctx, b.ID, b.CustomerID, "booking_confirmed", message)
 }

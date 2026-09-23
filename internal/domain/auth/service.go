@@ -33,7 +33,7 @@ const resetTokenExpiry = 60 * time.Minute
 
 // artistDashboardURL() is the base URL for the artist-facing app, used to
 // build the reset-password link sent over WhatsApp. Same pattern as
-// booking's customerPWAURL: read once at package init, falls back to
+// booking's customerPWAURL(): read at CALL time, falls back to
 // localhost in development, and a wrong-but-obvious value in production
 // if ARTIST_DASHBOARD_URL is ever forgotten rather than a silent empty
 // string producing a broken link with no indication why.

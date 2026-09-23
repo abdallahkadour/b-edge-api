@@ -989,14 +989,20 @@ func TestInvite_UnverifiedPhone_RefusedOnlyWhenTheSwitchIsOn(t *testing.T) {
 
 	// Default OFF: an unverified artist is invitable, because verifying a
 	// phone means sending to it and outbound delivery does not work yet.
-	// With this on today, every invitation on the platform would be refused.
+	t.Setenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE", "")
 	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
 		InviteRequest{Phone: "70555123"}, "")
 	assert.NoError(t, err, "with the switch off an unverified artist may be invited")
 
-	// Switched on - the state the platform moves to the day delivery works.
-	requireVerifiedPhone = true
-	defer func() { requireVerifiedPhone = false }()
+	// Switched on via the ENVIRONMENT, which is the only way it can be
+	// switched on now - and deliberately so. This used to set a package-level
+	// bool directly, which is exactly why the real gate was broken and the
+	// test still passed: the variable the test wrote was not the one
+	// production read, because production's never saw .env at all.
+	//
+	// t.Setenv also restores the previous value at test end, so the defer
+	// this replaces is no longer needed.
+	t.Setenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE", "true")
 
 	_, err = svc.Invite(context.Background(), uuid.New(), uuid.New(),
 		InviteRequest{Phone: "70555124"}, "")

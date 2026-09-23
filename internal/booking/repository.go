@@ -1087,7 +1087,7 @@ func (r *pgRepo) NotifyNextWaitlistEntry(ctx context.Context, artistID, storeID,
 
 	message := fmt.Sprintf(
 		"Good news! A spot just opened up for %s. Book now before it's gone - you have about %d minutes: %s/book/%s",
-		date.Format("Mon, 2 Jan"), int(waitlistConfirmWindow.Minutes()), customerPWAURL, artistID.String(),
+		date.Format("Mon, 2 Jan"), int(waitlistConfirmWindow.Minutes()), customerPWAURL(), artistID.String(),
 	)
 	if err := r.EnqueueNotification(ctx, nil, customerID, "waitlist_slot_open", message); err != nil {
 		return fmt.Errorf("notify next waitlist entry: enqueue: %w", err)

@@ -9,6 +9,10 @@
 // validated before building rather than assumed.
 package customerauth
 
+// OTP timing, length and attempt ceilings moved to internal/pkg/otp when
+// artist phone verification needed the same rule. One declaration, so the
+// two flows cannot drift to different ceilings for the same phone number.
+
 import (
 	"errors"
 	"time"
@@ -67,23 +71,6 @@ type StoredRefreshToken struct {
 	UserID    uuid.UUID
 	RevokedAt *time.Time
 }
-
-// otpLength is the number of digits in a generated code. 6 digits matches
-// standard consumer-app practice (validated: 4-6 digit range is typical;
-// 6 is the unambiguous middle choice, same length Gmail/WhatsApp itself uses).
-const otpLength = 6
-
-// otpValidity is how long a generated code remains usable.
-const otpValidity = 5 * time.Minute
-
-// otpRateLimitWindow + otpRateLimitMax together enforce "3 requests per
-// phone per 5 minutes" - validated as standard OTP practice, not invented.
-const otpRateLimitWindow = 5 * time.Minute
-const otpRateLimitMax = 3
-
-// otpMaxAttempts is how many wrong guesses a single code tolerates before
-// it's permanently dead - validated as standard practice (5 attempts).
-const otpMaxAttempts = 5
 
 // CustomerOTP mirrors a row in customer_otps.
 type CustomerOTP struct {

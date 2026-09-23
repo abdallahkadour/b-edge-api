@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/otp"
 	"regexp"
 	"time"
 
@@ -21,6 +22,29 @@ import (
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
+
+	// phones and otps back the phone-verification flow (phoneverify.go).
+	//
+	// Separate from repo, and narrow: that flow needs four operations, and
+	// widening the main Repository interface for them would make every mock
+	// in this package implement methods it does not use.
+	//
+	// Both may be nil - NewService leaves them unset, so the existing
+	// constructor and every test using it keep working unchanged. Only
+	// NewServiceWithPhones wires them, and only cmd/main.go calls that.
+	phones PhoneVerifyPort
+	otps   OTPStore
+}
+
+// OTPStore is the one-time-code persistence phone verification needs.
+// Satisfied by *otp.Store; an interface here so the flow is testable without
+// a database.
+type OTPStore interface {
+	CountRecent(ctx context.Context, phone string, since time.Time) (int, error)
+	Create(ctx context.Context, phone, hash string, expiresAt time.Time) (uuid.UUID, error)
+	Latest(ctx context.Context, phone string) (uuid.UUID, otp.Record, error)
+	IncrementAttempts(ctx context.Context, id uuid.UUID) error
+	MarkVerified(ctx context.Context, id uuid.UUID) error
 }
 
 // NewService creates a new artist Service.
@@ -29,6 +53,18 @@ func NewService(repo Repository) *Service {
 		repo:     repo,
 		validate: validation.New(),
 	}
+}
+
+// NewServiceWithPhones is NewService plus the phone-verification collaborators.
+//
+// A second constructor rather than extra parameters on the first: every
+// existing caller and test constructs a Service without these, and changing
+// that signature would touch them all for a flow none of them exercise.
+func NewServiceWithPhones(repo Repository, phones PhoneVerifyPort, otps OTPStore) *Service {
+	s := NewService(repo)
+	s.phones = phones
+	s.otps = otps
+	return s
 }
 
 // ── Artist profile ────────────────────────────────────────────────────────────

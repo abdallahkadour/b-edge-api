@@ -53,6 +53,21 @@ func Created(c *fiber.Ctx, data interface{}) error {
 }
 
 // NoContent sends a 204 No Content response with no body.
+// Accepted sends 202 with the standard envelope.
+//
+// Distinct from OK on purpose: 202 means the work was ACCEPTED, not that it
+// finished. Used where a request queues something a worker will carry out -
+// notably queueing a message for delivery, where claiming 200 would assert
+// something the handler cannot know. On this platform that distinction is not
+// academic: no notification has ever been confirmed delivered.
+func Accepted(c *fiber.Ctx, data interface{}) error {
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"data":  data,
+		"error": nil,
+		"meta":  nil,
+	})
+}
+
 func NoContent(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }

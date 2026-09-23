@@ -2,12 +2,8 @@ package customerauth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -16,6 +12,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/devbypass"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	otppkg "github.com/abdallahkadour/b-edge-api/internal/pkg/otp"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
@@ -90,11 +87,11 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) (delive
 	}
 	req.Phone = normalized
 
-	count, err := s.repo.CountRecentOTPs(ctx, req.Phone, time.Now().Add(-otpRateLimitWindow))
+	count, err := s.repo.CountRecentOTPs(ctx, req.Phone, time.Now().Add(-otppkg.RateLimitWindow))
 	if err != nil {
 		return false, fmt.Errorf("request otp: rate limit check: %w", err)
 	}
-	if count >= otpRateLimitMax {
+	if count >= otppkg.RateLimitMax {
 		return false, apperror.TooManyRequests("RATE_LIMITED", ErrRateLimited.Error())
 	}
 
@@ -119,12 +116,12 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) (delive
 		return s.channelLooksBroken(ctx), nil
 	}
 
-	code, err := generateOTPCode()
+	code, err := otppkg.Generate()
 	if err != nil {
 		return false, fmt.Errorf("request otp: generate code: %w", err)
 	}
 
-	if _, err := s.repo.CreateOTP(ctx, req.Phone, hashOTP(code), time.Now().Add(otpValidity)); err != nil {
+	if _, err := s.repo.CreateOTP(ctx, req.Phone, otppkg.Hash(code), time.Now().Add(otppkg.Validity)); err != nil {
 		return false, fmt.Errorf("request otp: store code: %w", err)
 	}
 
@@ -134,7 +131,7 @@ func (s *Service) RequestOTP(ctx context.Context, req RequestOTPRequest) (delive
 	// worker's own "not configured - log and skip" behavior).
 	message := fmt.Sprintf(
 		"Your B-Edge verification code is %s. It expires in %d minutes. Don't share this code with anyone.",
-		code, int(otpValidity.Minutes()),
+		code, int(otppkg.Validity.Minutes()),
 	)
 	// Best-effort, but LOGGED. This is the most consequential of the
 	// swallowed-error sites: RequestOTP returns 200 "Verification code
@@ -199,17 +196,33 @@ func (s *Service) VerifyOTP(ctx context.Context, req VerifyOTPRequest) (*VerifyO
 		return nil, fmt.Errorf("verify otp: get latest: %w", err)
 	}
 
-	if otp.VerifiedAt != nil {
-		return nil, apperror.BadRequest("OTP_ALREADY_USED", ErrOTPAlreadyUsed.Error())
-	}
-	if time.Now().After(otp.ExpiresAt) {
-		return nil, apperror.BadRequest("OTP_EXPIRED", ErrOTPExpired.Error())
-	}
-	if otp.Attempts >= otpMaxAttempts {
-		return nil, apperror.BadRequest("OTP_TOO_MANY_ATTEMPTS", ErrTooManyAttempts.Error())
-	}
+	// The rule lives in internal/pkg/otp, once. Artist phone verification
+	// applies the identical rule to reach a completely different outcome -
+	// a timestamp rather than a session - and two copies of a security check
+	// is the defect class this codebase keeps producing.
+	//
+	// The ORDER is part of the rule: state before comparison, so a used,
+	// expired or exhausted code is refused without the hash being consulted.
+	switch otppkg.Check(otppkg.Record{
+		Hash:       otp.OTPHash,
+		ExpiresAt:  otp.ExpiresAt,
+		VerifiedAt: otp.VerifiedAt,
+		Attempts:   otp.Attempts,
+	}, req.Code, time.Now()) {
 
-	if hashOTP(req.Code) != otp.OTPHash {
+	case otppkg.AlreadyUsed:
+		return nil, apperror.BadRequest("OTP_ALREADY_USED", ErrOTPAlreadyUsed.Error())
+
+	case otppkg.Expired:
+		return nil, apperror.BadRequest("OTP_EXPIRED", ErrOTPExpired.Error())
+
+	case otppkg.TooManyAttempts:
+		return nil, apperror.BadRequest("OTP_TOO_MANY_ATTEMPTS", ErrTooManyAttempts.Error())
+
+	case otppkg.WrongCode:
+		// Only a WRONG code burns an attempt. Incrementing on expired or
+		// already-used would let anyone exhaust a victim's remaining tries
+		// against a code that is already dead.
 		if incErr := s.repo.IncrementAttempts(ctx, otp.ID); incErr != nil {
 			return nil, fmt.Errorf("verify otp: increment attempts: %w", incErr)
 		}
@@ -317,29 +330,17 @@ func (s *Service) Logout(ctx context.Context, rawRefreshToken string) error {
 	return nil
 }
 
-// generateOTPCode produces a cryptographically random N-digit numeric
-// string (zero-padded - "004821" is a valid code, not "4821").
-func generateOTPCode() (string, error) {
-	max := big.NewInt(1)
-	for i := 0; i < otpLength; i++ {
-		max.Mul(max, big.NewInt(10))
-	}
-	n, err := rand.Int(rand.Reader, max)
-	if err != nil {
-		return "", fmt.Errorf("generate otp code: %w", err)
-	}
-	return fmt.Sprintf("%0*d", otpLength, n), nil
-}
-
-// hashOTP hashes a code (or a refresh token) for storage - same sha256-hex
-// convention already used for refresh tokens in internal/domain/auth's
-// hashToken. Deliberately reused here rather than bcrypt: both OTPs and
-// refresh tokens are high-entropy-enough-or-rate-limited-enough that
-// bcrypt's deliberate slowness buys nothing, matching the existing
-// codebase's own choice for the same trade-off.
+// hashOTP hashes a value for storage.
+//
+// Kept - and NOT folded away - because refresh tokens use it too, and those
+// are not OTPs. It delegates to internal/pkg/otp so there is ONE sha256-hex
+// implementation rather than two that happen to agree today.
+//
+// The name is now slightly wrong for the refresh-token callers. Left alone
+// deliberately: renaming it would touch four unrelated call sites in a change
+// about OTP verification, and a rename is not worth smuggling in.
 func hashOTP(value string) string {
-	h := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(h[:])
+	return otppkg.Hash(value)
 }
 
 // mapValidationError converts a validator error into a proper

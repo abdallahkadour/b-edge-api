@@ -12,6 +12,7 @@ import (
 
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/otp"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
@@ -62,7 +63,13 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //	... (business hours routes)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
-	svc := NewService(repo)
+
+	// Phone verification gets its own two collaborators rather than widening
+	// Repository: the flow needs four operations, and every mock in this
+	// package would otherwise have to implement methods it never calls.
+	// otp.Store is shared with customer login, so the code rule and its
+	// ceilings exist once.
+	svc := NewServiceWithPhones(repo, NewPhoneRepo(pool), otp.NewStore(pool))
 	handler := NewHandler(svc, log)
 
 	auth := middleware.RequireAuth()
@@ -97,6 +104,13 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// when this artist works inside that window and belong to whoever is
 	// working (OwnScheduleWrite, which every member holds).
 	canWriteOwnSchedule := middleware.RequireSalonCapability(salonrole.OwnScheduleWrite)
+	// Phone verification. artistOnly, and the number comes from the ACCOUNT -
+	// never from the request body - so this cannot verify somebody else's
+	// phone onto your profile. What a salon owner's invitation checks against
+	// when REQUIRE_VERIFIED_PHONE_FOR_INVITE is on (migration 051).
+	app.Post(base+"/me/phone/request-otp", auth, artistOnly, handler.RequestPhoneOTP)
+	app.Post(base+"/me/phone/verify", auth, artistOnly, handler.VerifyPhone)
+
 	app.Get(base+"/me/schedule", auth, artistOnly, handler.GetMyRota)
 	app.Put(base+"/me/schedule", auth, artistOnly, canWriteOwnSchedule, handler.SetMyRota)
 	app.Get(base+"/me/schedule/exceptions", auth, artistOnly, handler.GetMyScheduleExceptions)

@@ -365,18 +365,9 @@ func TestVerifyOTP_InvalidCodeFormat_ValidationError(t *testing.T) {
 // production would be a severe vulnerability, so the fail-closed case gets
 // equal billing with the happy path, not an afterthought.
 
-// ── generateOTPCode tests ────────────────────────────────────────────────
-
-func TestGenerateOTPCode_AlwaysSixDigits(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		code, err := generateOTPCode()
-		require.NoError(t, err)
-		assert.Len(t, code, 6, "must always be exactly 6 characters, including leading zeros")
-		for _, ch := range code {
-			assert.True(t, ch >= '0' && ch <= '9', "must be purely numeric")
-		}
-	}
-}
+// Code generation moved to internal/pkg/otp, and so did its test - with a
+// wider sweep than the 20 draws here: 500 codes, checking length, digits and
+// that the range is not degenerate. See TestGenerate_IsSixDigitsAndZeroPadded.
 
 // ── Refresh tests ────────────────────────────────────────────────────────
 

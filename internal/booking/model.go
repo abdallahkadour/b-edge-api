@@ -44,6 +44,24 @@ const (
 // SlotHoldDuration is how long a slot is held during customer checkout.
 const SlotHoldDuration = 10 * time.Minute
 
+// MaxBookingHorizon is how far ahead a booking may be made.
+//
+// This is a SANITY BOUND, not a product rule. Its job is to refuse a typo'd
+// year and an abusive client filling a calendar into the next decade - not to
+// express how far ahead Rania takes work. The product rule belongs on the
+// service (bridal wants ~18 months, a regular session wants ~3), and when
+// services.max_advance_days lands this stays as the outer limit it cannot
+// exceed.
+//
+// 550 days is 18 months. Chosen because bridal is booked a year or more out -
+// measured, not assumed: the launch artist takes wedding bookings 11-12 months
+// ahead, and those are her highest-value work. A tighter bound would refuse
+// the bookings the business most wants.
+//
+// Before this existed there was NO upper bound at all. A hold 365 days out
+// returned 201, and so did 305. Verified 2026-09-23.
+const MaxBookingHorizon = 550 * 24 * time.Hour
+
 // SystemGuestPlaceholderID is the customer_id used for a held guest booking
 // BEFORE the customer enters their name and phone on the details screen (C-05).
 //

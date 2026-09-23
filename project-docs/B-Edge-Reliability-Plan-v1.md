@@ -59,10 +59,59 @@ is worth as much as M1 coming off zero.
 | **W0.1** | **Provision `TWILIO_SMS_FROM`.** Not blocked on Meta verification — a separate purchase. ~$1–2/mo for the number, $0.36/SMS to Lebanon. This alone can take M1 off zero without waiting on ticket 63051. | M1 |
 | **W0.2** | `make verify-delivery` — queue one notification to your own handset, poll to a terminal state, assert `delivered`, print the transport actually used. **It must FAIL today.** That failure is the positive control for the most important metric on the scorecard; a check that has only ever been run after the fix proves nothing. | M1 |
 | **W0.3** | **Prove the SMS fallback has ever executed.** It was written last week and has never run. Force WhatsApp to fail with a bad `TWILIO_WHATSAPP_FROM`, assert the row lands with `channel='sms'` and a real SID. Untested fallback code is not a fallback. | M1 |
-| **W0.4** | Server-side booking horizon. A booking **305 days out was accepted** with 26 slots offered; the 90 days is `STRIP_DAYS` in the PWA picker only. **Recommend 120 days**, one constant, per-store configurability deferred. | — |
+| **W0.4** | ~~Server-side booking horizon~~ **DONE 2026-09-23.** See the decision below — the recommendation in the first draft of this plan (120 days) was **wrong** and would have refused the launch artist's highest-value bookings. | — |
 
-**Decision needed from you:** W0.1 is procurement, and W0.4 is a product call.
-Everything else in this plan is engineering and needs nothing from you.
+**Decision needed from you:** W0.1 is procurement. Everything else in this plan
+is engineering and needs nothing from you.
+
+### W0.4 — resolved · the booking horizon
+
+**Decision: picker 400 days, server bound 550 days.** Recorded 2026-09-23.
+
+The first draft of this plan recommended **120 days**. That was wrong, and the
+reason it was wrong is worth keeping: I picked a number that sounded far away
+without checking it against what the business sells. **Bridal is booked 11-12
+months ahead and is roughly double the price of anything else the launch artist
+does.** A 120-day cap would have refused exactly the bookings B-Edge most wants.
+
+Measured before deciding:
+
+| | Before | After |
+|---|---|---|
+| Server cap | **none** - a hold 365 days out returned `201` | `550` days, `BOOKING_TOO_FAR_AHEAD` |
+| `CreateBooking` past check | **none at all** - parsed the timestamp and inserted | shares the guard |
+| Customer picker | `STRIP_DAYS = 90` | `400` |
+
+The 90 was not arbitrary - its own comment claimed a quarter "covers the things
+people book far ahead - weddings, graduations, Eid." **It does not cover
+weddings.** And it had already been raised once, from 28, after a customer
+reported "booking is only available for this month." The number moved twice; the
+reasoning was never checked against the business either time.
+
+**Consequence while it said 90: a bride could not book through the funnel at
+all.** Those bookings arrived by DM and were keyed in by hand, so the
+highest-value work on the platform never touched the product. This was filed as
+the smallest item in Phase 0 and was in fact a live revenue defect.
+
+Two things fell out of fixing it:
+
+- `validateBookingTime` is now **one function called by both entry points**.
+  They had disagreed: the guest hold rejected the past and nothing rejected the
+  far future, while `POST /bookings` checked **neither**. Class A, found while
+  fixing something else.
+- The month-jump chips now carry a year. A strip longer than 365 days renders
+  the same month twice, and labelling by month alone gave two chips both reading
+  "Sep" - distinct keys, identical labels.
+
+**Still open, deliberately:** per-service `max_advance_days`, so a regular
+session can go back to ~90 days while bridal keeps the long horizon. One
+nullable column and one check. `MaxBookingHorizon` stays as the outer bound it
+cannot exceed.
+
+**Recorded, not fixed:** a bridal booking made a year out locks its price at
+booking time. For the bride that is a feature - the quote is honoured. For the
+artist it means bridal cannot be repriced for anyone already booked. Keeping it;
+it should be a decision rather than an accident.
 
 ---
 

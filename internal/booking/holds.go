@@ -54,9 +54,8 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-15T10:00:00Z")
 	}
 
-	// Reject holds for times in the past before touching the database.
-	if startTime.UTC().Before(time.Now().UTC()) {
-		return nil, apperror.BadRequest("BOOKING_IN_PAST", "Cannot book a time in the past")
+	if err := validateBookingTime(startTime); err != nil {
+		return nil, err
 	}
 
 	// GetService filters on is_active = TRUE, so inactive services return not found.
@@ -253,3 +252,35 @@ var apiPublicURL = func() string {
 	}
 	return "http://localhost:3000"
 }()
+
+// validateBookingTime bounds a requested start time at both ends.
+//
+// It exists because the two bounds were in different states of existence: the
+// guest hold path rejected the past and nothing rejected the far future, while
+// POST /bookings (CreateBooking) checked NEITHER - it parsed the timestamp and
+// went straight to the insert. Two entry points, two different sets of rules,
+// which is the defect class this project keeps producing. One function, both
+// callers.
+//
+// Past: refused outright. A booking cannot be made for a time that has gone.
+//
+// Future: bounded by MaxBookingHorizon, a sanity bound rather than a product
+// rule - see its doc comment. The error names the limit in days so a client
+// can tell the customer something true instead of "invalid date".
+func validateBookingTime(startTime time.Time) error {
+	now := time.Now().UTC()
+	st := startTime.UTC()
+
+	if st.Before(now) {
+		return apperror.BadRequest("BOOKING_IN_PAST", "Cannot book a time in the past")
+	}
+
+	if st.After(now.Add(MaxBookingHorizon)) {
+		days := int(MaxBookingHorizon.Hours() / 24)
+		return apperror.BadRequest("BOOKING_TOO_FAR_AHEAD",
+			fmt.Sprintf("Bookings can be made up to %d days ahead", days))
+	}
+
+	return nil
+}
+

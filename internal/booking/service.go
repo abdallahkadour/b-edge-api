@@ -268,6 +268,12 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, apperror.BadRequest("INVALID_START_TIME", "start_time must be in RFC3339 format e.g. 2026-06-01T10:00:00Z")
 	}
 
+	// Same bounds as the guest hold path. This endpoint previously applied
+	// NEITHER - see validateBookingTime.
+	if err := validateBookingTime(startTime); err != nil {
+		return nil, err
+	}
+
 	// Fetch service for duration and pricing - and derive salon_id from it
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {

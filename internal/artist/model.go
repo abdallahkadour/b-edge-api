@@ -64,22 +64,30 @@ type Artist struct {
 // ArtistProfile is the full public profile returned to clients.
 // Combines artist fields with user fields (name, phone).
 type ArtistProfile struct {
-	ID          uuid.UUID       `db:"id"           json:"id"`
-	UserID      uuid.UUID       `db:"user_id"      json:"user_id"`
-	SalonID     *uuid.UUID      `db:"salon_id"     json:"salon_id,omitempty"`
-	Handle      *string         `db:"handle"       json:"handle,omitempty"`
-	Name        string          `db:"name"         json:"name"`
-	Email       string          `db:"email"        json:"email"`
-	Phone       *string         `db:"phone"        json:"phone,omitempty"`
-	Bio         *string         `db:"bio"          json:"bio,omitempty"`
-	BioAr       *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
-	Instagram   *string         `db:"instagram"    json:"instagram,omitempty"`
-	AvatarURL   *string         `db:"avatar_url"   json:"avatar_url,omitempty"`
-	Rating      decimal.Decimal `db:"rating"       json:"rating"`
-	ReviewCount int             `db:"review_count" json:"review_count"`
-	IsVerified  bool            `db:"is_verified"  json:"is_verified"`
-	CreatedAt   time.Time       `db:"created_at"   json:"created_at"`
-	UpdatedAt   time.Time       `db:"updated_at"   json:"updated_at"`
+	ID      uuid.UUID  `db:"id"           json:"id"`
+	UserID  uuid.UUID  `db:"user_id"      json:"user_id"`
+	SalonID *uuid.UUID `db:"salon_id"     json:"salon_id,omitempty"`
+	Handle  *string    `db:"handle"       json:"handle,omitempty"`
+	Name    string     `db:"name"         json:"name"`
+	Email   string     `db:"email"        json:"email"`
+	Phone   *string    `db:"phone"        json:"phone,omitempty"`
+
+	// PhoneVerifiedAt is NULL until the artist proves the number is theirs.
+	//
+	// Surfaced on the profile because the dashboard cannot render the
+	// verification prompt without it, and because a salon may only invite an
+	// artist whose number is verified - so this is the difference between
+	// being hireable and not.
+	PhoneVerifiedAt *time.Time      `db:"phone_verified_at" json:"phone_verified_at,omitempty"`
+	Bio             *string         `db:"bio"          json:"bio,omitempty"`
+	BioAr           *string         `db:"bio_ar"       json:"bio_ar,omitempty"`
+	Instagram       *string         `db:"instagram"    json:"instagram,omitempty"`
+	AvatarURL       *string         `db:"avatar_url"   json:"avatar_url,omitempty"`
+	Rating          decimal.Decimal `db:"rating"       json:"rating"`
+	ReviewCount     int             `db:"review_count" json:"review_count"`
+	IsVerified      bool            `db:"is_verified"  json:"is_verified"`
+	CreatedAt       time.Time       `db:"created_at"   json:"created_at"`
+	UpdatedAt       time.Time       `db:"updated_at"   json:"updated_at"`
 }
 
 // Store represents a physical salon location from the stores table.

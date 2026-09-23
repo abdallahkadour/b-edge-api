@@ -224,7 +224,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
 		SELECT a.id, a.user_id, a.salon_id, a.handle,
-		       u.name, u.email, u.phone,
+		       u.name, u.email, u.phone, u.phone_verified_at,
 		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
 		       a.created_at, a.updated_at
@@ -237,7 +237,7 @@ func (r *pgRepo) GetArtistByID(ctx context.Context, artistID uuid.UUID) (*Artist
 		artistID,
 	).Scan(
 		&p.ID, &p.UserID, &p.SalonID, &p.Handle,
-		&p.Name, &p.Email, &p.Phone,
+		&p.Name, &p.Email, &p.Phone, &p.PhoneVerifiedAt,
 		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
 		&p.CreatedAt, &p.UpdatedAt,
@@ -290,7 +290,7 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 	p := &ArtistProfile{}
 	err := r.db.QueryRow(ctx, `
 		SELECT a.id, a.user_id, a.salon_id, a.handle,
-		       u.name, u.email, u.phone,
+		       u.name, u.email, u.phone, u.phone_verified_at,
 		       a.bio, a.bio_ar, a.instagram, a.avatar_url,
 		       a.rating, a.review_count, a.is_verified,
 		       a.created_at, a.updated_at
@@ -301,7 +301,7 @@ func (r *pgRepo) GetArtistByUserID(ctx context.Context, userID uuid.UUID) (*Arti
 		userID,
 	).Scan(
 		&p.ID, &p.UserID, &p.SalonID, &p.Handle,
-		&p.Name, &p.Email, &p.Phone,
+		&p.Name, &p.Email, &p.Phone, &p.PhoneVerifiedAt,
 		&p.Bio, &p.BioAr, &p.Instagram, &p.AvatarURL,
 		&p.Rating, &p.ReviewCount, &p.IsVerified,
 		&p.CreatedAt, &p.UpdatedAt,

@@ -216,3 +216,195 @@ func countBookings(t *testing.T, pool *pgxpool.Pool) int {
 		`SELECT count(*) FROM bookings`).Scan(&n))
 	return n
 }
+
+// ── the calendar_sequence invariant ────────────────────────────────────────
+//
+// Migration 031's header, repeated in CLAUDE.md and again at repository.go:955:
+//
+//	"ANY code that changes a booking's start_time or end_time MUST also
+//	 increment calendar_sequence in the same statement."
+//
+// calendar_sequence becomes SEQUENCE in the .ics feed. Per RFC 5545 that is
+// how a calendar client tells "this event MOVED" from "here is an event I
+// already have". If it does not increase, a customer who added the
+// appointment to their phone keeps the OLD time - or gets a second event at
+// the new one, with no indication which is real. Either way she arrives at
+// the wrong hour and the artist has an empty chair.
+//
+// Two functions write those columns. ShiftBookings increments.
+// RescheduleBooking did not, which is how this test found it - the rule was
+// stated in three places and enforced in one.
+//
+// A mock cannot catch this: the whole invariant is a property of the SQL
+// statement, and a mock records whatever the service passed it.
+
+func TestRescheduleBooking_IncrementsCalendarSequence(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	start := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+	b := f.booking(f.ArtistID, start, StatusConfirmed)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	before := calendarSequence(t, pool, b.ID)
+
+	newStart := start.Add(3 * time.Hour)
+	rows, err := repo.RescheduleBooking(ctx, b.ID, newStart,
+		newStart.Add(60*time.Minute), newStart.Add(60*time.Minute), 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows, "the reschedule must actually have moved the row")
+
+	// Establish that the time really changed, so the sequence assertion below
+	// is about the invariant and not about an update that did nothing.
+	var storedStart time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT start_time FROM bookings WHERE id=$1`, b.ID).Scan(&storedStart))
+	require.True(t, storedStart.UTC().Equal(newStart),
+		"precondition: start_time must have moved")
+
+	assert.Greater(t, calendarSequence(t, pool, b.ID), before,
+		"a booking whose start_time moved MUST have a higher calendar_sequence, "+
+			"or the customer's phone shows the old time or a duplicate event")
+}
+
+func TestShiftBookings_IncrementsCalendarSequence(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	start := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+	b := f.booking(f.ArtistID, start, StatusConfirmed)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	before := calendarSequence(t, pool, b.ID)
+
+	require.NoError(t, repo.ShiftBookings(ctx, []uuid.UUID{b.ID}, 15))
+
+	assert.Greater(t, calendarSequence(t, pool, b.ID), before,
+		"the cascading day shift moves start_time and must bump the sequence too")
+}
+
+func calendarSequence(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) int {
+	t.Helper()
+	var seq int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT calendar_sequence FROM bookings WHERE id = $1`, id).Scan(&seq))
+	return seq
+}
+
+// ── the status guards, at the SQL level ────────────────────────────────────
+//
+// statematrix_test.go carries this claim in its header:
+//
+//	"The mock enforces the same status guard the SQL does, so a service-layer
+//	 guard that is missing shows up as the repository being reached with the
+//	 wrong status."
+//
+// That claim is load-bearing - it is the reason a 154-cell matrix run entirely
+// against a mock is treated as covering the state machine. NOTHING VERIFIED IT.
+// This project has already had two claims of exactly that shape turn out false
+// (a "mutation-tested" file with no mutation tooling, and a chaos check that
+// had never executed), so an assumption the whole matrix rests on is worth
+// executing.
+//
+// Each transition below is attempted from a status the SQL is supposed to
+// refuse. A refusal shows up as ZERO ROWS AFFECTED, which is how the
+// repository signals it - not as an error. A test that only checked for a nil
+// error would pass while the guard did nothing.
+
+func TestApproveBooking_FromWrongStatus_AffectsNoRows(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	// Approve is for pending. This one is already confirmed.
+	b := f.booking(f.ArtistID, time.Now().UTC().Add(48*time.Hour), StatusConfirmed)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	_, err := repo.ApproveBooking(ctx, b.ID, time.Now().UTC().Add(48*time.Hour))
+
+	require.Error(t, err, "approving a confirmed booking must be refused by the SQL guard")
+	assert.Equal(t, StatusConfirmed, statusOf(t, pool, b.ID),
+		"REFUSED BUT STILL WROTE THE ROW - the worst outcome and the easiest to miss")
+}
+
+func TestCompleteBooking_FromPending_AffectsNoRows(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	// Complete is for confirmed. A pending booking has not happened yet - and
+	// completing one would mark revenue for an appointment nobody attended.
+	b := f.booking(f.ArtistID, time.Now().UTC().Add(-2*time.Hour), StatusPending)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	_, err := repo.CompleteBooking(ctx, b.ID)
+
+	require.Error(t, err, "completing a pending booking must be refused")
+	assert.Equal(t, StatusPending, statusOf(t, pool, b.ID))
+}
+
+func TestCancelBooking_FromTerminalStatus_AffectsNoRows(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	// The guard is `status NOT IN (completed, cancelled, expired, no_show,
+	// refund_due, refunded)`. Cancelling a COMPLETED booking would erase a
+	// finished appointment from the artist's earnings.
+	b := f.booking(f.ArtistID, time.Now().UTC().Add(-48*time.Hour), StatusCompleted)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	err := repo.CancelBooking(ctx, b.ID, "changed my mind", false)
+
+	require.Error(t, err, "cancelling a completed booking must be refused")
+	assert.Equal(t, StatusCompleted, statusOf(t, pool, b.ID))
+}
+
+func TestCancelBooking_FromConfirmed_Succeeds(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	// POSITIVE CONTROL for the three tests above. A guard that refused every
+	// transition would satisfy all of them while making the product unusable -
+	// the same shape of false pass that left the money whitelist untested for
+	// weeks.
+	b := f.booking(f.ArtistID, time.Now().UTC().Add(48*time.Hour), StatusConfirmed)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	require.NoError(t, repo.CancelBooking(ctx, b.ID, "customer called", false),
+		"a legitimate cancellation must succeed, or the tests above prove nothing")
+	assert.Equal(t, StatusCancelled, statusOf(t, pool, b.ID))
+}
+
+func TestConfirmDepositReceived_FromWrongStatus_AffectsNoRows(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	b := f.booking(f.ArtistID, time.Now().UTC().Add(48*time.Hour), StatusPending)
+	require.NoError(t, repo.CreateBooking(ctx, b, nil))
+
+	ref := "OMT-123"
+	err := repo.ConfirmDepositReceived(ctx, b.ID, &ref, nil)
+
+	require.Error(t, err, "confirming a deposit on a pending booking must be refused")
+	assert.Equal(t, StatusPending, statusOf(t, pool, b.ID))
+}
+
+func statusOf(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) string {
+	t.Helper()
+	var s string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT status FROM bookings WHERE id = $1`, id).Scan(&s))
+	return s
+}

@@ -828,11 +828,22 @@ func (r *pgRepo) UpdateBookingStatus(ctx context.Context, id uuid.UUID, status s
 func (r *pgRepo) RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int) (int64, error) {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE bookings
-		   SET start_time       = $2,
-		       end_time         = $3,
-		       blocked_until    = $4,
-		       reschedule_count = reschedule_count + 1,
-		       updated_at       = NOW()
+		   SET start_time        = $2,
+		       end_time          = $3,
+		       blocked_until     = $4,
+		       reschedule_count  = reschedule_count + 1,
+		       -- Migration 031: ANY statement that moves start_time or end_time
+		       -- must bump this in the SAME statement. Missing here until
+		       -- 2026-09-23, while ShiftBookings four hundred lines down had it
+		       -- - the rule was stated in three places and enforced in one.
+		       --
+		       -- This becomes SEQUENCE in the .ics feed, which is how a calendar
+		       -- client tells "this event MOVED" from "an event I already have".
+		       -- Without it a customer who added the appointment to her phone
+		       -- keeps the OLD time, and arrives when the artist is not expecting
+		       -- her. See TestRescheduleBooking_IncrementsCalendarSequence.
+		       calendar_sequence = calendar_sequence + 1,
+		       updated_at        = NOW()
 		 WHERE id = $1
 		   AND deleted_at IS NULL
 		   AND status IN ('pending', 'approved', 'deposit_paid', 'confirmed')

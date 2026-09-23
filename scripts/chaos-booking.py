@@ -438,21 +438,52 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
     # money never silently loses precision: every money column is
     # NUMERIC(10,2) and internal/pkg/money is a whitelist, so "33.333"
     # cannot round in silently.
-    probes = {"33.333": None, "1e3": None, "NaN": None, "-10.00": None, "99999999.99": None}
+    # POSITIVE CONTROL FIRST. Without it this check passes even if the money
+    # package rejected EVERY value - "all the bad ones were refused" is also
+    # true of a validator that refuses everything, and the suite would report
+    # green while the product could not price a service at all.
+    #
+    # Added 2026-09-23 after noticing the original version silently excluded
+    # 99999999.99 from its verdict rather than deciding about it. An excluded
+    # case is a hedge, not a check.
+    #
+    # The control failed on its FIRST RUN, and what it exposed is why it is
+    # here: the probe payload omitted deposit_amount and deposit_deadline_hours,
+    # both required. Every probe was rejected 422 for a MISSING FIELD, never
+    # reaching price validation at all - and the suite read five rejections as
+    # "the whitelist works" and reported PASS. This check had never tested the
+    # money whitelist even once.
+    tok_money = login(f"{TAG}.solo1@test.bedge.com")
+    st_ok, r_ok = call("POST", "/artists/salon/services",
+                       {"name": f"{TAG} money ok", "duration_min": 30, "price": "150.00",
+                        "deposit_amount": "0.00", "deposit_deadline_hours": 48},
+                       tok_money)
+    control_ok = st_ok < 400
+    if control_ok:
+        sql(f"DELETE FROM services WHERE name='{TAG} money ok'")
+
+    probes = {"33.333": None, "1e3": None, "NaN": None, "-10.00": None}
     for v in list(probes):
         st, r = call("PUT", "/artists/salon/payment-methods", {"method": "omt",
                      "account_name": "x", "account_ref": "1"}, None)
         st, r = call("POST", "/artists/salon/services",
-                     {"name": f"{TAG} money", "duration_min": 30, "price": v},
-                     login(f"{TAG}.solo1@test.bedge.com"))
+                     {"name": f"{TAG} money", "duration_min": 30, "price": v,
+                      "deposit_amount": "0.00", "deposit_deadline_hours": 48},
+                     tok_money)
         probes[v] = st
         if st < 400:
             sql(f"DELETE FROM services WHERE name='{TAG} money'")
-    bad = [v for v, st in probes.items() if st < 400 and v != "99999999.99"]
+    bad = [v for v, st in probes.items() if st < 400]
     nan = sql("SELECT count(*) FROM bookings WHERE final_price::text = 'NaN'")
-    rec("3.2", "PASS" if not bad and nan == "0" else "FAIL",
-        f"money whitelist: {probes}; accepted-but-should-not: {bad or 'none'}; "
-        f"NaN prices stored anywhere: {nan}")
+    if not control_ok:
+        rec("3.2", "FAIL",
+            f"POSITIVE CONTROL FAILED: a plain valid price of 150.00 was refused "
+            f"({st_ok} {err(r_ok)}). Nothing below this line means anything - a "
+            f"validator that rejects everything also rejects every bad value.")
+    else:
+        rec("3.2", "PASS" if not bad and nan == "0" else "FAIL",
+            f"valid 150.00 accepted (control); rejected as required: {probes}; "
+            f"accepted-but-should-not: {bad or 'none'}; NaN prices stored: {nan}")
 
     # ── 3.3 booking 10 months out ─────────────────────────────────────────
     far = (datetime.now(timezone.utc) + timedelta(days=305)).replace(
@@ -463,16 +494,40 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
     slots_far = call("GET", f"/bookings/slots?artist_id={A['Solo_2']}&store_id={ST['Solo_2']}"
                             f"&service_id={SV['Solo_2']}&date={far.date()}")[1].get("data")
     n_far = len(slots_far) if isinstance(slots_far, list) else 0
+    # 305 days out MUST be accepted. Bridal is booked 11-12 months ahead and is
+    # the highest-value work on the platform - a cap that refused this would be
+    # refusing the bookings the business most wants. This assertion exists to
+    # make a future tightening of MaxBookingHorizon fail loudly.
     if st_far < 400:
-        rec("3.3", "INFO",
-            f"a booking 10 MONTHS out (305 days) was accepted ({st_far}), and the slots "
-            f"endpoint offers {n_far} slots that day. The API has NO horizon cap - the "
-            f"90-day limit is STRIP_DAYS in the customer PWA's date picker only. "
-            f"A booking that far out survives any change to the artist's hours, prices "
-            f"or employment. Decide whether the cap belongs server-side.")
+        rec("3.3", "PASS",
+            f"a booking 305 days out (10 months) was accepted ({st_far}) with {n_far} "
+            f"slots offered - bridal is booked this far ahead, so this MUST work")
         sql(f"DELETE FROM bookings WHERE artist_id='{A['Solo_2']}' AND start_time > NOW() + interval '300 days'")
     else:
-        rec("3.3", "PASS", f"a booking 305 days out was refused ({st_far} {err(r_far)})")
+        rec("3.3", "FAIL",
+            f"a booking 305 days out was REFUSED ({st_far} {err(r_far)}). Bridal is "
+            f"booked 11-12 months ahead; this cap is costing the highest-value bookings")
+
+    # ── 3.3b the far side of the horizon ──────────────────────────────────
+    # Added 2026-09-23. Before the cap existed there was no upper bound at all:
+    # a hold 365 days out returned 201, and so did 305.
+    st_beyond, r_beyond = call("POST", "/bookings/guest/hold", {
+        "artist_id": A["Solo_2"], "store_id": ssto, "service_id": ssvc,
+        "start_time": (datetime.now(timezone.utc) + timedelta(days=700))
+                      .replace(hour=11, minute=0, second=0, microsecond=0)
+                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "customer_name": "Horizon Probe", "customer_phone": "+96176000123"})
+    if err(r_beyond) == "BOOKING_TOO_FAR_AHEAD":
+        rec("3.3b", "PASS",
+            f"a booking 700 days out refused ({st_beyond} BOOKING_TOO_FAR_AHEAD) - "
+            f"the sanity bound holds on the far side")
+    else:
+        rec("3.3b", "FAIL",
+            f"a booking nearly two years out returned {st_beyond} {err(r_beyond) or 'ACCEPTED'}; "
+            f"MaxBookingHorizon is not being enforced")
+        bid = (r_beyond.get("data") or {}).get("booking_id")
+        if bid:
+            sql(f"DELETE FROM bookings WHERE id='{bid}'")
 
     # ── 3.4 booking defaults ──────────────────────────────────────────────
     d = sql(f"""SELECT 'deposit '||deposit_amount||', deadline '||deposit_deadline_hours||
@@ -482,8 +537,21 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
                                weekday_buffer_min||'/'||weekend_buffer_min||
                                ', early-bird fee '||early_bird_fee
                           FROM stores WHERE id='{ssto}'""")
-    rec("3.4", "INFO", f"service defaults: {d}")
-    rec("3.4b", "INFO", f"store defaults: {store_def}")
+    # Converted from INFO 2026-09-23. Printing a default is not a check - it
+    # reads as green while asserting nothing. These are the values a new
+    # artist is onboarded with, so a silent change to any of them changes what
+    # every future artist gets without anybody being told.
+    if "deposit 0.00" in d and "deadline 48h" in d and "duration 60" in d:
+        rec("3.4", "PASS", f"service defaults unchanged: {d}")
+    else:
+        rec("3.4", "FAIL",
+            f"service defaults moved: {d} (expected deposit 0.00, deadline 48h, duration 60min)")
+
+    if "notice 4h" in store_def and "buffers 150/90" in store_def:
+        rec("3.4b", "PASS", f"store defaults unchanged: {store_def}")
+    else:
+        rec("3.4b", "FAIL",
+            f"store defaults moved: {store_def} (expected notice 4h, buffers 150/90)")
 
     # ── 3.5 default opening hours ─────────────────────────────────────────
     hours = sql(f"""SELECT count(*)||' days, '||

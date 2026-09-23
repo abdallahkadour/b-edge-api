@@ -57,7 +57,7 @@ is worth as much as M1 coming off zero.
 | # | Task | Moves |
 |---|---|---|
 | **W0.1** | **Provision `TWILIO_SMS_FROM`.** Not blocked on Meta verification — a separate purchase. ~$1–2/mo for the number, $0.36/SMS to Lebanon. This alone can take M1 off zero without waiting on ticket 63051. | M1 |
-| **W0.2** | `make verify-delivery` — queue one notification to your own handset, poll to a terminal state, assert `delivered`, print the transport actually used. **It must FAIL today.** That failure is the positive control for the most important metric on the scorecard; a check that has only ever been run after the fix proves nothing. | M1 |
+| **W0.2** | **DONE 2026-09-23.** `make verify-delivery` — queue one notification to your own handset, poll to a terminal state, assert `delivered`, print the transport actually used. **It must FAIL today.** That failure is the positive control for the most important metric on the scorecard; a check that has only ever been run after the fix proves nothing. | M1 |
 | **W0.3** | **Prove the SMS fallback has ever executed.** It was written last week and has never run. Force WhatsApp to fail with a bad `TWILIO_WHATSAPP_FROM`, assert the row lands with `channel='sms'` and a real SID. Untested fallback code is not a fallback. | M1 |
 | **W0.4** | ~~Server-side booking horizon~~ **DONE 2026-09-23.** See the decision below — the recommendation in the first draft of this plan (120 days) was **wrong** and would have refused the launch artist's highest-value bookings. | — |
 
@@ -125,10 +125,10 @@ helper of roughly sixty lines.**
 
 | # | Task |
 |---|---|
-| **W1.1** | `internal/pkg/testdb`: migrate once into `bedge_test_tmpl`, then each package does `CREATE DATABASE bedge_test_<pkg> TEMPLATE bedge_test_tmpl`. Template cloning is a file copy in Postgres — about 100ms **per package**, not per test. No testcontainers; Postgres is already running as `bedge-postgres`. |
-| **W1.2** | Tag them `//go:build dbtest` so `go test ./...` stays fast and only CI pays. |
+| **W1.1** | **DONE 2026-09-23.** `internal/pkg/testdb`: migrate once into `bedge_test_tmpl`, then each package does `CREATE DATABASE bedge_test_<pkg> TEMPLATE bedge_test_tmpl`. Template cloning is a file copy in Postgres — about 100ms **per package**, not per test. No testcontainers; Postgres is already running as `bedge-postgres`. |
+| **W1.2** | **DONE 2026-09-23.** Tag them `//go:build dbtest` so `go test ./...` stays fast and only CI pays. |
 | **W1.3** | Cover the SQL that touches bookings and money **first**, in order: `booking/repository.go`, `billing/repository.go`, `membership/repository.go`. Target **≥25% on those three**, not on all 264 files. Coverage spread thin across every repository is worth less than depth on the three that can lose money. |
-| **W1.4** | The argument for the whole phase: **two things only a real database can prove.** The GIST exclusion constraint — the chaos suite tests it through HTTP, which cannot distinguish "the constraint held" from "the service got lucky about ordering." And the `CASE WHEN $2 THEN $3 ELSE col END` clearable-field SQL, where the old `COALESCE` silently ignored `{"bio": null}`. A mock cannot test either. |
+| **W1.4** | **DONE 2026-09-23.** The argument for the whole phase: **two things only a real database can prove.** The GIST exclusion constraint — the chaos suite tests it through HTTP, which cannot distinguish "the constraint held" from "the service got lucky about ordering." And the `CASE WHEN $2 THEN $3 ELSE col END` clearable-field SQL, where the old `COALESCE` silently ignored `{"bio": null}`. A mock cannot test either. |
 
 ---
 
@@ -139,7 +139,7 @@ helper of roughly sixty lines.**
 | **W2.1** | Adopt `gremlins` for Go mutation testing. `internal/booking` and `internal/billing` first — the two packages where a wrong answer costs money. |
 | **W2.2** | **Expect survivors. They are the deliverable, not a failure.** Every survivor is a line whose behaviour no test constrains. `refund_due` would have been caught here: mutating `b.DepositAmount.IsPositive()` to a constant `true` survives the old suite silently. |
 | **W2.3** | Add mutation score per package to the ledger as **M10**. Gate: booking + billing ≥ 70% killed. This replaces statement coverage as the real measure — coverage says a line ran, mutation says a line is *constrained*. |
-| **W2.4** | **Retire the LLD's "mutation-tested" claim** about `statematrix_test.go`. There is no mutation tooling in the repo and there never was. The test itself is the best thing in the suite — 154 cells asserting the exact error code *and* that a rejected action did not write the row. The claim around it is Class A drift that got into the documentation, and it produced a false sense of assurance that reached the scorecard. |
+| **W2.4** | **DONE 2026-09-23.** **Retire the LLD's "mutation-tested" claim** about `statematrix_test.go`. There is no mutation tooling in the repo and there never was. The test itself is the best thing in the suite — 154 cells asserting the exact error code *and* that a rejected action did not write the row. The claim around it is Class A drift that got into the documentation, and it produced a false sense of assurance that reached the scorecard. |
 
 **Why Phase 2 precedes Phase 3:** mutation testing is what *finds* the remaining
 Class A instances. An unconstrained line is exactly what a duplicated-and-drifted
@@ -200,3 +200,61 @@ rule looks like from the test suite's side.
 
 **Phases 3 and 4 do not raise the number. They are what stops it falling back** —
 the classes they close are what produced the 10 fix commits in 44.
+
+---
+
+## Execution log
+
+### 2026-09-23 — W0.2, W0.4, W1.1, W1.2, W1.4, W2.4, H1
+
+**Repository coverage moved off zero for the first time: 0.0% → 1.6%.**
+`booking/repository.go` 5.2%, `artist/repository.go` 6.2%. Total 36.4% → 36.0%
+(the denominator grew).
+
+That percentage is small and saying otherwise would be dishonest. **The
+infrastructure is the deliverable** — the next repository test now costs a few
+minutes rather than a sprint. W1.3's "≥25% on three repositories" is NOT met.
+
+**`internal/pkg/testdb`** — migrates once into `bedge_test_tmpl`, then
+`CREATE DATABASE … TEMPLATE` per package. Measured: first package ~0.5s
+including the migration, each subsequent clone ~40ms. Serialised across
+parallel test binaries by a Postgres advisory lock, because without one several
+binaries race to create the same template and all but one fail.
+
+**8 tests that a mock cannot express**, and every one was proven to fire:
+
+| Test | Proves |
+|---|---|
+| Overlapping bookings for one artist | Refused, `ErrSlotUnavailable`, only 1 row |
+| **Adjacent** bookings | **Allowed** — `'[)'` bounds; if this broke, artists could not book back-to-back |
+| Two artists, same hour | Allowed — the constraint keys on `artist_id`, which is what makes multi-artist work |
+| **Cancelled booking** | **Does not block its old slot** — the constraint's `WHERE`. If the predicate were dropped, every cancellation would silently sterilise its own hour |
+| Profile field set / absent / `""` / `null` | The `CASE WHEN` presence-value pair, all four cases |
+
+Three of those assert the constraint must **not** fire. A constraint that
+refused everything would pass a naive overlap test while making the product
+unusable.
+
+**Proven to fire, not assumed.** Disabling the horizon bound failed 2 of 5
+tests; reintroducing the old `COALESCE($3, bio)` failed **all 4** profile
+tests. Both restored and re-run green.
+
+**`make verify-delivery`** — written while it still fails, which is the point.
+Current output: `sent` via whatsapp, never delivered. It also caught a mistake
+in its own first run: a fabricated recipient returns Twilio **63024 (invalid
+recipient)**, which is *not* the Meta verification block (63051) and proves
+nothing about the pipeline. The script now refuses placeholder numbers rather
+than producing a confident, wrong diagnosis. The probe row was deleted so M1's
+denominator stays honest at 92.
+
+**`make verify-all`** — `test`, `test-db`, `verify`, `chaos-booking`,
+`verify-security-salon` in one target.
+
+### Not done, and why
+
+- **W0.1** `TWILIO_SMS_FROM` — procurement. Still the largest single movement available.
+- **W0.3** SMS fallback proof — blocked on W0.1. The code has still never executed.
+- **W1.3** ≥25% on three repositories — infrastructure landed, depth not built.
+- **W2.1–W2.3** mutation testing — `gremlins` not yet adopted.
+- **W3.x, W4.x** — untouched.
+

@@ -130,3 +130,26 @@ chaos-booking:
 verify-security:
 	python3 scripts/security-batch1.py
 	python3 scripts/security-batch2.py
+
+# Repository tests against a real PostgreSQL database.
+#
+# Behind a build tag so `make test` stays fast: these migrate a template
+# database once and clone it per package, which costs a few seconds that the
+# service-layer suite should not pay on every run. See internal/pkg/testdb.
+test-db:
+	go test -tags dbtest ./... -count=1
+
+# Proves a notification can actually reach a handset.
+#
+# EXPECTED TO FAIL until WhatsApp business verification clears or
+# TWILIO_SMS_FROM is provisioned. That failure is the point - it is the
+# positive control for M1, the most important metric on the reliability
+# scorecard, which has read 0 delivered for the life of the project.
+#
+#   make verify-delivery PHONE=+9617xxxxxxx
+verify-delivery:
+	@PHONE=$(PHONE) python3 scripts/verify-delivery.py
+
+# Everything, in one target. Runs what CI should run.
+verify-all: test test-db verify chaos-booking verify-security-salon
+	@echo "  ── all suites complete ──"

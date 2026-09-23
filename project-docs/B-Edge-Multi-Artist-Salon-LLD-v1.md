@@ -265,7 +265,17 @@ func Resolve(userID uuid.UUID, salonOwnerID uuid.UUID, hasSalon bool) Role {
 
 ### 3.1 Matrix test — `role_test.go`
 
-Modelled on `booking/statematrix_test.go`, which asserts 154 cells and is mutation-tested.
+Modelled on `booking/statematrix_test.go`, which asserts 154 cells — every
+cell's exact error code, and that a rejected action did not write the row.
+
+> **Correction, 2026-09-23.** An earlier version of this line said that
+> file is *"mutation-tested"*. **It is not, and never was — there is no
+> mutation tooling in this repository.** The claim was written here,
+> repeated into a reliability assessment as evidence, and nothing ever
+> checked it. That is the same defect class the matrix itself exists to
+> catch, living in documentation rather than code. Mutation testing is
+> planned as W2.1–W2.3 of `B-Edge-Reliability-Plan-v1.md`; until that
+> lands, the matrix's strength is its completeness, not a survival rate.
 
 ```go
 func TestMatrix_EveryCapabilityDecidedForEveryRole(t *testing.T) {

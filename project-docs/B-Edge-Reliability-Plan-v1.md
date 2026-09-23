@@ -56,7 +56,7 @@ is worth as much as M1 coming off zero.
 
 | # | Task | Moves |
 |---|---|---|
-| **W0.1** | **Provision `TWILIO_SMS_FROM`.** Not blocked on Meta verification — a separate purchase. ~$1–2/mo for the number, $0.36/SMS to Lebanon. This alone can take M1 off zero without waiting on ticket 63051. | M1 |
+| **W0.1** | ~~Provision `TWILIO_SMS_FROM`~~ **DEFERRED by founder decision, 2026-09-23** — no SMS and no Twilio spend until the engineering track is reliable. See the note below. Original rationale kept: **Provision `TWILIO_SMS_FROM`.** Not blocked on Meta verification — a separate purchase. ~$1–2/mo for the number, $0.36/SMS to Lebanon. This alone can take M1 off zero without waiting on ticket 63051. | M1 |
 | **W0.2** | **DONE 2026-09-23.** `make verify-delivery` — queue one notification to your own handset, poll to a terminal state, assert `delivered`, print the transport actually used. **It must FAIL today.** That failure is the positive control for the most important metric on the scorecard; a check that has only ever been run after the fix proves nothing. | M1 |
 | **W0.3** | **Prove the SMS fallback has ever executed.** It was written last week and has never run. Force WhatsApp to fail with a bad `TWILIO_WHATSAPP_FROM`, assert the row lands with `channel='sms'` and a real SID. Untested fallback code is not a fallback. | M1 |
 | **W0.4** | ~~Server-side booking horizon~~ **DONE 2026-09-23.** See the decision below — the recommendation in the first draft of this plan (120 days) was **wrong** and would have refused the launch artist's highest-value bookings. | — |
@@ -321,4 +321,67 @@ on booking.
   `internal/pkg/subscription`. The register still needs writing, but it is
   smaller than the plan assumed.
 - **W4.1 / W4.2 / W4.3** — untouched.
+
+---
+
+## Decision — 2026-09-23 · delivery deferred, and scored apart
+
+**No SMS, no Twilio spend, until the rest is reliable.** Founder decision.
+
+This is not the same as being blocked, and the scorecard was measuring it as
+though it were. The original 62 carried roughly **−10** for zero delivered
+messages — which scores a *decision*, not the software, and means the number
+would not move however much engineering work landed.
+
+**The scorecard is now two tracks:**
+
+| | |
+|---|---|
+| **Track 1 · engineering reliability** | `69 / 100`. What the code supports. The only number worth re-scoring monthly, and the only one this work moves. |
+| **Track 2 · launch gate** | `NOT VERIFIED`. Binary. Cannot be earned with code, does not improve gradually, opens when you decide to open it. |
+
+Nothing on the Track 1 roadmap depends on Track 2, and Track 2 depends on
+nothing in Track 1. That independence is exactly why they are scored apart.
+
+**W0.2 stays in the repo and stays failing.** `make verify-delivery` is the
+positive control for the day the decision reverses. A check first run *after*
+the fix proves nothing, so it is committed now, red, with its failure recorded.
+
+### Two new metrics
+
+- **M10 · mutation efficacy.** booking `84.13%`. billing `100%` efficacy but
+  only **26% mutator coverage** — always quote the pair. "100%" alone would
+  mean "the quarter of billing that any test touches is tested well", which is
+  not what a reader hears.
+- **M11 · checks proven to fail.** `12 of 23`. The only metric that licenses
+  the others. Eleven checks added this week have never been watched fail and
+  are recorded as unproven rather than counted as evidence.
+
+### Why M11 exists
+
+Two green checks were found asserting nothing, both this week:
+
+1. **Chaos 3.2 had never tested the money whitelist.** The probe omitted two
+   required fields, so every request was rejected `422` for a missing field and
+   never reached price validation. Five rejections read as "the whitelist
+   works". The status codes prove it: `422` before, `400` after — field error
+   versus `internal/pkg/money` actually refusing the value.
+2. **Two unit tests were asserting the `refund_due` defect**, so the suite was
+   green and agreeing with the bug.
+
+Every guard added since has been deliberately broken and watched go red.
+Reintroducing `COALESCE($3, bio)` failed all 4 profile tests. Disabling the
+horizon bound failed 2 of 5. **Dropping the GIST exclusion constraint let the
+overlapping booking through** — proving nothing other than that constraint was
+doing the work.
+
+### Track 1 to 78 — all engineering, nothing blocked
+
+| Action | Worth |
+|---|---|
+| Repository breadth, 3.1% → 25% on booking / billing / membership | **+5** |
+| Close the 30 lived mutants in booking | **+3** |
+| Billing mutator coverage 26% → 60% | **+2** |
+| Handler routes as a count — "0 unexercised of 160" | **+2** |
+| Prove the remaining 11 checks (M11 → 23/23) | **+1** |
 

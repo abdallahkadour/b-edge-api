@@ -144,6 +144,12 @@ func fieldMessage(fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":
 		return name + " is required"
+	case "required_if", "required_with", "required_unless":
+		// Without this the generic fallback says "Phone is invalid", which
+		// tells an artist nothing about what to do. A conditional requirement
+		// is still a requirement from the user's side - they left a field
+		// empty that this particular submission needed.
+		return name + " is required"
 	case "min":
 		return name + " must be at least " + fe.Param()
 	case "max":

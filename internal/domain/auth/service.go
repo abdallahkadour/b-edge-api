@@ -19,6 +19,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/hash"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
@@ -98,6 +99,24 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 	}
 
 	// Step 2: Check email is not already registered
+	// Normalise BEFORE the uniqueness check. users_phone_unique is a plain
+	// index on the column, so Postgres sees "70555123" and "+96170555123" as
+	// different strings and would happily let one person register twice.
+	// Normalising first means the index is comparing like with like.
+	if req.Phone != nil {
+		normalised, err := phone.ParseOptional(req.Phone, phone.DefaultISO, "phone")
+		if err != nil {
+			return nil, err
+		}
+		req.Phone = normalised
+	}
+	if req.Role == RoleArtist && (req.Phone == nil || *req.Phone == "") {
+		return nil, apperror.UnprocessableEntity("VALIDATION_ERROR", []apperror.FieldError{{
+			Field:   "phone",
+			Message: "A phone number is required to register as an artist",
+		}})
+	}
+
 	_, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err == nil {
 		// GetUserByEmail succeeded - user exists

@@ -46,6 +46,7 @@ func adminUser() *User {
 // Each field holds the value the method will return when called.
 
 type mockRepo struct {
+	createdUser *User
 	// GetUserByEmail
 	getUserByEmailUser *User
 	getUserByEmailErr  error
@@ -103,6 +104,11 @@ func TestMain(m *testing.M) {
 func (m *mockRepo) CreateUser(_ context.Context, user *User) error {
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
+	// Captured, not discarded. The phone normalisation happens in the service,
+	// so the only way to assert it is to record what actually reached the
+	// repository - a mock that throws the argument away cannot test it, which
+	// is how the page-size clamp in internal/booking went unconstrained.
+	m.createdUser = user
 	return m.createUserErr
 }
 func (m *mockRepo) GetUserByEmail(_ context.Context, _ string) (*User, error) {
@@ -542,4 +548,74 @@ func TestLogin_WithoutIPArgument_StillCompilesAndWorks(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.AccessToken)
+}
+
+// ── artist phone is required and normalised ────────────────────────────────
+//
+// A salon may only invite a registered artist whose number is verified
+// (migration 051). An artist with no number can never satisfy that, and
+// before this change 0 of 6 artists had supplied one - which would have made
+// the invitation feature permanently unusable.
+//
+// The number is also NORMALISED here rather than validated as strict E.164,
+// because users_phone_unique is a plain index on the column: Postgres sees
+// "70555123" and "+96170555123" as different strings and would let one person
+// register twice.
+
+func TestRegister_ArtistWithoutPhone_Refused(t *testing.T) {
+	repo := &mockRepo{getUserByEmailErr: ErrUserNotFound}
+	svc := newTestService(repo)
+
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Name: "Rania", Email: "a@b.com", Password: "password123", Role: RoleArtist,
+	})
+
+	require.Error(t, err, "an artist must supply a phone number")
+	assert.Nil(t, repo.createdUser, "no user may be created without one")
+}
+
+func TestRegister_ArtistWithLocalFormatPhone_StoredAsE164(t *testing.T) {
+	repo := &mockRepo{getUserByEmailErr: ErrUserNotFound}
+	svc := newTestService(repo)
+
+	local := "70 555 123"
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Name: "Rania", Email: "a@b.com", Password: "password123",
+		Role: RoleArtist, Phone: &local,
+	})
+
+	require.NoError(t, err, "a Lebanese number in local format must be accepted")
+	require.NotNil(t, repo.createdUser)
+	require.NotNil(t, repo.createdUser.Phone)
+	assert.Equal(t, "+96170555123", *repo.createdUser.Phone,
+		"the column must always hold E.164, or the uniqueness index compares "+
+			"two spellings of one number as if they were two people")
+}
+
+func TestRegister_CustomerWithoutPhone_Allowed(t *testing.T) {
+	repo := &mockRepo{getUserByEmailErr: ErrUserNotFound}
+	svc := newTestService(repo)
+
+	// POSITIVE CONTROL. The requirement is conditional on role, and a rule
+	// that refused everyone would satisfy the first test while breaking
+	// customer signup entirely.
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Name: "Maya", Email: "m@b.com", Password: "password123", Role: RoleCustomer,
+	})
+
+	assert.NoError(t, err, "a customer may register without a phone number")
+}
+
+func TestRegister_ArtistWithMalformedPhone_Refused(t *testing.T) {
+	repo := &mockRepo{getUserByEmailErr: ErrUserNotFound}
+	svc := newTestService(repo)
+
+	junk := "12345"
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Name: "Rania", Email: "a@b.com", Password: "password123",
+		Role: RoleArtist, Phone: &junk,
+	})
+
+	require.Error(t, err, "a number that is not a valid Lebanese mobile must be refused")
+	assert.Nil(t, repo.createdUser)
 }

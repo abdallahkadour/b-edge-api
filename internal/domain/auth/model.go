@@ -117,11 +117,24 @@ type PasswordReset struct {
 
 // RegisterRequest is the request body for POST /api/v1/auth/register.
 type RegisterRequest struct {
-	Name     string  `json:"name"     validate:"required,min=2,max=100"`
-	Email    string  `json:"email"    validate:"required,email"`
-	Password string  `json:"password" validate:"required,min=8"`
-	Role     string  `json:"role"     validate:"required,oneof=customer artist"`
-	Phone    *string `json:"phone"    validate:"omitempty,e164"`
+	Name     string `json:"name"     validate:"required,min=2,max=100"`
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+	Role     string `json:"role"     validate:"required,oneof=customer artist"`
+
+	// Phone is REQUIRED for an artist and optional for a customer.
+	//
+	// Required because a salon may only invite a registered artist whose
+	// number is verified (migration 051), and an artist with no number can
+	// never satisfy that - 0 of 6 artists had supplied one before this,
+	// which would have made the invitation feature permanently unusable.
+	//
+	// No `e164` tag: that would reject "70 555 123", which is how a Lebanese
+	// artist actually writes their number. The service normalises through
+	// internal/pkg/phone instead, so the form accepts local format and the
+	// column always holds E.164. Security test FRAUD-09 pinned the same
+	// equivalence for deposit payer numbers.
+	Phone *string `json:"phone" validate:"required_if=Role artist"`
 }
 
 // LoginRequest is the request body for POST /api/v1/auth/login.

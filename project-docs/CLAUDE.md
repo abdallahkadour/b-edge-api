@@ -73,10 +73,22 @@ status comes from `DeriveStatus`; a store's open/closed state is computed per
 request; expired holds self-heal lazily on read. Adding a cron to "fix" any of
 this would be undoing a deliberate design.
 
-**5. There is no database test infrastructure.** `TEST_DB_NAME` is vestigial —
-only `cmd/migrate` reads it. Every test is service-layer with hand-written
-mocks. Repository tests are **out of scope**, not missing; do not spend a
-sprint on testcontainers.
+**5. There IS database test infrastructure now — `make test-db`.** *(Updated
+2026-09-23. This entry previously said there was none and that repository tests
+were out of scope. That was true when written and is no longer.)*
+
+`internal/pkg/testdb` migrates once into `bedge_test_tmpl`, then each package
+does `CREATE DATABASE … TEMPLATE`. Postgres implements that as a file copy, so
+a clone is ~40ms and the cost is **per package, not per test**. Tests carry
+`//go:build dbtest` so `go test ./...` stays fast.
+
+Still true: **do not reach for testcontainers.** Postgres already runs as
+`bedge-postgres`; a second one would be slower and add a dependency.
+
+Use it for what a mock cannot express — the GIST exclusion constraint, the
+`CASE WHEN` clearable-field SQL, CHECK constraints, `ON CONFLICT`. Most tests
+should remain service-layer with hand-written mocks; that is still the house
+style and still the right default.
 
 ---
 
@@ -207,6 +219,28 @@ Two suites are worth knowing before writing tests:
 - **Any code changing `bookings.start_time`/`end_time` must increment
   `calendar_sequence` in the same statement**, or a rescheduled booking creates
   a second event in the customer's calendar instead of moving the first.
+
+---
+
+## Two rules about evidence
+
+Both were learned expensively and both have a named incident behind them.
+
+**A passing test is not evidence until you have seen it fail.** Two tests in
+`internal/booking` were *asserting* the `refund_due` defect — the suite was
+green and agreeing with the bug, and stayed that way until something outside
+the suite disagreed. So: when you add a guard, break it deliberately, watch the
+test go red, restore it, and record in the test header that you did. Every
+source-parsing guard in this repo has been through that; `make mutation` is the
+mechanised version of the same question.
+
+**Establish the condition before measuring it.** At least seven false results
+in this project were a coincidental empty result read as correct behaviour: a
+rate-limiter 429 read as "no availability", an empty `business_hours` read as a
+status guard, a security check passing against an empty table, and `psql`
+returning 0 because the query errored without `ON_ERROR_STOP`. Assert the
+precondition holds *before* asserting anything about the change, and always run
+`psql` with `-v ON_ERROR_STOP=1`.
 
 ---
 

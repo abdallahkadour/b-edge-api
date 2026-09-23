@@ -136,9 +136,9 @@ helper of roughly sixty lines.**
 
 | # | Task |
 |---|---|
-| **W2.1** | Adopt `gremlins` for Go mutation testing. `internal/booking` and `internal/billing` first — the two packages where a wrong answer costs money. |
-| **W2.2** | **Expect survivors. They are the deliverable, not a failure.** Every survivor is a line whose behaviour no test constrains. `refund_due` would have been caught here: mutating `b.DepositAmount.IsPositive()` to a constant `true` survives the old suite silently. |
-| **W2.3** | Add mutation score per package to the ledger as **M10**. Gate: booking + billing ≥ 70% killed. This replaces statement coverage as the real measure — coverage says a line ran, mutation says a line is *constrained*. |
+| **W2.1** | **DONE 2026-09-23.** Adopt `gremlins` for Go mutation testing. `internal/booking` and `internal/billing` first — the two packages where a wrong answer costs money. |
+| **W2.2** | **DONE 2026-09-23.** **Expect survivors. They are the deliverable, not a failure.** Every survivor is a line whose behaviour no test constrains. `refund_due` would have been caught here: mutating `b.DepositAmount.IsPositive()` to a constant `true` survives the old suite silently. |
+| **W2.3** | **PARTIAL 2026-09-23.** Add mutation score per package to the ledger as **M10**. Gate: booking + billing ≥ 70% killed. This replaces statement coverage as the real measure — coverage says a line ran, mutation says a line is *constrained*. |
 | **W2.4** | **DONE 2026-09-23.** **Retire the LLD's "mutation-tested" claim** about `statematrix_test.go`. There is no mutation tooling in the repo and there never was. The test itself is the best thing in the suite — 154 cells asserting the exact error code *and* that a rejected action did not write the row. The claim around it is Class A drift that got into the documentation, and it produced a false sense of assurance that reached the scorecard. |
 
 **Why Phase 2 precedes Phase 3:** mutation testing is what *finds* the remaining
@@ -257,4 +257,68 @@ denominator stays honest at 92.
 - **W1.3** ≥25% on three repositories — infrastructure landed, depth not built.
 - **W2.1–W2.3** mutation testing — `gremlins` not yet adopted.
 - **W3.x, W4.x** — untouched.
+
+### 2026-09-23 (second pass) — W1.3, W2.1–W2.3, H3
+
+**M10 is now a real metric: `make mutation`.**
+
+| | booking |
+|---|---|
+| Before | Killed 188 · **Lived 40** · efficacy **82.46%** |
+| After the clamp tests | Killed 159 · **Lived 30** · efficacy **84.13%** |
+
+**Forty lines whose behaviour no test constrained.** The largest single cluster
+was four surviving mutants on one condition:
+
+```go
+if limit <= 0 || limit > 100 { limit = defaultPageSize }
+```
+
+Both comparisons could be negated *or* shifted by one and the suite stayed
+green. **The cause was in the test file, not the code**: the mock's signature
+was `_ int`, discarding the argument. A mock that throws a parameter away
+cannot assert anything about how it was computed, and no amount of statement
+coverage would ever have revealed that. An unbounded page size is "every
+booking this artist has ever had, in one query", from a pagination parameter.
+
+Four tests now pin it — including the boundary at exactly 100, the case a `>`
+to `>=` mutation breaks. All four mutants KILLED on re-run.
+
+**Billing repository — 5 tests.** Three on invoice state, which is the only
+record B-Edge has that money changed hands. Two execute an **architectural
+premise nothing had ever run**: CLAUDE.md justifies `internal/pkg/money` being
+a whitelist on the claim that scale "can never be defended at the database
+level (the column coerces before any CHECK runs)". Now verified — `10.999`
+into `NUMERIC(10,2)` returns `11.00` silently, and `CHECK (scale(amount) <= 2)`
+on that column **cannot fire**, because the value is already rounded when the
+constraint is evaluated.
+
+**A footgun found while writing them.** `CreateInvoiceIfMissing` uses
+`gen_random_uuid()` for the primary key, never reads `inv.ID` from the struct
+it was handed, and never writes the generated ID back. A caller holding that
+struct has an ID addressing nothing, and every later call hits zero rows and
+surfaces as *"invoice is not in the required status"* — which reads like a
+state-machine rejection rather than a wrong identifier. Nothing in the service
+layer trips over it because it re-reads by period. **Recorded, not changed** —
+moving where a primary key comes from is not a side effect of writing a test.
+
+**H3** — both evidence rules are now in `CLAUDE.md`, each with its incident.
+
+**CLAUDE.md's point 5 was corrected.** It said there was no database test
+infrastructure and that repository tests were out of scope. True when written,
+false now, and it would have sent the next reader away from `make test-db`.
+
+**Metrics:** repositories 0.0% → **3.1%**, 13 database tests, M10 **84.13%**
+on booking.
+
+### Still not done
+
+- **W0.1 / W0.3** — procurement, and blocked behind it.
+- **W1.3** ≥25% — 3.1%. The gap is depth, and it is now cheap to close.
+- **W2.3 gate** — booking is 84.13%; `internal/billing` has not been run.
+- **W3.x** — the `NO_SALON` message turned out to be already unified (41 sites,
+  **1** message) and the grace/past-due thresholds already live in
+  `internal/pkg/subscription`. The register still needs writing, but it is
+  smaller than the plan assumed.
+- **W4.1 / W4.2 / W4.3** — untouched.
 

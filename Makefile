@@ -153,3 +153,21 @@ verify-delivery:
 # Everything, in one target. Runs what CI should run.
 verify-all: test test-db verify chaos-booking verify-security-salon
 	@echo "  ── all suites complete ──"
+
+# Mutation testing — the real measure of whether tests CONSTRAIN behaviour.
+#
+# Coverage says a line ran. Mutation says a line is constrained: gremlins
+# changes the code and reports which changes the suite fails to notice. Every
+# survivor is a line no test pins down.
+#
+# Why it matters here specifically: two tests in this repo were asserting a
+# bug (the refund_due defect) and the suite was green and agreeing with them.
+# Mutating `b.DepositAmount.IsPositive()` to a constant `true` survives that
+# old suite in silence.
+#
+# Install: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+#
+#   make mutation                      # the booking domain
+#   make mutation PKG=./internal/billing/
+mutation:
+	@gremlins unleash $(or $(PKG),./internal/booking/)

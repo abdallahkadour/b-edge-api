@@ -98,6 +98,7 @@ type mockRepo struct {
 	getEnrichedBookingByIDBooking         *EnrichedBooking
 	getEnrichedBookingByIDErr             error
 	listEnrichedByArtistBookings          []*EnrichedBooking
+	listEnrichedByArtistLimit    int
 	listEnrichedByArtistErr               error
 	listEnrichedForWeekBookings           []*EnrichedBooking
 	listEnrichedForWeekErr                error
@@ -229,7 +230,13 @@ func (m *mockRepo) AttachGuestAndSubmit(_ context.Context, _, _ uuid.UUID, _ *st
 func (m *mockRepo) GetEnrichedBookingByID(_ context.Context, _ uuid.UUID) (*EnrichedBooking, error) {
 	return m.getEnrichedBookingByIDBooking, m.getEnrichedBookingByIDErr
 }
-func (m *mockRepo) ListEnrichedBookingsByArtist(_ context.Context, _ uuid.UUID, _ string, _ time.Time, _ int) ([]*EnrichedBooking, error) {
+func (m *mockRepo) ListEnrichedBookingsByArtist(_ context.Context, _ uuid.UUID, _ string, _ time.Time, limit int) ([]*EnrichedBooking, error) {
+	// Captured, not discarded. The page-size clamp in the service was
+	// completely unconstrained until this parameter was recorded - mutation
+	// testing flagged four surviving mutants on that one condition, and the
+	// reason was here: a mock that throws an argument away cannot assert
+	// anything about how it was computed.
+	m.listEnrichedByArtistLimit = limit
 	return m.listEnrichedByArtistBookings, m.listEnrichedByArtistErr
 }
 func (m *mockRepo) ListEnrichedBookingsForDay(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]*EnrichedBooking, error) {
@@ -2615,4 +2622,70 @@ func TestMarkRefunded_NoMismatch_NeedsNoConfirmation(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, StatusRefunded, got.Status)
+}
+
+// ── page-size clamp ────────────────────────────────────────────────────────
+//
+// Added 2026-09-23 after mutation testing reported FOUR surviving mutants on
+// one condition:
+//
+//	if limit <= 0 || limit > 100 { limit = defaultPageSize }
+//
+// Both comparisons could be negated or shifted by one and the whole suite
+// stayed green, because the mock discarded the argument. An unbounded limit is
+// not cosmetic: it is a request for every booking an artist has ever had, in
+// one query, from an unauthenticated-shaped pagination parameter.
+
+func TestListEnrichedBookingsByArtist_LimitAboveMax_ClampedToDefault(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), uuid.New(), RoleAdmin, "", time.Now().UTC(), 100000,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, defaultPageSize, repo.listEnrichedByArtistLimit,
+		"a limit above the maximum must be clamped, not passed to SQL")
+}
+
+func TestListEnrichedBookingsByArtist_LimitAtMax_Respected(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	// The boundary itself. 100 is allowed; only ABOVE 100 is clamped. This is
+	// the case a `>` to `>=` mutation breaks, and nothing caught it before.
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), uuid.New(), RoleAdmin, "", time.Now().UTC(), 100,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 100, repo.listEnrichedByArtistLimit,
+		"a limit exactly at the maximum must be honoured")
+}
+
+func TestListEnrichedBookingsByArtist_ZeroLimit_ClampedToDefault(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), uuid.New(), RoleAdmin, "", time.Now().UTC(), 0,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, defaultPageSize, repo.listEnrichedByArtistLimit,
+		"an omitted limit must fall back to the default, not query with 0")
+}
+
+func TestListEnrichedBookingsByArtist_NegativeLimit_ClampedToDefault(t *testing.T) {
+	repo := &mockRepo{}
+	svc := newTestService(repo)
+
+	_, _, err := svc.ListEnrichedBookingsByArtist(
+		context.Background(), uuid.New(), uuid.New(), RoleAdmin, "", time.Now().UTC(), -5,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, defaultPageSize, repo.listEnrichedByArtistLimit,
+		"a negative limit must be clamped, never reach SQL as LIMIT -5")
 }

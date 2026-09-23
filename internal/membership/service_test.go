@@ -22,6 +22,9 @@ type mockRepo struct {
 	liveContact *Invitation
 	liveErr     error
 
+	invitee    *Invitee
+	inviteeErr error
+
 	members     map[uuid.UUID]*Member
 	activeCount int
 	artistID    uuid.UUID
@@ -166,6 +169,45 @@ func (m *mockRepo) UserIDByContact(_ context.Context, _, _ *string) (*uuid.UUID,
 	return m.contactUser, nil
 }
 
+// InviteeByContact defaults to a registered artist with a declared specialty
+// and a verified phone, because that is the only shape Invite now accepts and
+// every pre-existing test in this file is about something else.
+//
+// Tests that care about the invitee set m.invitee or m.inviteeErr explicitly.
+func (m *mockRepo) InviteeByContact(_ context.Context, _, _ *string) (*Invitee, error) {
+	if m.inviteeErr != nil {
+		return nil, m.inviteeErr
+	}
+	if m.invitee != nil {
+		return m.invitee, nil
+	}
+	cat := "makeup"
+	verified := time.Now().UTC().Add(-24 * time.Hour)
+	return &Invitee{
+		UserID:          uuid.New(),
+		ArtistID:        ptrUUID(uuid.New()),
+		Category:        &cat,
+		PhoneVerifiedAt: &verified,
+	}, nil
+}
+
+func ptrUUID(u uuid.UUID) *uuid.UUID { return &u }
+
+// artistInvitee builds a valid invitee already attached to the given salon
+// (nil for unattached). Everything else is the shape Invite requires, so a
+// test that sets this is varying exactly one thing.
+func artistInvitee(salon *uuid.UUID) *Invitee {
+	cat := "makeup"
+	verified := time.Now().UTC().Add(-24 * time.Hour)
+	return &Invitee{
+		UserID:          uuid.New(),
+		ArtistID:        ptrUUID(uuid.New()),
+		SalonID:         salon,
+		Category:        &cat,
+		PhoneVerifiedAt: &verified,
+	}
+}
+
 type mockOnboarding struct {
 	artistID uuid.UUID
 	err      error
@@ -269,9 +311,8 @@ func TestInvite_NeitherPhoneNorEmail_Refused(t *testing.T) {
 
 func TestInvite_InviteeAlreadyInAnotherSalon_Refused(t *testing.T) {
 	repo := newMockRepo()
-	other, someone := uuid.New(), uuid.New()
-	repo.contactUser = &someone
-	repo.artistSalon = &other
+	other := uuid.New()
+	repo.invitee = artistInvitee(&other)
 
 	svc, _, _ := newTestService(repo, &mockOnboarding{})
 	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
@@ -282,9 +323,8 @@ func TestInvite_InviteeAlreadyInAnotherSalon_Refused(t *testing.T) {
 
 func TestInvite_InviteeAlreadyInThisSalon_RefusedDistinctly(t *testing.T) {
 	repo := newMockRepo()
-	salonID, someone := uuid.New(), uuid.New()
-	repo.contactUser = &someone
-	repo.artistSalon = &salonID
+	salonID := uuid.New()
+	repo.invitee = artistInvitee(&salonID)
 
 	svc, _, _ := newTestService(repo, &mockOnboarding{})
 	_, err := svc.Invite(context.Background(), salonID, uuid.New(),
@@ -873,4 +913,112 @@ func TestInvite_CompedCeiling_NeverBinds(t *testing.T) {
 		InviteRequest{Phone: "70555123"}, "")
 
 	require.NoError(t, err)
+}
+
+// ── who may be invited · migration 051 ─────────────────────────────────────
+//
+// A salon may only invite somebody who already exists as a beauty
+// professional on B-Edge. Before this, an invitation was addressed to a
+// phone NUMBER and nothing on the other end had to exist - whoever opened
+// the link first became an artist in that salon.
+//
+// Four gates, each with its own error code, because "invite failed" is
+// useless to an owner who cannot tell a typo from a colleague who has not
+// signed up yet.
+
+func TestInvite_UnregisteredNumber_Refused(t *testing.T) {
+	repo := newMockRepo()
+	repo.inviteeErr = ErrNotFound
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "ARTIST_NOT_REGISTERED", code(t, err))
+}
+
+func TestInvite_RegisteredCustomerNotArtist_Refused(t *testing.T) {
+	repo := newMockRepo()
+	// An account exists, but it is a customer. Distinct from an unregistered
+	// number: the owner would otherwise re-send to the same person forever.
+	repo.invitee = &Invitee{UserID: uuid.New()}
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "NOT_AN_ARTIST", code(t, err))
+}
+
+func TestInvite_ArtistWithoutCategory_Refused(t *testing.T) {
+	repo := newMockRepo()
+	iv := artistInvitee(nil)
+	iv.Category = nil
+	repo.invitee = iv
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.Equal(t, "ARTIST_NO_CATEGORY", code(t, err))
+}
+
+func TestInvite_ArtistWithEmptyCategory_Refused(t *testing.T) {
+	repo := newMockRepo()
+	iv := artistInvitee(nil)
+	empty := ""
+	iv.Category = &empty
+	repo.invitee = iv
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	// An empty string is not a declared specialty. A nil check alone would
+	// let "" through and the owner would see a blank on the team page.
+	assert.Equal(t, "ARTIST_NO_CATEGORY", code(t, err))
+}
+
+func TestInvite_UnverifiedPhone_RefusedOnlyWhenTheSwitchIsOn(t *testing.T) {
+	repo := newMockRepo()
+	iv := artistInvitee(nil)
+	iv.PhoneVerifiedAt = nil
+	repo.invitee = iv
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+
+	// Default OFF: an unverified artist is invitable, because verifying a
+	// phone means sending to it and outbound delivery does not work yet.
+	// With this on today, every invitation on the platform would be refused.
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+	assert.NoError(t, err, "with the switch off an unverified artist may be invited")
+
+	// Switched on - the state the platform moves to the day delivery works.
+	requireVerifiedPhone = true
+	defer func() { requireVerifiedPhone = false }()
+
+	_, err = svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555124"}, "")
+	assert.Equal(t, "PHONE_NOT_VERIFIED", code(t, err))
+}
+
+func TestArtistCategories_MatchTheDatabaseConstraint(t *testing.T) {
+	// The CHECK in migration 051 is the real enforcement; this map exists so
+	// the API can return a field error instead of surfacing a 23514 as a 500.
+	// If they drift, a category the form offers is rejected by the database
+	// at save time - which the user experiences as a broken form.
+	expected := []string{
+		"makeup", "hair", "nails", "lashes",
+		"brows", "skincare", "hair_removal", "barber",
+	}
+
+	assert.Len(t, ArtistCategories, len(expected),
+		"the Go taxonomy and migration 051's CHECK must list the same categories")
+	for _, c := range expected {
+		assert.True(t, ValidCategory(c), "%q must be a recognised category", c)
+	}
+	assert.False(t, ValidCategory("massage"),
+		"massage was deliberately excluded - see migration 051's header")
+	assert.False(t, ValidCategory(""), "empty is not a category")
 }

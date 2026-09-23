@@ -47,6 +47,12 @@ type Repository interface {
 	TransferOwnership(ctx context.Context, salonID, toUserID uuid.UUID) error
 
 	UserIDByContact(ctx context.Context, phone, email *string) (*uuid.UUID, error)
+
+	// InviteeByContact resolves a contact to the registered user behind it,
+	// with their artist row and verification state. ErrNotFound means nobody
+	// is registered under that contact - which since migration 051 is itself
+	// a refusal, not a blank slate.
+	InviteeByContact(ctx context.Context, phone, email *string) (*Invitee, error)
 }
 
 type pgRepo struct{ db *pgxpool.Pool }
@@ -372,6 +378,37 @@ func (r *pgRepo) TransferOwnership(ctx context.Context, salonID, toUserID uuid.U
 // UserIDByContact finds an existing account by phone or email. Returns
 // (nil, nil) when nobody matches - that is an ordinary outcome, not an
 // error: inviting someone with no B-Edge account is the common case.
+// InviteeByContact resolves a contact to everything Invite needs to decide,
+// in one query.
+//
+// One query rather than three because the three facts are read together and
+// must agree: a user who exists, an artist row that may or may not hang off
+// it, and a verification timestamp. Fetching them separately invites the
+// classic drift where the account is found but the artist lookup is skipped
+// on some branch.
+//
+// LEFT JOIN, not JOIN: a registered CUSTOMER is a different refusal from an
+// unregistered number, and the owner needs to be told which.
+func (r *pgRepo) InviteeByContact(ctx context.Context, phone, email *string) (*Invitee, error) {
+	var iv Invitee
+	err := r.db.QueryRow(ctx, `
+		SELECT u.id, a.id, a.salon_id, a.category, u.phone_verified_at
+		  FROM users u
+		  LEFT JOIN artists a ON a.user_id = u.id
+		 WHERE u.deleted_at IS NULL
+		   AND ( ($1::text IS NOT NULL AND u.phone = $1)
+		      OR ($2::text IS NOT NULL AND lower(u.email) = lower($2)) )
+		 LIMIT 1`, phone, email,
+	).Scan(&iv.UserID, &iv.ArtistID, &iv.SalonID, &iv.Category, &iv.PhoneVerifiedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invitee by contact: %w", err)
+	}
+	return &iv, nil
+}
+
 func (r *pgRepo) UserIDByContact(ctx context.Context, phone, email *string) (*uuid.UUID, error) {
 	var id uuid.UUID
 	err := r.db.QueryRow(ctx, `

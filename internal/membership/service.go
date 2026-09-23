@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -110,6 +111,17 @@ type InviteResult struct {
 	Link       string      `json:"link"`
 }
 
+// requireVerifiedPhone gates the phone-verification rule in Invite.
+//
+// Default OFF. Verifying a number means sending to it, and outbound delivery
+// is not working - 0 notifications delivered in the life of the project, and
+// 0 of 6 artists have supplied a phone number at all. Enabling this before
+// delivery works refuses every invitation on the platform.
+//
+// Flip to true the day a message can actually land. See
+// scripts/verify-delivery.py, which is the check for exactly that.
+var requireVerifiedPhone = os.Getenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE") == "true"
+
 func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	req InviteRequest, ip string) (*InviteResult, error) {
 
@@ -123,23 +135,76 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 		return nil, err
 	}
 
-	// 2. Refuse someone who already belongs to a salon (BR-1). Checked
-	//    against the account if one exists; if they have no account yet
-	//    there is nothing to conflict with.
-	if existingUser, err := s.repo.UserIDByContact(ctx, ph, em); err != nil {
+	// 2. WHO IS BEING INVITED. Since migration 051 a salon may only invite
+	//    somebody who already exists as a beauty professional on B-Edge.
+	//
+	//    Before this, an invitation was addressed to a phone NUMBER and
+	//    nothing on the other end had to exist - whoever opened the link
+	//    first became an artist in that salon. A mistyped digit invited a
+	//    stranger, and the owner found out when that stranger appeared on
+	//    the team page with the salon's client list.
+	//
+	//    ON ENUMERATION: telling the owner "that number is not registered"
+	//    does reveal whether a given number belongs to a B-Edge artist.
+	//    That is accepted deliberately. The endpoint is owner-authenticated,
+	//    capped at MaxInvitationsPerDay, and the alternative - a vague
+	//    refusal - makes the feature unusable, because the owner cannot tell
+	//    a typo from a colleague who has not signed up. A bounded oracle
+	//    behind authentication is the better trade.
+	invitee, err := s.repo.InviteeByContact(ctx, ph, em)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperror.NotFound("ARTIST_NOT_REGISTERED",
+				"That person does not have a B-Edge account yet. "+
+					"Ask them to sign up as an artist first, then invite them.")
+		}
 		return nil, err
-	} else if existingUser != nil {
-		_, salon, err := s.repo.ArtistIDForUser(ctx, *existingUser)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return nil, err
+	}
+
+	//    A registered CUSTOMER is a different refusal from an unregistered
+	//    number, and the owner needs to be told which - otherwise they
+	//    re-send to the same person forever.
+	if invitee.ArtistID == nil {
+		return nil, apperror.Conflict("NOT_AN_ARTIST",
+			"That account exists but is not an artist account. "+
+				"They need to register as a beauty professional before joining a salon.")
+	}
+
+	//    Refuse someone who already belongs to a salon (BR-1).
+	if invitee.SalonID != nil {
+		if *invitee.SalonID == salonID {
+			return nil, apperror.Conflict("ALREADY_A_MEMBER",
+				"That artist is already in this salon")
 		}
-		if salon != nil {
-			if *salon == salonID {
-				return nil, apperror.Conflict("ALREADY_A_MEMBER",
-					"That artist is already in this salon")
-			}
-			return nil, errAlreadyInSalon()
-		}
+		return nil, errAlreadyInSalon()
+	}
+
+	//    The specialty must be declared. A salon hiring a nail artist and a
+	//    salon hiring a barber are not doing the same thing, and the owner
+	//    cannot see which they are getting unless it is recorded. Nullable
+	//    in the schema for the artists who predate 051; required here, so
+	//    the rule lands on new members without rewriting anyone's profile.
+	if invitee.Category == nil || *invitee.Category == "" {
+		return nil, apperror.Conflict("ARTIST_NO_CATEGORY",
+			"That artist has not set their specialty yet. "+
+				"Ask them to choose one on their profile, then invite them.")
+	}
+
+	//    The number must be proven to be theirs.
+	//
+	//    OFF BY DEFAULT, and that is not timidity - verifying a phone means
+	//    SENDING to it, and outbound delivery does not work yet. Zero
+	//    notifications have ever been delivered, and no artist on the
+	//    platform has even supplied a phone number, so switching this on
+	//    today would refuse every invitation including to the launch artist.
+	//
+	//    Set REQUIRE_VERIFIED_PHONE_FOR_INVITE=true the day delivery works.
+	//    The gate is written now, with the rest of the rules, rather than
+	//    left as a TODO that gets forgotten.
+	if requireVerifiedPhone && invitee.PhoneVerifiedAt == nil {
+		return nil, apperror.Conflict("PHONE_NOT_VERIFIED",
+			"That artist has not verified their phone number yet. "+
+				"Ask them to confirm it on their profile, then invite them.")
 	}
 
 	// 3. Resend rather than duplicate (FR-M7).

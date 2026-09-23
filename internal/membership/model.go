@@ -239,3 +239,47 @@ func errInvalidContact() *apperror.AppError {
 	return apperror.BadRequest("INVALID_CONTACT",
 		"Enter a valid mobile number or email address")
 }
+
+// Invitee is the person a salon is trying to invite, as the database knows
+// them. Assembled by Repository.InviteeByContact.
+//
+// ArtistID and SalonID are nil for a registered CUSTOMER - somebody with a
+// B-Edge account who is not a professional. That is a different refusal from
+// an unregistered number and the owner is told which.
+type Invitee struct {
+	UserID          uuid.UUID
+	ArtistID        *uuid.UUID
+	SalonID         *uuid.UUID
+	Category        *string
+	PhoneVerifiedAt *time.Time
+}
+
+// ArtistCategories is the specialty taxonomy, and the single source of truth
+// for it in Go.
+//
+// It MUST match the CHECK constraint in migration 051. The database is the
+// real enforcement - this exists so the API can reject a bad value with a
+// field error the form can highlight, instead of surfacing a 23514 as a 500.
+//
+// Chosen against how the industry divides the work: US licensing treats
+// cosmetology, esthetics, nail technology and barbering as separate
+// credentials, and Fresha's own specialty-salon taxonomy names lash and brow
+// studios as categories in their own right. See migration 051's header for
+// what was deliberately left out and why.
+var ArtistCategories = map[string]string{
+	"makeup":       "Makeup artist",
+	"hair":         "Hair stylist",
+	"nails":        "Nail artist",
+	"lashes":       "Lash artist",
+	"brows":        "Brow artist",
+	"skincare":     "Skincare / esthetician",
+	"hair_removal": "Waxing & hair removal",
+	"barber":       "Barber",
+}
+
+// ValidCategory reports whether a category is one the platform recognises.
+func ValidCategory(c string) bool {
+	_, ok := ArtistCategories[c]
+	return ok
+}
+

@@ -222,28 +222,28 @@ func (s *Service) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-// customerPWAURL is the base URL for the guest-facing app, used to build
+// customerPWAURL() is the base URL for the guest-facing app, used to build
 // links (currently just the review link) sent to a customer over WhatsApp.
 // Read once at package init rather than per-call, matching the pattern
 // businessLocation uses in the earnings domain. Falls back to localhost
 // harmless in development, and a wrong-but-obvious value in production if
 // CUSTOMER_PWA_URL is ever forgotten, rather than a silent empty string
 // that would produce a broken link with no indication why.
-var customerPWAURL = func() string {
+func customerPWAURL() string {
 	if v := os.Getenv("CUSTOMER_PWA_URL"); v != "" {
 		return v
 	}
 	return "http://localhost:4200"
-}()
+}
 
-// apiPublicURL is where THIS server is reachable from a customer's phone.
+// apiPublicURL() is where THIS server is reachable from a customer's phone.
 //
-// Distinct from customerPWAURL on purpose: the calendar link is served by
+// Distinct from customerPWAURL() on purpose: the calendar link is served by
 // the API itself (internal/calendar, GET /c/:token), not by the PWA, so
 // reusing the PWA base would produce a link to a route the frontend does
 // not have. Same fallback reasoning - a visibly wrong localhost beats a
 // silent empty string that yields "/c/abc" with no host.
-var apiPublicURL = func() string {
+func apiPublicURL() string {
 	if v := os.Getenv("API_PUBLIC_URL"); v != "" {
 		return strings.TrimSuffix(v, "/")
 	}
@@ -251,7 +251,7 @@ var apiPublicURL = func() string {
 		return "http://localhost:" + port
 	}
 	return "http://localhost:3000"
-}()
+}
 
 // validateBookingTime bounds a requested start time at both ends.
 //
@@ -283,4 +283,3 @@ func validateBookingTime(startTime time.Time) error {
 
 	return nil
 }
-

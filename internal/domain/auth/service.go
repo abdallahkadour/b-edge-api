@@ -31,18 +31,18 @@ const resetTokenLength = 32
 // resetTokenExpiry is how long a password reset token remains valid.
 const resetTokenExpiry = 60 * time.Minute
 
-// artistDashboardURL is the base URL for the artist-facing app, used to
+// artistDashboardURL() is the base URL for the artist-facing app, used to
 // build the reset-password link sent over WhatsApp. Same pattern as
 // booking's customerPWAURL: read once at package init, falls back to
 // localhost in development, and a wrong-but-obvious value in production
 // if ARTIST_DASHBOARD_URL is ever forgotten rather than a silent empty
 // string producing a broken link with no indication why.
-var artistDashboardURL = func() string {
+func artistDashboardURL() string {
 	if v := os.Getenv("ARTIST_DASHBOARD_URL"); v != "" {
 		return v
 	}
 	return "http://localhost:4300"
-}()
+}
 
 // refreshTokenExpiry is how long a refresh token remains valid.
 const refreshTokenExpiry = 7 * 24 * time.Hour
@@ -344,7 +344,7 @@ func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest)
 		return fmt.Errorf("forgot password: store token: %w", err)
 	}
 
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", artistDashboardURL, token)
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", artistDashboardURL(), token)
 	message := fmt.Sprintf(
 		"Hi %s! You asked to reset your B-Edge password. Tap here to choose a new one: %s. "+
 			"This link expires in %d minutes. Didn't request this? You can ignore it.",

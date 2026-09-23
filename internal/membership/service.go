@@ -111,16 +111,29 @@ type InviteResult struct {
 	Link       string      `json:"link"`
 }
 
-// requireVerifiedPhone gates the phone-verification rule in Invite.
+// requireVerifiedPhone reports whether the phone-verification rule is on.
 //
-// Default OFF. Verifying a number means sending to it, and outbound delivery
-// is not working - 0 notifications delivered in the life of the project, and
-// 0 of 6 artists have supplied a phone number at all. Enabling this before
-// delivery works refuses every invitation on the platform.
+// READ AT CALL TIME, NOT AT PACKAGE INIT, and that distinction is the whole
+// comment. This was:
 //
-// Flip to true the day a message can actually land. See
-// scripts/verify-delivery.py, which is the check for exactly that.
-var requireVerifiedPhone = os.Getenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE") == "true"
+//	var requireVerifiedPhone = os.Getenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE") == "true"
+//
+// Package-level variables initialise BEFORE main() runs, and main() is where
+// godotenv.Load() reads .env (cmd/main.go:66). So that variable evaluated
+// against an environment that did not yet contain anything from .env, read
+// empty, and was permanently false. Setting the flag to true changed
+// NOTHING - measured on 2026-09-23 by turning it on and watching an
+// unverified artist be invited anyway.
+//
+// A security gate that silently cannot be switched on is worse than one that
+// is off, because the config says it is on.
+//
+// Default OFF still: verifying a phone means sending to it, and outbound
+// delivery does not work. See internal/pkg/devbypass for how this is
+// exercised meanwhile.
+func requireVerifiedPhone() bool {
+	return os.Getenv("REQUIRE_VERIFIED_PHONE_FOR_INVITE") == "true"
+}
 
 func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	req InviteRequest, ip string) (*InviteResult, error) {
@@ -201,7 +214,7 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	//    Set REQUIRE_VERIFIED_PHONE_FOR_INVITE=true the day delivery works.
 	//    The gate is written now, with the rest of the rules, rather than
 	//    left as a TODO that gets forgotten.
-	if requireVerifiedPhone && invitee.PhoneVerifiedAt == nil {
+	if requireVerifiedPhone() && invitee.PhoneVerifiedAt == nil {
 		return nil, apperror.Conflict("PHONE_NOT_VERIFIED",
 			"That artist has not verified their phone number yet. "+
 				"Ask them to confirm it on their profile, then invite them.")

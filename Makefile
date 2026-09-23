@@ -21,6 +21,8 @@ migrate-test:
 swagger:
 	swag init -g cmd/main.go -o docs
 
+# NOTE: deliberately no -tags devbypass. The production binary must not
+# contain the fixed OTP code. See internal/pkg/devbypass.
 build:
 	go build -o bin/b-edge cmd/main.go
 

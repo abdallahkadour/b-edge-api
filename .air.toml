@@ -3,7 +3,10 @@ tmp_dir = "tmp"
 
 [build]
 bin = "./tmp/main"
-cmd = "go build -o ./tmp/main ./cmd/main.go"
+# -tags devbypass compiles internal/pkg/devbypass's ENABLED variant,
+# which accepts OTP 0000 when APP_ENV=development. `make build` does
+# NOT pass it, so a production binary cannot contain the bypass at all.
+cmd = "go build -tags devbypass -o ./tmp/main ./cmd/main.go"
 delay = 1000
 exclude_dir = ["assets", "tmp", "vendor", "testdata", "docs", "logs"]
 exclude_regex = ["_test.go"]

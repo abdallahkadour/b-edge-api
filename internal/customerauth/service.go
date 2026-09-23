@@ -8,34 +8,35 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/devbypass"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
-// devBypassOTPCode lets any phone number skip real OTP verification, in
-// development only. Added so customer-auth-gated screens (My Bookings, My
-// Orders) can be reached and tested without a live Twilio account to
-// receive a real WhatsApp code. Works even for a phone number that never
-// called RequestOTP at all - it short-circuits before the OTP lookup.
+// isDevBypassCode delegates to internal/pkg/devbypass.
 //
-// MUST NEVER be reachable in production: gated on APP_ENV, the same
-// variable and same fail-CLOSED convention already used for stack traces
-// in internal/middleware/register.go. If APP_ENV is unset, empty, or
-// misspelled, this path stays closed, not open - the inverse would mean a
-// misconfigured deploy silently ships a universal customer-login bypass.
-const devBypassOTPCode = "326321"
-
+// This used to be a const and a one-line APP_ENV check right here. It moved
+// out for two reasons. The rule is now needed by artist phone verification
+// too, and a second copy of a security gate is exactly the defect class this
+// codebase keeps producing. And AUTH-08 and AUTH-11 both recommend, in their
+// own words, "removing the bypass from production builds entirely (build
+// tag), rather than relying on a runtime string" - which a const in this file
+// cannot do. The leaf package can: in a normal build it compiles to
+// `return false` and the code is not in the binary.
+//
+// AUTH-11 is not hypothetical. It records a development API serving the
+// launch artist over a public tunnel with this bypass exploitable from the
+// internet, found live on 2026-09-21.
 func isDevBypassCode(code string) bool {
-	return os.Getenv("APP_ENV") == "development" && code == devBypassOTPCode
+	return devbypass.Allows(code)
 }
 
 // refreshTokenValidity mirrors internal/domain/auth's refresh token

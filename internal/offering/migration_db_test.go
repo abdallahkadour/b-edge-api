@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,23 +53,34 @@ func TestArtistServices_NullPriceMeansSalon_Accepted(t *testing.T) {
 }
 
 func TestArtistServices_NegativePrice_Refused(t *testing.T) {
+	// Asserts the specific CHECK, not just "some error" - a missing table
+	// also produces an error, which would make this pass for the wrong
+	// reason. Verified to FAIL when artist_services_price_valid is dropped.
 	pool := testdb.New(t)
 	f := newFixture(t, pool)
 	_, err := pool.Exec(context.Background(),
 		`INSERT INTO artist_services (artist_id, service_id, price) VALUES ($1,$2,-1)`,
 		f.OwnerArtist, f.ServiceID)
-	assert.Error(t, err)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "23514", pgErr.Code)
+	assert.Equal(t, "artist_services_price_valid", pgErr.ConstraintName)
 }
 
 func TestArtistServices_NaNDeposit_Refused(t *testing.T) {
 	// Postgres accepts 'NaN'::numeric; a stored NaN makes every later read
 	// of the row fail. INJ-04 found this on services; it must not reappear.
+	// Asserts the specific CHECK, not just "some error". Verified to FAIL
+	// when artist_services_deposit_valid is dropped.
 	pool := testdb.New(t)
 	f := newFixture(t, pool)
 	_, err := pool.Exec(context.Background(),
 		`INSERT INTO artist_services (artist_id, service_id, deposit_amount) VALUES ($1,$2,'NaN')`,
 		f.OwnerArtist, f.ServiceID)
-	assert.Error(t, err)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "23514", pgErr.Code)
+	assert.Equal(t, "artist_services_deposit_valid", pgErr.ConstraintName)
 }
 
 func TestArtistServices_OneRowPerArtistPerService(t *testing.T) {

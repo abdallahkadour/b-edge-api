@@ -27,6 +27,12 @@ import (
 // country code. Lebanon; the platform's other phone paths use the same.
 const defaultRegion = "LB"
 
+// roleArtist mirrors auth.RoleArtist. Duplicated as a constant rather than
+// imported because internal/domain/auth imports middleware, and membership is
+// reached from there - the same cycle internal/pkg/subscription exists to
+// break.
+const roleArtist = "artist"
+
 // OnboardingPort is the seam that keeps there being ONE onboarding path.
 //
 // Accepting an invitation has to create an artist row with status 'pending',
@@ -177,30 +183,41 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 	//    A registered CUSTOMER is a different refusal from an unregistered
 	//    number, and the owner needs to be told which - otherwise they
 	//    re-send to the same person forever.
-	if invitee.ArtistID == nil {
+	//
+	//    Keyed on users.role, NOT on the presence of an artists row. That row
+	//    is created only by onboarding, so requiring it here meant a
+	//    colleague who signed up specifically TO JOIN a salon could not be
+	//    invited until they had founded their own - the opposite of what an
+	//    invitation is for. Caught by the chaos suite going red on
+	//    NOT_AN_ARTIST for accounts that were plainly artists.
+	if invitee.Role != roleArtist {
 		return nil, apperror.Conflict("NOT_AN_ARTIST",
 			"That account exists but is not an artist account. "+
-				"They need to register as a beauty professional before joining a salon.")
+				"They need to sign up as a beauty professional before joining a salon.")
 	}
 
-	//    Refuse someone who already belongs to a salon (BR-1).
-	if invitee.SalonID != nil {
-		if *invitee.SalonID == salonID {
-			return nil, apperror.Conflict("ALREADY_A_MEMBER",
-				"That artist is already in this salon")
+	//    The rest only applies to somebody who has ALREADY onboarded. An
+	//    artist who has not has no row to check, and declares their specialty
+	//    when they accept - AcceptInvitation requires `category`.
+	if invitee.ArtistID != nil {
+		//    Refuse someone who already belongs to a salon (BR-1).
+		if invitee.SalonID != nil {
+			if *invitee.SalonID == salonID {
+				return nil, apperror.Conflict("ALREADY_A_MEMBER",
+					"That artist is already in this salon")
+			}
+			return nil, errAlreadyInSalon()
 		}
-		return nil, errAlreadyInSalon()
-	}
 
-	//    The specialty must be declared. A salon hiring a nail artist and a
-	//    salon hiring a barber are not doing the same thing, and the owner
-	//    cannot see which they are getting unless it is recorded. Nullable
-	//    in the schema for the artists who predate 051; required here, so
-	//    the rule lands on new members without rewriting anyone's profile.
-	if invitee.Category == nil || *invitee.Category == "" {
-		return nil, apperror.Conflict("ARTIST_NO_CATEGORY",
-			"That artist has not set their specialty yet. "+
-				"Ask them to choose one on their profile, then invite them.")
+		//    The specialty must be declared. A salon hiring a nail artist and
+		//    a salon hiring a barber are not doing the same thing, and the
+		//    owner cannot see which they are getting unless it is recorded.
+		//    Nullable in the schema for artists who predate migration 051.
+		if invitee.Category == nil || *invitee.Category == "" {
+			return nil, apperror.Conflict("ARTIST_NO_CATEGORY",
+				"That artist has not set their specialty yet. "+
+					"Ask them to choose one on their profile, then invite them.")
+		}
 	}
 
 	//    The number must be proven to be theirs.

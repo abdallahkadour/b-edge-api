@@ -185,6 +185,7 @@ func (m *mockRepo) InviteeByContact(_ context.Context, _, _ *string) (*Invitee, 
 	verified := time.Now().UTC().Add(-24 * time.Hour)
 	return &Invitee{
 		UserID:          uuid.New(),
+		Role:            roleArtist,
 		ArtistID:        ptrUUID(uuid.New()),
 		Category:        &cat,
 		PhoneVerifiedAt: &verified,
@@ -201,6 +202,7 @@ func artistInvitee(salon *uuid.UUID) *Invitee {
 	verified := time.Now().UTC().Add(-24 * time.Hour)
 	return &Invitee{
 		UserID:          uuid.New(),
+		Role:            roleArtist,
 		ArtistID:        ptrUUID(uuid.New()),
 		SalonID:         salon,
 		Category:        &cat,
@@ -939,9 +941,9 @@ func TestInvite_UnregisteredNumber_Refused(t *testing.T) {
 
 func TestInvite_RegisteredCustomerNotArtist_Refused(t *testing.T) {
 	repo := newMockRepo()
-	// An account exists, but it is a customer. Distinct from an unregistered
+	// An account exists, but it is a CUSTOMER. Distinct from an unregistered
 	// number: the owner would otherwise re-send to the same person forever.
-	repo.invitee = &Invitee{UserID: uuid.New()}
+	repo.invitee = &Invitee{UserID: uuid.New(), Role: "customer"}
 
 	svc, _, _ := newTestService(repo, &mockOnboarding{})
 	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
@@ -1027,4 +1029,31 @@ func TestArtistCategories_MatchTheDatabaseConstraint(t *testing.T) {
 	assert.False(t, ValidCategory("massage"),
 		"massage was deliberately excluded - see migration 051's header")
 	assert.False(t, ValidCategory(""), "empty is not a category")
+}
+
+func TestInvite_RegisteredArtistWhoHasNotOnboarded_Allowed(t *testing.T) {
+	repo := newMockRepo()
+	verified := time.Now().UTC().Add(-24 * time.Hour)
+
+	// The case the first version of this gate got wrong: somebody who signed
+	// up as an artist specifically TO JOIN a salon, and therefore has no
+	// artists row - that row is created only by onboarding. Requiring one
+	// meant they had to found their own salon before they could be invited
+	// to anybody else's.
+	//
+	// They declare their specialty when they ACCEPT; AcceptInvitation
+	// requires `category`.
+	repo.invitee = &Invitee{
+		UserID:          uuid.New(),
+		Role:            roleArtist,
+		PhoneVerifiedAt: &verified,
+	}
+
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	_, err := svc.Invite(context.Background(), uuid.New(), uuid.New(),
+		InviteRequest{Phone: "70555123"}, "")
+
+	assert.NoError(t, err,
+		"an artist who has not onboarded must still be invitable - otherwise "+
+			"they must found a salon they do not want in order to join one")
 }

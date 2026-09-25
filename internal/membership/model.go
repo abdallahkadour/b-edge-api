@@ -247,7 +247,16 @@ func errInvalidContact() *apperror.AppError {
 // B-Edge account who is not a professional. That is a different refusal from
 // an unregistered number and the owner is told which.
 type Invitee struct {
-	UserID          uuid.UUID
+	UserID uuid.UUID
+
+	// Role is users.role - 'artist' or 'customer'.
+	//
+	// This, not the presence of an artists row, is what "registered as a
+	// beauty professional" means at invite time. An artists row is only
+	// created by onboarding, so requiring one would mean a colleague who
+	// signed up to JOIN a salon could not be invited until they had founded
+	// their own - which is the opposite of what an invitation is for.
+	Role            string
 	ArtistID        *uuid.UUID
 	SalonID         *uuid.UUID
 	Category        *string
@@ -282,4 +291,3 @@ func ValidCategory(c string) bool {
 	_, ok := ArtistCategories[c]
 	return ok
 }
-

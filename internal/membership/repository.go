@@ -392,14 +392,14 @@ func (r *pgRepo) TransferOwnership(ctx context.Context, salonID, toUserID uuid.U
 func (r *pgRepo) InviteeByContact(ctx context.Context, phone, email *string) (*Invitee, error) {
 	var iv Invitee
 	err := r.db.QueryRow(ctx, `
-		SELECT u.id, a.id, a.salon_id, a.category, u.phone_verified_at
+		SELECT u.id, u.role, a.id, a.salon_id, a.category, u.phone_verified_at
 		  FROM users u
 		  LEFT JOIN artists a ON a.user_id = u.id
 		 WHERE u.deleted_at IS NULL
 		   AND ( ($1::text IS NOT NULL AND u.phone = $1)
 		      OR ($2::text IS NOT NULL AND lower(u.email) = lower($2)) )
 		 LIMIT 1`, phone, email,
-	).Scan(&iv.UserID, &iv.ArtistID, &iv.SalonID, &iv.Category, &iv.PhoneVerifiedAt)
+	).Scan(&iv.UserID, &iv.Role, &iv.ArtistID, &iv.SalonID, &iv.Category, &iv.PhoneVerifiedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

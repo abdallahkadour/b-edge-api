@@ -115,7 +115,31 @@ def seat_plan(salon_id, code="multi"):
              WHERE artist_id IN (SELECT id FROM artists WHERE salon_id='{salon_id}')""")
 
 
+def verify_phone(email):
+    """Prove the artist's number, through the REAL endpoint.
+
+    Migration 051 + REQUIRE_VERIFIED_PHONE_FOR_INVITE: a salon may only invite
+    an artist whose number is verified. Before this the harness went straight
+    to invite and got 409 PHONE_NOT_VERIFIED, which is the gate working.
+
+    Uses the dev bypass code rather than reading an OTP out of the database,
+    so this exercises the same path a real artist takes - including the
+    handler, the auth middleware and the artistOnly role gate. Writing
+    phone_verified_at directly in SQL would set the column without ever
+    proving the endpoint that sets it still works.
+
+    Requires the API built with -tags devbypass (.air.toml passes it).
+    """
+    tok = login(email)
+    st, r = call("POST", "/artists/me/phone/verify", {"code": "000000"}, tok)
+    if st >= 400:
+        raise RuntimeError(
+            f"verify phone {email}: {st} {err(r)} - is the API built with "
+            f"-tags devbypass and APP_ENV=development?")
+
+
 def join(owner_tok, email, phone, handle, admin_tok):
+    verify_phone(email)
     st, r = call("POST", "/artists/salon/members/invite", {"phone": phone}, owner_tok)
     if st != 201:
         raise RuntimeError(f"invite {phone}: {st} {err(r)}")

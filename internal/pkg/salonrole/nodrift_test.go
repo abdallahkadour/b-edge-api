@@ -19,6 +19,9 @@ var allowedSalonOwnerFiles = map[string]string{
 	"domain/auth/service.go":    "resolves the role at token issue",
 	"domain/auth/repository.go": "loads the owner_id that token issue resolves against",
 	"domain/auth/model.go":      "declares the SalonOwnerID field that load scans into",
+	"artist/repository.go": "CreateService (PP-7) identifies the owning artist via " +
+		"salons.owner_id to seed her first-offering row in the same statement; a data " +
+		"lookup for that seed, not an authorization decision",
 }
 
 // salonOwnerRefs matches a SQL statement or expression that ties the salons

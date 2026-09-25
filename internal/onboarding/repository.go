@@ -139,11 +139,20 @@ func (r *pgRepo) Complete(ctx context.Context, userID uuid.UUID, req CompleteOnb
 	// apply, so a brand-new artist isn't asked to reason about deposit
 	// policy before they've taken a single booking. Adjustable afterward
 	// from the Services screen.
-	if _, err = tx.Exec(ctx,
-		`INSERT INTO services (salon_id, name, duration_min, price) VALUES ($1, $2, $3, $4)`,
+	var serviceID uuid.UUID
+	if err = tx.QueryRow(ctx,
+		`INSERT INTO services (salon_id, name, duration_min, price) VALUES ($1, $2, $3, $4) RETURNING id`,
 		salonID, req.ServiceName, req.ServiceDurationMin, req.ServicePrice,
-	); err != nil {
+	).Scan(&serviceID); err != nil {
 		return uuid.Nil, fmt.Errorf("complete onboarding: create service: %w", err)
+	}
+
+	// PP-7: the owner offers her first service. Without this row she would
+	// be listed with an empty menu and could not be booked at all.
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO artist_services (artist_id, service_id) VALUES ($1, $2)`, artistID, serviceID,
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("complete onboarding: offer first service: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -308,9 +308,16 @@ func (r *pgRepo) ArtistIDForUser(ctx context.Context, userID uuid.UUID) (uuid.UU
 // did (BR-4). Their bookings, reviews, earnings and client notes all keep
 // pointing at the artist row; only the salon link goes.
 func (r *pgRepo) DetachArtist(ctx context.Context, salonID, artistID uuid.UUID) error {
-	ct, err := r.db.Exec(ctx,
-		`UPDATE artists SET salon_id = NULL, updated_at = now()
-		  WHERE id = $1 AND salon_id = $2`, artistID, salonID)
+	ct, err := r.db.Exec(ctx, `
+		WITH gone AS (
+			-- She no longer belongs to the salon, so she no longer offers its
+			-- services. Same statement as the detach, so neither can happen alone.
+			DELETE FROM artist_services os
+			 USING services s
+			 WHERE os.service_id = s.id AND os.artist_id = $1 AND s.salon_id = $2
+		)
+		UPDATE artists SET salon_id = NULL, updated_at = now()
+		 WHERE id = $1 AND salon_id = $2`, artistID, salonID)
 	if err != nil {
 		return fmt.Errorf("detach artist: %w", err)
 	}

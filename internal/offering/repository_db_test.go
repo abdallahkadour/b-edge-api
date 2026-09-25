@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abdallahkadour/b-edge-api/internal/artist"
+	"github.com/abdallahkadour/b-edge-api/internal/membership"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/testdb"
 )
 
@@ -87,4 +89,38 @@ func TestDelete_SwitchesItOff(t *testing.T) {
 	o, err := repo.Get(ctx, f.SalonID, f.OwnerArtist, f.ServiceID)
 	require.NoError(t, err)
 	assert.False(t, o.Offered)
+}
+
+func TestCreateService_OwnerOffersIt_MemberDoesNot(t *testing.T) {
+	// PP-7: a service the owner adds is on for her, off for members.
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	member := addMember(t, pool, f.SalonID)
+	ctx := context.Background()
+	svc := &artist.SalonServiceRecord{ID: uuid.New(), SalonID: f.SalonID, Name: "Lashes",
+		DurationMin: 60, Price: decimal.RequireFromString("80"), IsActive: true, DepositDeadlineHours: 48}
+	require.NoError(t, artist.NewRepository(pool).CreateService(ctx, svc))
+
+	var owner, mem int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1 AND service_id=$2`,
+		f.OwnerArtist, svc.ID).Scan(&owner))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1 AND service_id=$2`,
+		member, svc.ID).Scan(&mem))
+	assert.Equal(t, 1, owner, "the owner must offer the service she just created")
+	assert.Equal(t, 0, mem, "a member must switch it on herself")
+}
+
+func TestDetachArtist_RemovesHerOfferings(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	member := addMember(t, pool, f.SalonID)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `INSERT INTO artist_services (artist_id,service_id) VALUES ($1,$2)`, member, f.ServiceID)
+	require.NoError(t, err)
+
+	require.NoError(t, membership.NewRepository(pool).DetachArtist(ctx, f.SalonID, member))
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1`, member).Scan(&n))
+	assert.Equal(t, 0, n, "a departed member must not keep offering the salon's services")
 }

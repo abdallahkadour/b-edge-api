@@ -25,9 +25,9 @@ type VerifyPhoneRequest struct {
 //	@Description else's phone onto your own profile.
 //	@Tags        artists
 //	@Produce     json
-//	@Success     202 {object} response.Envelope
-//	@Failure     409 {object} response.Envelope "NO_PHONE_ON_ACCOUNT or PHONE_ALREADY_VERIFIED"
-//	@Failure     429 {object} response.Envelope "RATE_LIMITED"
+//	@Success     202 {object} response.Body
+//	@Failure     409 {object} response.ErrorBody "NO_PHONE_ON_ACCOUNT or PHONE_ALREADY_VERIFIED"
+//	@Failure     429 {object} response.ErrorBody "RATE_LIMITED"
 //	@Security    BearerAuth
 //	@Router      /artists/me/phone/request-otp [post]
 func (h *Handler) RequestPhoneOTP(c *fiber.Ctx) error {
@@ -56,8 +56,8 @@ func (h *Handler) RequestPhoneOTP(c *fiber.Ctx) error {
 //	@Accept      json
 //	@Produce     json
 //	@Param       body body VerifyPhoneRequest true "The six-digit code"
-//	@Success     200 {object} response.Envelope
-//	@Failure     400 {object} response.Envelope "OTP_NOT_FOUND, OTP_EXPIRED, OTP_INVALID, OTP_ALREADY_USED, OTP_TOO_MANY_ATTEMPTS"
+//	@Success     200 {object} response.Body
+//	@Failure     400 {object} response.ErrorBody "OTP_NOT_FOUND, OTP_EXPIRED, OTP_INVALID, OTP_ALREADY_USED, OTP_TOO_MANY_ATTEMPTS"
 //	@Security    BearerAuth
 //	@Router      /artists/me/phone/verify [post]
 func (h *Handler) VerifyPhone(c *fiber.Ctx) error {

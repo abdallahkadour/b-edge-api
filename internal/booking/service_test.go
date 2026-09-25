@@ -46,6 +46,15 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
+	createWaitlistEntryCalled bool
+	// Where the artist belongs, for validateBookingParties. Zero values mean
+	// "a member of testSalonID who works at the requested store", so the
+	// default is a VALID booking and each cross-salon test states the one
+	// thing it changes.
+	placementSalon    *uuid.UUID
+	placementUnlinked bool
+	placementNoSalon  bool
+	placementErr      error
 	// Per-artist working hours. nil is the default and the norm: it means
 	// the artist declared no rota, so slot generation uses the store's
 	// window unchanged. Methods live in artist_rota_test.go.
@@ -98,7 +107,7 @@ type mockRepo struct {
 	getEnrichedBookingByIDBooking         *EnrichedBooking
 	getEnrichedBookingByIDErr             error
 	listEnrichedByArtistBookings          []*EnrichedBooking
-	listEnrichedByArtistLimit    int
+	listEnrichedByArtistLimit             int
 	listEnrichedByArtistErr               error
 	listEnrichedForWeekBookings           []*EnrichedBooking
 	listEnrichedForWeekErr                error
@@ -165,6 +174,23 @@ func (m *mockRepo) GetBusinessHours(_ context.Context, _ uuid.UUID, _ int) (*Bus
 }
 func (m *mockRepo) GetBusinessHoursException(_ context.Context, _ uuid.UUID, _ time.Time) (*BusinessHoursException, error) {
 	return m.getBusinessHoursExceptionEx, m.getBusinessHoursExceptionErr
+}
+
+// ArtistPlacement defaults to "a member of testSalonID who works at the
+// requested store" - a VALID booking - so each cross-salon test states the one
+// fact it changes.
+func (m *mockRepo) ArtistPlacement(_ context.Context, _, _ uuid.UUID) (*uuid.UUID, bool, error) {
+	if m.placementErr != nil {
+		return nil, false, m.placementErr
+	}
+	if m.placementNoSalon {
+		return nil, !m.placementUnlinked, nil
+	}
+	salon := testSalonID
+	if m.placementSalon != nil {
+		salon = *m.placementSalon
+	}
+	return &salon, !m.placementUnlinked, nil
 }
 func (m *mockRepo) GetService(_ context.Context, _ uuid.UUID) (*SalonService, error) {
 	return m.getServiceSvc, m.getServiceErr
@@ -285,6 +311,10 @@ func (m *mockRepo) EnqueueNotification(_ context.Context, bookingID *uuid.UUID, 
 	return m.enqueueNotificationErr
 }
 func (m *mockRepo) CreateWaitlistEntry(_ context.Context, _, _, _, _ uuid.UUID, _ time.Time) (uuid.UUID, error) {
+	// Recorded so a refusal can be shown to have written NOTHING - a mock that
+	// discards its call cannot distinguish "refused" from "refused after
+	// writing", and the second is the worse outcome.
+	m.createWaitlistEntryCalled = true
 	return m.createWaitlistEntryID, m.createWaitlistEntryErr
 }
 func (m *mockRepo) GetWaitlistByArtist(_ context.Context, _ uuid.UUID) ([]*WaitlistEntryResponse, error) {
@@ -344,6 +374,15 @@ func (suspendedSubReader) GetSubscriptionByArtistID(_ context.Context, artistID 
 	return &billing.Subscription{ArtistID: artistID, CurrentPeriodEnd: &past}, nil
 }
 
+// testSalonID is the one salon every default fixture belongs to.
+//
+// defaultStore() and defaultService() used to take a fresh uuid.New() each,
+// so every booking test in this package built a store from one salon and a
+// service from ANOTHER - modelling exactly the cross-salon booking that the
+// API accepted in production until 2026-09-25. A fixture that can only
+// represent an invalid world cannot catch a bug that lives in that world.
+var testSalonID = uuid.MustParse("0a0a0a0a-0000-4000-8000-000000000001")
+
 func newTestService(repo Repository) *Service {
 	return NewService(repo, activeSubReader{})
 }
@@ -353,7 +392,7 @@ func defaultStore() *Store {
 	cutoff := "09:00:00"
 	return &Store{
 		ID:                 uuid.New(),
-		SalonID:            uuid.New(),
+		SalonID:            testSalonID,
 		Name:               "Beirut Downtown",
 		City:               "Beirut",
 		SameDayNoticeHours: 4,
@@ -388,7 +427,7 @@ func defaultBusinessHours() *BusinessHours {
 func defaultService() *SalonService {
 	return &SalonService{
 		ID:                   uuid.New(),
-		SalonID:              uuid.New(),
+		SalonID:              testSalonID,
 		Name:                 "Full Makeup",
 		DurationMin:          60,
 		Price:                decimal.NewFromFloat(150.00),
@@ -436,6 +475,10 @@ func existingBooking(start, end time.Time) *Booking {
 // Expect: empty slot list, no error.
 func TestGetAvailableSlots_StoreClosed(t *testing.T) {
 	repo := &mockRepo{
+		// A real service. This test is about a closed store, and used to pass
+		// with no service at all only because the old code returned before
+		// reading it. Inputs are now validated before anything is computed.
+		getServiceSvc:               defaultService(),
 		getStoreStore:               defaultStore(),
 		getBusinessHoursExceptionEx: nil,
 		getBusinessHoursBH:          &BusinessHours{IsOpen: false},
@@ -452,6 +495,10 @@ func TestGetAvailableSlots_StoreClosed(t *testing.T) {
 // Expect: empty slot list, no error.
 func TestGetAvailableSlots_HolidayClosed(t *testing.T) {
 	repo := &mockRepo{
+		// A real service. This test is about a closed store, and used to pass
+		// with no service at all only because the old code returned before
+		// reading it. Inputs are now validated before anything is computed.
+		getServiceSvc: defaultService(),
 		getStoreStore: defaultStore(),
 		getBusinessHoursExceptionEx: &BusinessHoursException{
 			IsClosed: true,
@@ -1083,7 +1130,13 @@ func TestCancelBooking_WaitlistCheckFails_StillSucceeds(t *testing.T) {
 
 func TestJoinWaitlist_Success(t *testing.T) {
 	entryID := uuid.New()
-	repo := &mockRepo{createWaitlistEntryID: entryID}
+	repo := &mockRepo{
+		createWaitlistEntryID: entryID,
+		// Required since validateBookingParties. This path used to check
+		// nothing, so the test never needed a real service or store.
+		getServiceSvc: defaultService(),
+		getStoreStore: defaultStore(),
+	}
 	svc := newTestService(repo)
 
 	result, err := svc.JoinWaitlist(context.Background(), JoinWaitlistRequest{
@@ -1717,7 +1770,10 @@ func TestConfirmDepositReceived_NoArtistProfile_Forbidden(t *testing.T) {
 // Expect: held booking returned with a held_until in the future.
 func TestHoldGuestSlot_Success(t *testing.T) {
 	repo := &mockRepo{
-		getServiceSvc:    defaultService(),
+		getServiceSvc: defaultService(),
+		// Required since validateBookingParties: this test used to hold a
+		// slot with NO store, a booking that cannot exist.
+		getStoreStore:    defaultStore(),
 		createBookingErr: nil,
 	}
 	svc := newTestService(repo)

@@ -66,7 +66,7 @@ func goldenRepo() *mockRepo {
 	return &mockRepo{
 		getStoreStore:      defaultStore(),
 		getBusinessHoursBH: &BusinessHours{IsOpen: true, OpenTime: "09:00:00", CloseTime: "17:00:00"},
-		getServiceSvc:      &SalonService{DurationMin: 60},
+		getServiceSvc:      &SalonService{SalonID: testSalonID, DurationMin: 60},
 	}
 }
 
@@ -276,7 +276,7 @@ func TestGolden_ClosedPathsAllReturnNoSlots(t *testing.T) {
 // negative-length slot or a panic.
 func TestGolden_ServiceLongerThanTradingDay(t *testing.T) {
 	repo := goldenRepo()
-	repo.getServiceSvc = &SalonService{DurationMin: 600} // 10h into an 8h day
+	repo.getServiceSvc = &SalonService{SalonID: testSalonID, DurationMin: 600} // 10h into an 8h day
 	svc := newTestService(repo)
 
 	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
@@ -296,7 +296,7 @@ func TestGolden_ServiceLongerThanTradingDay(t *testing.T) {
 // made.
 func TestGolden_BufferSeparatesConsecutiveSlots(t *testing.T) {
 	repo := goldenRepo()
-	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	repo.getServiceSvc = &SalonService{SalonID: testSalonID, DurationMin: 60, BufferMin: 30}
 	repo.getArtistBookingsBookings = []*Booking{{
 		StartTime:    beirutTime(2027, time.March, 1, 11, 0),
 		EndTime:      beirutTime(2027, time.March, 1, 12, 0),
@@ -322,7 +322,7 @@ func TestGolden_BufferSeparatesConsecutiveSlots(t *testing.T) {
 // visible on the very next availability query, with no scheduler.
 func TestGolden_ReleasedBufferReopensTheSlot(t *testing.T) {
 	repo := goldenRepo()
-	repo.getServiceSvc = &SalonService{DurationMin: 60}
+	repo.getServiceSvc = &SalonService{SalonID: testSalonID, DurationMin: 60}
 	repo.getArtistBookingsBookings = []*Booking{{
 		StartTime: beirutTime(2027, time.March, 1, 11, 0),
 		EndTime:   beirutTime(2027, time.March, 1, 12, 0),
@@ -343,7 +343,7 @@ func TestGolden_ReleasedBufferReopensTheSlot(t *testing.T) {
 // not buy the cleanup and must not be shown it.
 func TestGolden_CustomerNeverSeesTheBuffer(t *testing.T) {
 	repo := goldenRepo()
-	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	repo.getServiceSvc = &SalonService{SalonID: testSalonID, DurationMin: 60, BufferMin: 30}
 	svc := newTestService(repo)
 
 	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
@@ -361,7 +361,7 @@ func TestGolden_CustomerNeverSeesTheBuffer(t *testing.T) {
 // its cleanup must both fit before closing.
 func TestGolden_BufferMustFitBeforeClosing(t *testing.T) {
 	repo := goldenRepo()
-	repo.getServiceSvc = &SalonService{DurationMin: 60, BufferMin: 30}
+	repo.getServiceSvc = &SalonService{SalonID: testSalonID, DurationMin: 60, BufferMin: 30}
 	svc := newTestService(repo)
 
 	slots, err := svc.GetAvailableSlots(context.Background(), goldenReq())
@@ -393,7 +393,7 @@ func waitlistRepo(t *testing.T, status string) (*mockRepo, *Booking) {
 	return &mockRepo{
 		getBookingByIDBooking:       b,
 		getArtistIDByUserIDArtistID: artistID,
-		getServiceSvc:               &SalonService{DurationMin: 60},
+		getServiceSvc:               &SalonService{SalonID: testSalonID, DurationMin: 60},
 	}, b
 }
 

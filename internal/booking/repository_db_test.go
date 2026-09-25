@@ -408,3 +408,105 @@ func statusOf(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) string {
 		`SELECT status FROM bookings WHERE id = $1`, id).Scan(&s))
 	return s
 }
+
+// ── ArtistPlacement ────────────────────────────────────────────────────────
+//
+// The one read validateBookingParties makes about the artist. Its answer
+// decides whether a cross-salon booking is refused, and every failure mode is
+// in the SQL - which salon column is returned, which key the EXISTS joins on,
+// whether a missing row maps to ErrArtistNotFound. The service-layer tests
+// run against a mock and can prove none of that.
+
+func TestArtistPlacement_LinkedStore_ReturnsSalonAndWorksHere(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO artist_stores (artist_id, store_id) VALUES ($1,$2)`, f.ArtistID, f.StoreID)
+	require.NoError(t, err)
+
+	salon, works, err := repo.ArtistPlacement(ctx, f.ArtistID, f.StoreID)
+
+	require.NoError(t, err)
+	require.NotNil(t, salon, "an artist in a salon must report it")
+	assert.Equal(t, f.SalonID, *salon)
+	assert.True(t, works, "a linked store must read as worked at")
+}
+
+func TestArtistPlacement_SameSalonStoreNotLinked_DoesNotWorkHere(t *testing.T) {
+	// Breaks if the EXISTS is dropped or joined on the salon instead of the
+	// artist - which would let any member of a salon be booked at every one
+	// of its stores, including ones they have never worked at.
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	// The fixture's store is in the artist's salon but has NO artist_stores
+	// row. Establish that explicitly rather than trusting the fixture.
+	var links int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM artist_stores WHERE artist_id=$1`, f.ArtistID).Scan(&links))
+	require.Equal(t, 0, links, "precondition: the artist has no store links")
+
+	salon, works, err := repo.ArtistPlacement(ctx, f.ArtistID, f.StoreID)
+
+	require.NoError(t, err)
+	require.NotNil(t, salon)
+	assert.Equal(t, f.SalonID, *salon, "the salon is still reported")
+	assert.False(t, works, "an unlinked store must NOT read as worked at")
+}
+
+func TestArtistPlacement_LinkIsPerArtist(t *testing.T) {
+	// The second artist is linked; the first is not. Breaks if the EXISTS
+	// matches on store alone - any link to the store by ANYONE would then
+	// count, and every artist in a salon would inherit every colleague's
+	// stores.
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO artist_stores (artist_id, store_id) VALUES ($1,$2)`, f.Artist2ID, f.StoreID)
+	require.NoError(t, err)
+
+	_, works, err := repo.ArtistPlacement(ctx, f.ArtistID, f.StoreID)
+
+	require.NoError(t, err)
+	assert.False(t, works, "a colleague's link to a store is not this artist's link")
+}
+
+func TestArtistPlacement_UnknownArtist_ErrArtistNotFound(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+
+	_, _, err := repo.ArtistPlacement(context.Background(), uuid.New(), f.StoreID)
+
+	assert.ErrorIs(t, err, ErrArtistNotFound)
+}
+
+func TestArtistPlacement_ArtistWithNoSalon_NilSalon(t *testing.T) {
+	// artists.salon_id is nullable. Breaks if NULL is scanned into a zero
+	// UUID instead of nil - validateBookingParties would then compare
+	// uuid.Nil against the service's salon, which is a coincidence waiting
+	// to happen rather than a refusal.
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	f := newFixture(t, pool)
+	ctx := context.Background()
+
+	lone := insertUser(t, pool, "lone@dbtest.local", "artist")
+	var loneArtist uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO artists (user_id) VALUES ($1) RETURNING id`, lone).Scan(&loneArtist))
+
+	salon, works, err := repo.ArtistPlacement(ctx, loneArtist, f.StoreID)
+
+	require.NoError(t, err)
+	assert.Nil(t, salon, "an artist with no salon must report nil, not a zero UUID")
+	assert.False(t, works)
+}

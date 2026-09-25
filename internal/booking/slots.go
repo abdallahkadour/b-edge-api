@@ -13,7 +13,6 @@ package booking
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -157,12 +156,13 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	// ── Step 1: Check store is open ───────────────────────────────────────
 
-	store, err := s.repo.GetStore(ctx, storeID)
+	// Artist, store and service must belong together. A slot list is a
+	// promise that the time can be booked, so offering slots for a pairing
+	// the hold would refuse is a promise the API then breaks. The service is
+	// resolved here rather than at Step 3 so the check is one call.
+	service, store, err := s.validateBookingParties(ctx, artistID, storeID, serviceID)
 	if err != nil {
-		if errors.Is(err, ErrStoreNotFound) {
-			return nil, apperror.NotFound("STORE_NOT_FOUND", "Store not found")
-		}
-		return nil, fmt.Errorf("get available slots: get store: %w", err)
+		return nil, err
 	}
 
 	// Check for holiday or special hours on this specific date
@@ -243,13 +243,8 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	// ── Step 3: Get service info ──────────────────────────────────────────
 
-	service, err := s.repo.GetService(ctx, serviceID)
-	if err != nil {
-		// A service ID that does not resolve is a client error, not a server
-		// fault - mirror CreateBooking and HoldGuestSlot rather than falling
-		// through to the generic 500 handler.
-		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
-	}
+	// Resolved in Step 1 by validateBookingParties, which also proves it
+	// belongs to the artist's salon.
 
 	serviceDuration := time.Duration(service.DurationMin) * time.Minute
 

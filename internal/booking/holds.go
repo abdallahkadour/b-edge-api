@@ -58,15 +58,11 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		return nil, err
 	}
 
-	// GetService filters on is_active = TRUE, so inactive services return not found.
-	service, err := s.repo.GetService(ctx, serviceID)
+	// Artist, store and service must belong together - see
+	// validateBookingParties for the exploit this closed.
+	service, store, err := s.validateBookingParties(ctx, artistID, storeID, serviceID)
 	if err != nil {
-		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
-	}
-
-	store, err := s.repo.GetStore(ctx, storeID)
-	if err != nil {
-		return nil, fmt.Errorf("hold guest slot: get store: %w", err)
+		return nil, err
 	}
 
 	// If this slot falls before the store's early-bird cutoff, the surcharge

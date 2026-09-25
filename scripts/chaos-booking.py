@@ -590,6 +590,49 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
         f"onboarding seeded {hours}; store default {dflt}. A brand-new artist is "
         f"bookable without touching the hours screen")
 
+    # ── 3.6 artist, store and service must belong together ────────────────
+    #
+    # Added 2026-09-25. Until then the API accepted ANY combination across
+    # salons - both of these returned 201 against production data:
+    #   an artist + her store + another salon's cheap service
+    #       -> any artist bookable at the cheapest price on the platform,
+    #          filed under the OTHER salon (salon_id is copied from the service)
+    #   an artist + her service + another salon's store
+    #       -> booked somewhere she does not work
+    # Service IDs are public, so this needed no insider knowledge at all.
+    def cross_hold(artist, store, service, phone):
+        st, r = call("POST", "/bookings/guest/hold", {
+            "artist_id": artist, "store_id": store, "service_id": service,
+            "start_time": (datetime.now(timezone.utc) + timedelta(days=11))
+                          .replace(hour=12, minute=0, second=0, microsecond=0)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "customer_name": "Cross Probe", "customer_phone": phone})
+        bid = (r.get("data") or {}).get("booking_id")
+        if bid:
+            sql(f"DELETE FROM bookings WHERE id='{bid}'")
+        return st, err(r)
+
+    # POSITIVE CONTROL FIRST, and with a JOINED MEMBER rather than an owner.
+    # Joining links a member to every active store of the salon; if that ever
+    # stopped, this guard would refuse every booking with a member and the
+    # two refusals below would still "pass".
+    member = next((k for k in A if k.startswith("A") and k != "A1"), "A1")
+    st_ok, e_ok = cross_hold(A[member], ST["A"], SV["A"], "+96176000461")
+    st_svc, e_svc = cross_hold(A[member], ST["A"], SV["B"], "+96176000462")
+    st_sto, e_sto = cross_hold(A[member], ST["B"], SV["A"], "+96176000463")
+
+    if st_ok >= 400:
+        rec("3.6", "FAIL",
+            f"POSITIVE CONTROL FAILED: member {member} with her own salon's store and "
+            f"service was refused ({st_ok} {e_ok}). Nothing below means anything.")
+    else:
+        rec("3.6", "PASS" if e_svc == "SERVICE_NOT_FOUND" else "FAIL",
+            f"member {member} + her store + ANOTHER salon's service -> {st_svc} "
+            f"{e_svc or 'ACCEPTED'} (control with her own service: {st_ok})")
+        rec("3.6b", "PASS" if e_sto == "STORE_NOT_FOUND" else "FAIL",
+            f"member {member} + her service + ANOTHER salon's store -> {st_sto} "
+            f"{e_sto or 'ACCEPTED'}")
+
 
 def state_ledger():
     """Phase 4 deliverable: every booking this run produced, by final state."""
@@ -619,6 +662,19 @@ def state_ledger():
                                 OR final_price < 0 OR deposit_amount < 0)""")
     rec("4.1", "PASS" if overlaps == "0" else "FAIL",
         f"{total} bookings across the run; {overlaps} overlapping confirmed/held pairs")
+    # A standing invariant, not a probe: no booking, EVER, whose salon or
+    # store differs from its artist's. Checked across ALL history rather than
+    # this run, because the question is whether the cross-salon hold was ever
+    # used against real data. On 2026-09-25, when it was closed: 0 and 0.
+    cross_salon = sql("""SELECT count(*) FROM bookings b JOIN artists a ON a.id=b.artist_id
+                          WHERE b.salon_id IS DISTINCT FROM a.salon_id""")
+    cross_store = sql("""SELECT count(*) FROM bookings b JOIN artists a ON a.id=b.artist_id
+                          JOIN stores s ON s.id=b.store_id
+                          WHERE s.salon_id IS DISTINCT FROM a.salon_id""")
+    all_rows = sql("SELECT count(*) FROM bookings")
+    rec("4.3", "PASS" if cross_salon == "0" and cross_store == "0" and all_rows != "0" else "FAIL",
+        f"{cross_salon} bookings filed under a salon that is not their artist's, "
+        f"{cross_store} at a store outside it - across all {all_rows} bookings ever")
     rec("4.2", "PASS" if bad_money == "0" else "FAIL",
         f"{bad_money} rows with impossible money (NaN, negative, or deposit > price). "
         f"There is no ledger to reconcile - B-Edge moves no money - so this is the "

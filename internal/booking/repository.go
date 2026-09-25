@@ -55,6 +55,12 @@ type Repository interface {
 	// ArtistIsApproved gates the booking path on admin review - see
 	// checkArtistAcceptsNewBookings.
 	ArtistIsApproved(ctx context.Context, artistID uuid.UUID) (bool, error)
+
+	// ArtistPlacement reports the artist's salon (nil if they have none) and
+	// whether they work at storeID. ErrArtistNotFound if the artist does not
+	// exist. Read by validateBookingParties, which proves a booking's artist,
+	// store and service belong together.
+	ArtistPlacement(ctx context.Context, artistID, storeID uuid.UUID) (salonID *uuid.UUID, worksAtStore bool, err error)
 	GetArtistRotaDay(ctx context.Context, artistID, storeID uuid.UUID, dayOfWeek int) (*schedule.DayRota, error)
 	GetArtistRotaException(ctx context.Context, artistID, storeID uuid.UUID, date time.Time) (*schedule.DayException, error)
 
@@ -577,6 +583,30 @@ func (r *pgRepo) GetBusinessHoursException(ctx context.Context, storeID uuid.UUI
 }
 
 // GetService fetches a service by ID.
+// ArtistPlacement - one round trip for both facts validateBookingParties
+// needs about the artist. The EXISTS is evaluated per artist row, so an
+// artist with no artist_stores links at all reads worksAtStore=false rather
+// than dropping out of the result.
+func (r *pgRepo) ArtistPlacement(ctx context.Context, artistID, storeID uuid.UUID) (*uuid.UUID, bool, error) {
+	var salonID *uuid.UUID
+	var works bool
+	err := r.db.QueryRow(ctx, `
+		SELECT a.salon_id,
+		       EXISTS (SELECT 1 FROM artist_stores x
+		                WHERE x.artist_id = a.id AND x.store_id = $2)
+		  FROM artists a
+		 WHERE a.id = $1`,
+		artistID, storeID,
+	).Scan(&salonID, &works)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, ErrArtistNotFound
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("artist placement: %w", err)
+	}
+	return salonID, works, nil
+}
+
 func (r *pgRepo) GetService(ctx context.Context, serviceID uuid.UUID) (*SalonService, error) {
 	s := &SalonService{}
 	err := r.db.QueryRow(ctx, `

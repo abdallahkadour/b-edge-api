@@ -56,6 +56,13 @@ func (s *Service) JoinWaitlist(ctx context.Context, req JoinWaitlistRequest) (uu
 		return uuid.Nil, apperror.BadRequest("INVALID_DATE", "requested_date must be in YYYY-MM-DD format")
 	}
 
+	// Artist, store and service must belong together. This path checked
+	// nothing at all - not even that the IDs existed - so a cross-salon entry
+	// could later notify a customer about a slot she could never book.
+	if _, _, err := s.validateBookingParties(ctx, artistID, storeID, serviceID); err != nil {
+		return uuid.Nil, err
+	}
+
 	// E.164 before a users row is created. CreateGuestUser is a
 	// find-or-create on the phone, so an unnormalised number would create a
 	// SECOND account for a customer who already exists under the canonical

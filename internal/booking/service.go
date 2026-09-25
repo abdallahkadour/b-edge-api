@@ -274,15 +274,13 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, err
 	}
 
-	// Fetch service for duration and pricing - and derive salon_id from it
-	service, err := s.repo.GetService(ctx, serviceID)
+	// Artist, store and service must belong together - see
+	// validateBookingParties for the exploit this closed. salon_id is still
+	// derived from the service below, which is now safe because the service
+	// is proven to be in the artist's salon.
+	service, store, err := s.validateBookingParties(ctx, artistID, storeID, serviceID)
 	if err != nil {
-		return nil, apperror.NotFound("SERVICE_NOT_FOUND", "Service not found or no longer available")
-	}
-
-	store, err := s.repo.GetStore(ctx, storeID)
-	if err != nil {
-		return nil, fmt.Errorf("create booking: get store: %w", err)
+		return nil, err
 	}
 
 	// Same early-bird surcharge logic as HoldGuestSlot - see isEarlyBirdSlot.

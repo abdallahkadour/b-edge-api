@@ -187,7 +187,7 @@ func newMatrixRepo(status string, start time.Time, artistID uuid.UUID) *matrixRe
 				CalendarToken: &tok,
 			},
 			getArtistIDByUserIDArtistID: artistID,
-			getServiceSvc:               &SalonService{},
+			getServiceSvc:               &SalonService{SalonID: testSalonID},
 		},
 		current: status,
 	}

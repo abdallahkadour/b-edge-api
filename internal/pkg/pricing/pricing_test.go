@@ -1,9 +1,6 @@
 package pricing
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestPrice_OverrideBeforeSalon(t *testing.T) {
 	// Breaks if the COALESCE order is reversed - the salon price would win
@@ -23,12 +20,18 @@ func TestDeposit_IsCappedAtTheEffectivePrice(t *testing.T) {
 }
 
 func TestDetail_ColumnOrderIsTheContract(t *testing.T) {
-	cols := strings.Split(Detail("sv", "o"), ", ")
-	if len(cols) < 7 {
-		t.Fatalf("Detail must yield 7 columns, got %d: %q", len(cols), Detail("sv", "o"))
-	}
-	if cols[0] != "sv.price" || cols[1] != "sv.deposit_amount" ||
-		cols[2] != "o.price" || cols[3] != "o.deposit_amount" {
-		t.Fatalf("first four columns must be salon price, salon deposit, own price, own deposit; got %q", cols[:4])
+	// The exact string below IS the contract: callers scan these seven
+	// columns positionally (salon price, salon deposit, own price, own
+	// deposit, effective price, effective deposit, deposit capped), so a
+	// column dropped, duplicated, or reordered must fail this test. The
+	// expected value is written out by hand, not built by calling
+	// Price/Deposit/DepositCapped - doing that would make this a mirror of
+	// Detail's own implementation, which passes no matter what Detail does.
+	want := "sv.price, sv.deposit_amount, o.price, o.deposit_amount, " +
+		"COALESCE(o.price, sv.price), " +
+		"LEAST(COALESCE(o.deposit_amount, sv.deposit_amount), COALESCE(o.price, sv.price)), " +
+		"(COALESCE(o.deposit_amount, sv.deposit_amount) > COALESCE(o.price, sv.price))"
+	if got := Detail("sv", "o"); got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }

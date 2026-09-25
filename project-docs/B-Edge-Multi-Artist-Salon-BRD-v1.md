@@ -94,7 +94,7 @@ solo experience is a net loss.
   out-of-band. This does not change.
 - **An artist belonging to more than one salon** (see D-MS2).
 - **Non-artist staff roles** — receptionist, manager, assistant (see D-MS10).
-- **Per-artist pricing overrides** of the salon menu (see D-MS9).
+- ~~**Per-artist pricing overrides** of the salon menu (see D-MS9).~~ Brought into scope 2026-09-25 — see the Per-Artist Pricing Spec.
 - **Commission/rent agreements between owner and member.** B-Edge reports who earned what;
   the parties settle privately.
 
@@ -111,7 +111,7 @@ solo experience is a net loss.
 | **BR-5** | A member **cannot be removed while they hold future confirmed bookings.** Those must be reassigned or cancelled first. | A customer must never discover their appointment evaporated. |
 | **BR-6** | An artist's `handle`, profile, portfolio, reviews and rating **belong to the artist**, not the salon, and travel with them on departure. | `artists.handle` is the public identity behind `/book/rania`. |
 | **BR-7** | A salon invitation **does not bypass platform approval.** An invited artist still enters `status='pending'` and requires admin approval. | The approval gate is a quality control, not an onboarding step. |
-| **BR-8** | Shared salon resources are **owner-write, member-read**: services, stores, store hours, discounts, products, payment methods, billing. | G1. This is the boundary that does not exist today. |
+| **BR-8** | Shared salon resources are **owner-write, member-read**: services, stores, store hours, discounts, products, payment methods, billing. | G1. This is the boundary that does not exist today. **Amended 2026-09-25:** the salon *menu* stays owner-write, but **which services an artist offers, and at what price, is her own to set** (`own_services:write`), with the owner able to override (`member_services:write`). Per-Artist Pricing Spec, PP-3. |
 | **BR-9** | Personal resources are **member-write**: own working hours, own bookings, own client notes, own portfolio, own profile. | A member must be able to run their own day. |
 | **BR-10** | An artist's bookable availability is `store_hours ∩ artist_schedule`, minus their own bookings and buffers. | G3. Defaults to "all store hours" so soloists see no change. |
 | **BR-11** | A member sees **only their own** earnings. The owner sees **every member's** earnings and the salon aggregate. | Commercially standard; also the least surprising default. |
@@ -321,7 +321,7 @@ the commercial shape of the product and should be confirmed explicitly.
 | **D-MS6** | One payment account per salon, or per artist? | **One per salon, v1.** `salon_payment_methods` has no `artist_id`, and one OMT/Whish account per business matches Lebanese practice. B-Edge reports the split and moves no money (BR-13). | **FOUNDER** — has a real fairness cost to members |
 | **D-MS7** | Per-artist working hours? | **Yes — required.** `artist_schedules` intersected with store hours, defaulting to the full store window. Without it a salon cannot staff a rota. | **DECIDED** |
 | **D-MS8** | Does a salon invite bypass admin approval? | **No.** Invited artists still land in `pending` (BR-7). | **DECIDED** |
-| **D-MS9** | Can a member set their own prices? | **No, v1.** Services are salon-scoped and the owner owns the menu. Per-artist price tiers are a known salon need — deferred, not denied. | **DECIDED** |
+| **D-MS9** | Can a member set their own prices? | ~~No, v1.~~ **Superseded 2026-09-25: yes.** Each artist sets her own price and deposit per service, optionally, and switches each service on or off; the owner can change any member's. The owner still owns the *menu* — which services exist and their salon price. See `B-Edge-Per-Artist-Pricing-Spec-v1.md`, decisions PP-1 … PP-9. | **SUPERSEDED** |
 | **D-MS10** | Non-artist staff roles (receptionist, manager)? | **Out of scope, v1.** The capability matrix is designed so a third role is a new column, not a redesign. | **DECIDED** |
 | **D-MS11** | Does "no preference" booking ship in v1? | **No — FR-C3 is Could.** Deterministic assignment interacts with the GIST exclusion constraint and deserves its own design. Ship FR-C1/C2 (explicit artist choice) first. | **DECIDED** |
 

@@ -30,9 +30,16 @@ Restores in finally.
 """
 import argparse, base64, concurrent.futures as cf, json, re, subprocess, sys, urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 API = "http://localhost:3000/api/v1"
-PG = ["docker", "exec", "bedge-postgres", "psql", "-U", "postgres", "-d", "bedge", "-tA"]
+# -v ON_ERROR_STOP=1: a psql zero exit must mean the statement actually ran.
+# Without it a syntax/column error prints to stderr but psql still exits 0
+# on some libpq versions, and "ERROR" in stderr is a substring check that a
+# quoted value containing the word would also trip - the flag makes the
+# failure a real nonzero exit rather than relying on that string match alone.
+PG = ["docker", "exec", "bedge-postgres", "psql", "-U", "postgres", "-d", "bedge",
+      "-tA", "-v", "ON_ERROR_STOP=1"]
 PW = "password123"
 ADMIN = "abdallah.kadour@b-edge.com"
 TAG = "chaos"
@@ -148,6 +155,20 @@ def join(owner_tok, email, phone, handle, admin_tok):
                  {"handle": handle, "category": "makeup"}, login(email))
     if st != 201:
         raise RuntimeError(f"accept {email}: {st} {err(r)}")
+
+    # PP-7: a member who joins offers NOTHING until she switches services on.
+    # Before migration 052 every member offered everything, and this harness
+    # relied on it. Uses the real endpoint rather than inserting rows.
+    tok = login(email)
+    st, r = call("GET", "/artists/salon/my-services", None, tok)
+    if st >= 400:
+        raise RuntimeError(f"my-services {email}: {st} {err(r)}")
+    for o in (r.get("data") or []):
+        st2, r2 = call("PUT", f"/artists/salon/my-services/{o['service_id']}",
+                        {"offered": True}, tok)
+        if st2 >= 400:
+            raise RuntimeError(f"switch on {o['service_id']} for {email}: {st2} {err(r2)}")
+
     aid = sql(f"""SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id
                    WHERE u.email='{email}'""")
     approve_artist(aid, admin_tok)
@@ -633,6 +654,74 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
             f"member {member} + her service + ANOTHER salon's store -> {st_sto} "
             f"{e_sto or 'ACCEPTED'}")
 
+    # ── 3.7 per-artist pricing: shown == charged, per artist ──────────────
+    # Two artists of ONE salon, one service. The member sets 200; the owner
+    # keeps the salon price. Each hold must charge the right one, the hold's
+    # quote must equal what was stored, and a switched-off service refuses.
+    #
+    # Ruling P4: the API trims trailing zeros ("200") while psql prints
+    # "200.00" - a bare string comparison of listed/shown/stored would fail
+    # on correct code. Every value is parsed with Decimal(str(x)) and
+    # compared numerically; a None anywhere (never silently coerced to
+    # "equal" another None) fails the case. The raw strings still go in the
+    # detail message so a failure is readable.
+    owner_key, member_key = "A1", member
+    svc_id = SV["A"]
+    tok_m = login(f"{TAG}.{member_key.lower()}@test.bedge.com")
+    call("PUT", f"/artists/salon/my-services/{svc_id}",
+         {"offered": True, "price": "200.00"}, tok_m)
+    salon_price = sql(f"SELECT price FROM services WHERE id='{svc_id}'")
+
+    def quote(artist, phone):
+        st, r = call("POST", "/bookings/guest/hold", {
+            "artist_id": artist, "store_id": ST["A"], "service_id": svc_id,
+            "start_time": (datetime.now(timezone.utc) + timedelta(days=13))
+                          .replace(hour=14, minute=0, second=0, microsecond=0)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "customer_name": "Price Probe", "customer_phone": phone})
+        d = r.get("data") or {}
+        stored = sql(f"SELECT original_price FROM bookings WHERE id='{d.get('booking_id')}'") \
+            if d.get("booking_id") else None
+        if d.get("booking_id"):
+            sql(f"DELETE FROM bookings WHERE id='{d['booking_id']}'")
+        return st, d.get("original_price"), stored, err(r)
+
+    # The price a customer SEES on her profile, before any hold. Discovery
+    # first; if a member is not listed there (visibility is keyed on
+    # subscriptions, which is not what this case tests), the funnel's own
+    # list. If NEITHER shows the service, `listed` stays None and 3.7 FAILS -
+    # never skip the comparison.
+    st_p, r_p = call("GET", f"/discovery/artists/{A[member_key]}")
+    listed = next((x.get("price") for x in ((r_p.get("data") or {}).get("services") or [])
+                   if x.get("id") == svc_id), None)
+    if listed is None:
+        st_p, r_p = call("GET", f"/artists/{A[member_key]}/services")
+        listed = next((x.get("price") for x in (r_p.get("data") or []) if x.get("id") == svc_id), None)
+    st_m, shown_m, stored_m, _ = quote(A[member_key], "+96176000471")
+    st_o, shown_o, stored_o, _ = quote(A[owner_key], "+96176000472")
+
+    def dec(x):
+        # None must NEVER become "equal" to another None below - a missing
+        # value is a FAIL, not a wildcard.
+        return Decimal(str(x)) if x is not None else None
+
+    listed_d, shown_m_d, stored_m_d = dec(listed), dec(shown_m), dec(stored_m)
+    shown_o_d, stored_o_d, salon_d = dec(shown_o), dec(stored_o), dec(salon_price)
+    two_hundred = Decimal("200.00")
+    all_present = all(v is not None for v in
+                       (listed_d, shown_m_d, stored_m_d, shown_o_d, stored_o_d, salon_d))
+    ok = (st_m < 400 and st_o < 400 and all_present
+          and listed_d == shown_m_d == stored_m_d == two_hundred
+          and shown_o_d == stored_o_d == salon_d)
+    rec("3.7", "PASS" if ok else "FAIL",
+        f"member override: profile {listed} / hold {shown_m} / stored {stored_m}; "
+        f"owner at salon price: hold {shown_o} / stored {stored_o} (salon {salon_price})")
+
+    call("PUT", f"/artists/salon/my-services/{svc_id}", {"offered": False}, tok_m)
+    st_off, _, _, e_off = quote(A[member_key], "+96176000473")
+    rec("3.7b", "PASS" if e_off == "SERVICE_NOT_FOUND" else "FAIL",
+        f"after she switched it off: {st_off} {e_off or 'ACCEPTED'}")
+
 
 def state_ledger():
     """Phase 4 deliverable: every booking this run produced, by final state."""
@@ -660,6 +749,15 @@ def state_ledger():
                          WHERE special_requests LIKE '{TAG}%'
                            AND (final_price::text='NaN' OR deposit_amount > final_price
                                 OR final_price < 0 OR deposit_amount < 0)""")
+    # artist_services holds per-artist price/deposit OVERRIDES (PP-2); both
+    # columns are nullable (null = "use the salon's"), so this is a standing
+    # invariant across ALL rows, like 4.3, rather than scoped to this run -
+    # there is no TAG marker on this table to scope by.
+    bad_offerings = sql("""SELECT count(*) FROM artist_services
+                            WHERE (price IS NOT NULL
+                                   AND (price::text='NaN' OR price < 0))
+                               OR (deposit_amount IS NOT NULL
+                                   AND (deposit_amount::text='NaN' OR deposit_amount < 0))""")
     rec("4.1", "PASS" if overlaps == "0" else "FAIL",
         f"{total} bookings across the run; {overlaps} overlapping confirmed/held pairs")
     # A standing invariant, not a probe: no booking, EVER, whose salon or
@@ -675,10 +773,11 @@ def state_ledger():
     rec("4.3", "PASS" if cross_salon == "0" and cross_store == "0" and all_rows != "0" else "FAIL",
         f"{cross_salon} bookings filed under a salon that is not their artist's, "
         f"{cross_store} at a store outside it - across all {all_rows} bookings ever")
-    rec("4.2", "PASS" if bad_money == "0" else "FAIL",
-        f"{bad_money} rows with impossible money (NaN, negative, or deposit > price). "
-        f"There is no ledger to reconcile - B-Edge moves no money - so this is the "
-        f"strongest financial assertion the architecture permits")
+    rec("4.2", "PASS" if bad_money == "0" and bad_offerings == "0" else "FAIL",
+        f"{bad_money} booking rows with impossible money (NaN, negative, or deposit > "
+        f"price); {bad_offerings} artist_services overrides with a NaN or negative "
+        f"price/deposit. There is no ledger to reconcile - B-Edge moves no money - so "
+        f"this is the strongest financial assertion the architecture permits")
 
 
 def cleanup():

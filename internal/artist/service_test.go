@@ -53,6 +53,8 @@ type mockRepo struct {
 	getStoresBySalonErr           error
 	getServicesBySalonSvcs        []*SalonServiceRecord
 	getServicesBySalonErr         error
+	offeredServices               []*SalonServiceRecord
+	offeredServicesErr            error
 	getServiceByIDSvc             *SalonServiceRecord
 	getServiceByIDErr             error
 	createServiceErr              error
@@ -124,6 +126,9 @@ func (m *mockRepo) CreateStore(_ context.Context, store *Store, artistID uuid.UU
 
 func (m *mockRepo) GetServicesBySalon(_ context.Context, _ uuid.UUID) ([]*SalonServiceRecord, error) {
 	return m.getServicesBySalonSvcs, m.getServicesBySalonErr
+}
+func (m *mockRepo) GetOfferedServicesByArtist(_ context.Context, _ uuid.UUID) ([]*SalonServiceRecord, error) {
+	return m.offeredServices, m.offeredServicesErr
 }
 func (m *mockRepo) GetServiceByID(_ context.Context, _ uuid.UUID) (*SalonServiceRecord, error) {
 	return m.getServiceByIDSvc, m.getServiceByIDErr

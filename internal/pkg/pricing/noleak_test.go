@@ -37,9 +37,8 @@ var (
 // Entries marked TEMPORARY are removed by the task that migrates them;
 // TestAllowlist_EveryEntryStillReadsMoney fails if one is left behind.
 var allowedReaders = map[string]string{
-	"artist/repository.go:GetServicesBySalon":  "the owner's menu screen - it shows and edits the SALON price, which is what it must read",
-	"artist/repository.go:GetServiceByID":      "the owner editing one service of the salon menu",
-	"discovery/repository.go:GetSalonServices": "TEMPORARY - replaced by GetArtistServices in Task 5",
+	"artist/repository.go:GetServicesBySalon": "the owner's menu screen - it shows and edits the SALON price, which is what it must read",
+	"artist/repository.go:GetServiceByID":     "the owner editing one service of the salon menu",
 }
 
 func moneyReaders(t *testing.T) map[string]bool {

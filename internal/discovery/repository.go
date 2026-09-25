@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
@@ -41,9 +42,10 @@ type Repository interface {
 	// GetArtistStores returns the active stores an artist works at.
 	GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*StoreRow, error)
 
-	// GetSalonServices returns the active services for a salon (an artist's
-	// service menu derives from their salon).
-	GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*ServiceRow, error)
+	// GetArtistServices returns the services THIS ARTIST offers, at her
+	// price and deposit, cheapest first. Services she has not switched on
+	// are not listed.
+	GetArtistServices(ctx context.Context, artistID uuid.UUID) ([]*ServiceRow, error)
 
 	// GetStoreHours returns every configured weekday row for the given
 	// stores, in one query rather than one per store.
@@ -233,7 +235,6 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 	return result, nil
 }
 
-// GetSalonServices returns the active services for a salon, cheapest first.
 // GetStoreHours returns every configured weekday row for the given stores.
 func (r *pgRepo) GetStoreHours(ctx context.Context, storeIDs []uuid.UUID) ([]*DayHoursRow, error) {
 	if len(storeIDs) == 0 {
@@ -301,17 +302,19 @@ func (r *pgRepo) GetStoreExceptions(ctx context.Context, storeIDs []uuid.UUID, f
 	return result, nil
 }
 
-func (r *pgRepo) GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*ServiceRow, error) {
+func (r *pgRepo) GetArtistServices(ctx context.Context, artistID uuid.UUID) ([]*ServiceRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, name, duration_min, price, deposit_amount
-		FROM services
-		WHERE salon_id = $1
-		AND is_active = TRUE
-		ORDER BY price ASC, name ASC`,
-		salonID,
+		SELECT s.id, s.name, s.duration_min,
+		       `+pricing.Price("s", "os")+` AS effective_price,
+		       `+pricing.Deposit("s", "os")+` AS effective_deposit
+		  FROM services s
+		  JOIN artist_services os ON os.service_id = s.id AND os.artist_id = $1
+		 WHERE s.is_active = TRUE
+		 ORDER BY effective_price ASC, s.name ASC`,
+		artistID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get salon services: %w", err)
+		return nil, fmt.Errorf("get artist services: %w", err)
 	}
 	defer rows.Close()
 
@@ -320,14 +323,14 @@ func (r *pgRepo) GetSalonServices(ctx context.Context, salonID uuid.UUID) ([]*Se
 	// and only ApiService.getArray coalesces it away on the client.
 	result := make([]*ServiceRow, 0)
 	for rows.Next() {
-		s := &ServiceRow{}
-		if err := rows.Scan(&s.ID, &s.Name, &s.DurationMin, &s.Price, &s.DepositAmount); err != nil {
-			return nil, fmt.Errorf("scan service row: %w", err)
+		sr := &ServiceRow{}
+		if err := rows.Scan(&sr.ID, &sr.Name, &sr.DurationMin, &sr.Price, &sr.DepositAmount); err != nil {
+			return nil, fmt.Errorf("scan artist service: %w", err)
 		}
-		result = append(result, s)
+		result = append(result, sr)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("get salon services rows: %w", err)
+		return nil, fmt.Errorf("get artist services rows: %w", err)
 	}
 	return result, nil
 }

@@ -16,20 +16,20 @@ import (
 // ── Mock repository ───────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	listCards         []*ArtistCardRow
-	listErr           error
-	profile           *ArtistProfileRow
-	profileErr        error
-	stores            []*StoreRow
-	storesErr         error
-	services          []*ServiceRow
-	servicesErr       error
-	hours             []*DayHoursRow
-	hoursErr          error
-	exceptions        []*ExceptionRow
-	exceptionsErr     error
-	lastListParams    ListArtistCardsParams
-	lastSalonServices uuid.UUID
+	listCards          []*ArtistCardRow
+	listErr            error
+	profile            *ArtistProfileRow
+	profileErr         error
+	stores             []*StoreRow
+	storesErr          error
+	services           []*ServiceRow
+	servicesErr        error
+	hours              []*DayHoursRow
+	hoursErr           error
+	exceptions         []*ExceptionRow
+	exceptionsErr      error
+	lastListParams     ListArtistCardsParams
+	lastArtistServices uuid.UUID
 	// captured args for assertions
 	lastHoursStoreIDs []uuid.UUID
 	lastExcFrom       time.Time
@@ -46,8 +46,8 @@ func (m *mockRepo) GetArtistProfile(_ context.Context, _ uuid.UUID) (*ArtistProf
 func (m *mockRepo) GetArtistStores(_ context.Context, _ uuid.UUID) ([]*StoreRow, error) {
 	return m.stores, m.storesErr
 }
-func (m *mockRepo) GetSalonServices(_ context.Context, salonID uuid.UUID) ([]*ServiceRow, error) {
-	m.lastSalonServices = salonID
+func (m *mockRepo) GetArtistServices(_ context.Context, artistID uuid.UUID) ([]*ServiceRow, error) {
+	m.lastArtistServices = artistID
 	return m.services, m.servicesErr
 }
 func (m *mockRepo) GetStoreHours(_ context.Context, storeIDs []uuid.UUID) ([]*DayHoursRow, error) {
@@ -141,9 +141,10 @@ func TestGetArtistProfile_NotFound(t *testing.T) {
 // TestGetArtistProfile_Aggregates - profile, stores, and services combine.
 func TestGetArtistProfile_Aggregates(t *testing.T) {
 	salonID := uuid.New()
+	artistID := uuid.New()
 	repo := &mockRepo{
 		profile: &ArtistProfileRow{
-			ID: uuid.New(), Name: "Rania", Rating: decimal.NewFromFloat(4.9),
+			ID: artistID, Name: "Rania", Rating: decimal.NewFromFloat(4.9),
 			ReviewCount: 127, IsVerified: true, SalonID: &salonID,
 		},
 		stores: []*StoreRow{
@@ -156,7 +157,7 @@ func TestGetArtistProfile_Aggregates(t *testing.T) {
 	}
 	svc := newTestService(repo, time.Now())
 
-	profile, err := svc.GetArtistProfile(context.Background(), uuid.New())
+	profile, err := svc.GetArtistProfile(context.Background(), artistID)
 
 	require.NoError(t, err)
 	assert.Equal(t, "Rania", profile.Name)
@@ -164,11 +165,11 @@ func TestGetArtistProfile_Aggregates(t *testing.T) {
 	require.Len(t, profile.Stores, 2)
 	require.Len(t, profile.Services, 1)
 	assert.Equal(t, "Bridal Makeup", profile.Services[0].Name)
-	assert.Equal(t, salonID, repo.lastSalonServices, "services fetched for the artist's salon")
+	assert.Equal(t, artistID, repo.lastArtistServices, "services fetched for THIS artist, not the salon")
 }
 
 // TestGetArtistProfile_NoSalon - an artist with no salon returns an empty (non-nil)
-// services list and does not call GetSalonServices.
+// services list and does not call GetArtistServices.
 func TestGetArtistProfile_NoSalon(t *testing.T) {
 	repo := &mockRepo{
 		profile: &ArtistProfileRow{
@@ -184,7 +185,7 @@ func TestGetArtistProfile_NoSalon(t *testing.T) {
 	assert.NotNil(t, profile.Services)
 	assert.Empty(t, profile.Services)
 	assert.Empty(t, profile.Stores)
-	assert.Equal(t, uuid.Nil, repo.lastSalonServices, "no salon → GetSalonServices not called")
+	assert.Equal(t, uuid.Nil, repo.lastArtistServices, "no salon → GetArtistServices not called")
 }
 
 // ── Open/Closed status ────────────────────────────────────────────────────────

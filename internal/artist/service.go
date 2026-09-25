@@ -225,11 +225,11 @@ func (s *Service) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]
 	return result, nil
 }
 
-// Add this method to internal/artist/service.go, after GetServicesBySalon.
-
-// GetPublicServicesByArtist returns active services for an artist's salon.
-// Public endpoint - no authentication required. Used by the customer PWA
-// to display services on an artist's profile page.
+// GetPublicServicesByArtist returns the services THIS ARTIST offers - active
+// only, at her price and deposit. A service she has not switched on is not
+// listed, even if the salon offers it. Public endpoint - no authentication
+// required. Used by the customer PWA to display services on an artist's
+// profile page.
 func (s *Service) GetPublicServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*ServiceResponse, error) {
 	// Fetch the artist profile to get their salon_id.
 	profile, err := s.repo.GetArtistByID(ctx, artistID)
@@ -245,25 +245,15 @@ func (s *Service) GetPublicServicesByArtist(ctx context.Context, artistID uuid.U
 		return []*ServiceResponse{}, nil
 	}
 
-	// Reuse the salon services query, then drop anything inactive.
-	//
-	// GetServicesBySalon deliberately returns inactive services - the artist
-	// dashboard lists them so they can be reactivated. Customers must never
-	// see them: booking.GetService filters on is_active, so an inactive
-	// service is listed and selectable but fails at the slot step with a
-	// confusing 404 two screens later.
-	all, err := s.GetServicesBySalon(ctx, *profile.SalonID)
+	records, err := s.repo.GetOfferedServicesByArtist(ctx, artistID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get public services by artist: %w", err)
 	}
-
-	active := make([]*ServiceResponse, 0, len(all))
-	for _, svc := range all {
-		if svc.IsActive {
-			active = append(active, svc)
-		}
+	out := make([]*ServiceResponse, 0, len(records))
+	for _, rec := range records {
+		out = append(out, toServiceResponse(rec))
 	}
-	return active, nil
+	return out, nil
 }
 
 // CreateService adds a new service to a salon's catalogue.

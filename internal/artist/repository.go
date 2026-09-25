@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 )
 
@@ -66,6 +67,10 @@ type Repository interface {
 	UpdateStore(ctx context.Context, storeID uuid.UUID, req UpdateStoreRequest) error
 	GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error)
 	GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error)
+	// GetOfferedServicesByArtist is the CUSTOMER's view of an artist's menu:
+	// only services she offers, active only, at her price and deposit.
+	// Scanned by scanServices, so the column order below is fixed.
+	GetOfferedServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*SalonServiceRecord, error)
 	CreateService(ctx context.Context, s *SalonServiceRecord) error
 	UpdateService(ctx context.Context, id uuid.UUID, req UpdateServiceRequest) error
 	DeleteService(ctx context.Context, id uuid.UUID) error
@@ -453,6 +458,25 @@ func (r *pgRepo) GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get services by salon: %w", err)
+	}
+	defer rows.Close()
+	return scanServices(rows)
+}
+
+func (r *pgRepo) GetOfferedServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*SalonServiceRecord, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT s.id, s.salon_id, s.category_id, s.name, s.name_ar, s.description,
+		       s.duration_min, s.buffer_min, s.active_duration_min,
+		       `+pricing.Price("s", "os")+`, `+pricing.Deposit("s", "os")+`,
+		       s.deposit_deadline_hours, s.is_active, s.is_custom, s.created_at, s.updated_at
+		  FROM services s
+		  JOIN artist_services os ON os.service_id = s.id AND os.artist_id = $1
+		 WHERE s.is_active = TRUE
+		 ORDER BY s.name ASC`,
+		artistID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get offered services by artist: %w", err)
 	}
 	defer rows.Close()
 	return scanServices(rows)

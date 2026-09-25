@@ -170,10 +170,11 @@ func (s *Service) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Pu
 		return nil, fmt.Errorf("get artist profile: %w", err)
 	}
 
-	// Services derive from the artist's salon. No salon → empty menu.
+	// Services are the ones THIS artist has switched on, at her price. No
+	// salon → empty menu.
 	services := make([]ServiceCard, 0)
 	if profile.SalonID != nil {
-		serviceRows, err := s.repo.GetSalonServices(ctx, *profile.SalonID)
+		serviceRows, err := s.repo.GetArtistServices(ctx, artistID)
 		if err != nil {
 			return nil, fmt.Errorf("get artist profile: services: %w", err)
 		}

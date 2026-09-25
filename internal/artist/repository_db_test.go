@@ -33,6 +33,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -138,4 +139,26 @@ func TestUpdateArtistProfile_ExplicitNull_ClearsColumnToNull(t *testing.T) {
 
 	assert.Nil(t, readBio(t, pool, artistID),
 		"an explicit JSON null must clear the column to NULL")
+}
+
+func TestGetOfferedServicesByArtist_OnlyHerOfferings_AtHerPrice(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	artistID := newArtistFixture(t, pool)
+	var salon, bridal, nails uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT salon_id FROM artists WHERE id=$1`, artistID).Scan(&salon))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Bridal',90,100) RETURNING id`, salon).Scan(&bridal))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Nails',45,40) RETURNING id`, salon).Scan(&nails))
+	_, err := pool.Exec(ctx, `INSERT INTO artist_services (artist_id,service_id,price) VALUES ($1,$2,200)`,
+		artistID, bridal)
+	require.NoError(t, err)
+
+	recs, err := NewRepository(pool).GetOfferedServicesByArtist(ctx, artistID)
+
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "the owner's menu has two services; the customer must see only hers")
+	assert.Equal(t, "Bridal", recs[0].Name)
+	assert.True(t, recs[0].Price.Equal(decimal.RequireFromString("200")), "got %s", recs[0].Price)
 }

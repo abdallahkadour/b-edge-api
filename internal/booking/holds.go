@@ -69,10 +69,11 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 	// the picker badged this slot with must actually be charged - otherwise
 	// the badge is decorative and the customer is quoted a price that never
 	// gets applied.
-	finalPrice := service.Price
+	earlyBirdFee := zeroDecimal()
 	if isEarlyBirdSlot(store, startTime.UTC()) {
-		finalPrice = finalPrice.Add(store.EarlyBirdFee)
+		earlyBirdFee = store.EarlyBirdFee
 	}
+	finalPrice := service.Price.Add(earlyBirdFee)
 
 	endTime := startTime.Add(time.Duration(service.DurationMin) * time.Minute)
 	// The span actually reserved on the calendar: the appointment plus any
@@ -115,10 +116,14 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 	}
 
 	return &HoldGuestSlotResponse{
-		BookingID: b.ID,
-		HeldUntil: heldUntil,
-		StartTime: b.StartTime,
-		EndTime:   b.EndTime,
+		BookingID:     b.ID,
+		HeldUntil:     heldUntil,
+		StartTime:     b.StartTime,
+		EndTime:       b.EndTime,
+		OriginalPrice: b.OriginalPrice,
+		EarlyBirdFee:  earlyBirdFee,
+		FinalPrice:    b.FinalPrice,
+		DepositAmount: b.DepositAmount,
 	}, nil
 }
 

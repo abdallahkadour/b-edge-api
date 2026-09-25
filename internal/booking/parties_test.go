@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -241,4 +242,24 @@ func TestHoldGuestSlot_DatabaseErrorOnService_IsNotA404(t *testing.T) {
 	require.Error(t, err)
 	var appErr *apperror.AppError
 	assert.False(t, errors.As(err, &appErr), "a database error must surface as an internal error, got %v", err)
+}
+
+func TestHoldGuestSlot_ReturnsWhatItCharged(t *testing.T) {
+	// The last funnel screen used to display the price remembered from when
+	// the profile opened. It must display THIS, which is what was stored.
+	svc := defaultService()
+	svc.Price = decimal.RequireFromString("200.00")
+	svc.DepositAmount = decimal.RequireFromString("60.00")
+	repo := &mockRepo{getServiceSvc: svc, getStoreStore: defaultStore()}
+
+	res, err := newTestService(repo).HoldGuestSlot(context.Background(), holdReq())
+
+	require.NoError(t, err)
+	stored := repo.createBookingCaptured
+	require.NotNil(t, stored)
+	assert.True(t, res.FinalPrice.Equal(stored.FinalPrice), "shown %s, stored %s", res.FinalPrice, stored.FinalPrice)
+	assert.True(t, res.OriginalPrice.Equal(stored.OriginalPrice))
+	assert.True(t, res.DepositAmount.Equal(stored.DepositAmount))
+	assert.True(t, res.FinalPrice.Equal(res.OriginalPrice.Add(res.EarlyBirdFee)),
+		"final must equal original + early-bird fee")
 }

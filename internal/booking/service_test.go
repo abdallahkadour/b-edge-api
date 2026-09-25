@@ -1951,6 +1951,7 @@ func TestHoldGuestSlot_EarlyBird_SurchargeApplied(t *testing.T) {
 	assert.True(t, repo.createBookingCaptured.FinalPrice.Equal(dec("160.00")),
 		"expected 150 + 10 surcharge = 160, got %s", repo.createBookingCaptured.FinalPrice.String())
 	assert.True(t, repo.createBookingCaptured.OriginalPrice.Equal(dec("150.00")))
+	assert.True(t, res.EarlyBirdFee.IsPositive(), "the early-bird fee must be returned, not only charged")
 }
 
 func TestHoldGuestSlot_NotEarlyBird_NoSurcharge(t *testing.T) {

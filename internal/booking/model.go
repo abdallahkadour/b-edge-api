@@ -207,6 +207,15 @@ type HoldGuestSlotResponse struct {
 	HeldUntil time.Time `json:"held_until"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
+
+	// What this hold CHARGED. The funnel's last screen displays these rather
+	// than numbers remembered from the start of the funnel - which missed
+	// the early-bird fee, and since migration 052 could also be a price the
+	// artist has since changed.
+	OriginalPrice decimal.Decimal `json:"original_price"`
+	EarlyBirdFee  decimal.Decimal `json:"early_bird_fee"`
+	FinalPrice    decimal.Decimal `json:"final_price"`
+	DepositAmount decimal.Decimal `json:"deposit_amount"`
 }
 
 // Store holds booking-relevant fields from the stores table.

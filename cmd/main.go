@@ -30,6 +30,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/maintenance"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/notification"
+	"github.com/abdallahkadour/b-edge-api/internal/offering"
 	"github.com/abdallahkadour/b-edge-api/internal/payout"
 	product "github.com/abdallahkadour/b-edge-api/internal/product"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
@@ -203,6 +204,9 @@ func main() {
 		inviteBase = "http://localhost:4300"
 	}
 	membership.RegisterRoutes(app, pool, logger, inviteBase)
+	// Per-artist service switches, prices and deposits (PP-3): an artist sets
+	// her own; the salon owner can change or remove any member's.
+	offering.RegisterRoutes(app, pool, logger)
 	// Start server in background goroutine
 	port := os.Getenv("PORT")
 	if port == "" {

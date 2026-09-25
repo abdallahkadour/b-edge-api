@@ -162,3 +162,38 @@ func TestGetOfferedServicesByArtist_OnlyHerOfferings_AtHerPrice(t *testing.T) {
 	assert.Equal(t, "Bridal", recs[0].Name)
 	assert.True(t, recs[0].Price.Equal(decimal.RequireFromString("200")), "got %s", recs[0].Price)
 }
+
+// TestGetOfferedServicesByArtist_CheapestFirst - spec §6: "Her profile lists
+// only services she has switched on, at her price and deposit, cheapest
+// first." Name order and price order deliberately DISAGREE here ("Acrylic"
+// sorts before "Bridal" alphabetically, but Bridal is her cheaper service),
+// so an ORDER BY name would pass this test for the wrong reason if it
+// happened to also be cheapest; picking names where the two orders conflict
+// is what makes the assertion mean anything.
+func TestGetOfferedServicesByArtist_CheapestFirst(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	artistID := newArtistFixture(t, pool)
+	var salon, acrylic, bridal uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT salon_id FROM artists WHERE id=$1`, artistID).Scan(&salon))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Acrylic',60,100) RETURNING id`, salon).Scan(&acrylic))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Bridal',90,100) RETURNING id`, salon).Scan(&bridal))
+	// She prices Acrylic at 90 and Bridal at 40 - alphabetical order and
+	// price order disagree.
+	_, err := pool.Exec(ctx, `INSERT INTO artist_services (artist_id,service_id,price) VALUES ($1,$2,90)`,
+		artistID, acrylic)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO artist_services (artist_id,service_id,price) VALUES ($1,$2,40)`,
+		artistID, bridal)
+	require.NoError(t, err)
+
+	recs, err := NewRepository(pool).GetOfferedServicesByArtist(ctx, artistID)
+
+	require.NoError(t, err)
+	require.Len(t, recs, 2)
+	assert.Equal(t, "Bridal", recs[0].Name, "her cheaper service must lead, even though it sorts second by name")
+	assert.True(t, recs[0].Price.Equal(decimal.RequireFromString("40")), "got %s", recs[0].Price)
+	assert.Equal(t, "Acrylic", recs[1].Name)
+}

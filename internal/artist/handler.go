@@ -246,8 +246,10 @@ func (h *Handler) GetArtistByID(c *fiber.Ctx) error {
 
 // GetPublicServicesByArtist godoc
 // @Summary      Get active services for an artist (public)
-// @Description  Returns all active services for the artist's salon.
+// @Description  Returns only the active services this artist has switched on,
 //
+//	at her price and deposit, cheapest first. A service the salon offers
+//	but she has not switched on is not listed.
 //	Used by the customer PWA to display available services.
 //	No authentication required.
 //

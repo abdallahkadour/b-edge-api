@@ -68,8 +68,9 @@ type Repository interface {
 	GetServicesBySalon(ctx context.Context, salonID uuid.UUID) ([]*SalonServiceRecord, error)
 	GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServiceRecord, error)
 	// GetOfferedServicesByArtist is the CUSTOMER's view of an artist's menu:
-	// only services she offers, active only, at her price and deposit.
-	// Scanned by scanServices, so the column order below is fixed.
+	// only services she offers, active only, at her price and deposit,
+	// cheapest first. Scanned by scanServices, so the column order below is
+	// fixed.
 	GetOfferedServicesByArtist(ctx context.Context, artistID uuid.UUID) ([]*SalonServiceRecord, error)
 	CreateService(ctx context.Context, s *SalonServiceRecord) error
 	UpdateService(ctx context.Context, id uuid.UUID, req UpdateServiceRequest) error
@@ -467,12 +468,12 @@ func (r *pgRepo) GetOfferedServicesByArtist(ctx context.Context, artistID uuid.U
 	rows, err := r.db.Query(ctx, `
 		SELECT s.id, s.salon_id, s.category_id, s.name, s.name_ar, s.description,
 		       s.duration_min, s.buffer_min, s.active_duration_min,
-		       `+pricing.Price("s", "os")+`, `+pricing.Deposit("s", "os")+`,
+		       `+pricing.Price("s", "os")+` AS effective_price, `+pricing.Deposit("s", "os")+`,
 		       s.deposit_deadline_hours, s.is_active, s.is_custom, s.created_at, s.updated_at
 		  FROM services s
 		  JOIN artist_services os ON os.service_id = s.id AND os.artist_id = $1
 		 WHERE s.is_active = TRUE
-		 ORDER BY s.name ASC`,
+		 ORDER BY effective_price ASC, s.name ASC`,
 		artistID,
 	)
 	if err != nil {

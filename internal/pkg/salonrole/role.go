@@ -81,6 +81,7 @@ const (
 	EarningsSalonRead   Capability = "earnings:salon:read"
 	CalendarSalonRead   Capability = "calendar:salon:read"
 	BookingsAnyWrite    Capability = "bookings:any:write"
+	MemberServicesWrite Capability = "member_services:write"
 )
 
 // The personal capabilities. Every member holds these; they are what makes a
@@ -92,6 +93,7 @@ const (
 	OwnProfileWrite  Capability = "own_profile:write"
 	OwnEarningsRead  Capability = "own_earnings:read"
 	ClientNotesWrite Capability = "client_notes:write"
+	OwnServicesWrite Capability = "own_services:write"
 )
 
 // all is the enumeration the completeness test iterates. A new Capability that
@@ -100,9 +102,9 @@ const (
 var all = []Capability{
 	ServicesWrite, StoresWrite, StoreHoursWrite, DiscountsWrite,
 	ProductsWrite, PaymentMethodsWrite, BillingWrite, MembersWrite,
-	EarningsSalonRead, CalendarSalonRead, BookingsAnyWrite,
+	EarningsSalonRead, CalendarSalonRead, BookingsAnyWrite, MemberServicesWrite,
 	MembersRead, OwnScheduleWrite, OwnBookingsWrite, OwnProfileWrite,
-	OwnEarningsRead, ClientNotesWrite,
+	OwnEarningsRead, ClientNotesWrite, OwnServicesWrite,
 }
 
 // matrix is the whole policy.
@@ -129,6 +131,7 @@ var matrix = map[Role]map[Capability]bool{
 		EarningsSalonRead:   true,
 		CalendarSalonRead:   true,
 		BookingsAnyWrite:    true,
+		MemberServicesWrite: true, // PP-3: owner can change any member's services or prices.
 
 		// Personal — an owner is also someone who does the work.
 		MembersRead:      true,
@@ -137,6 +140,7 @@ var matrix = map[Role]map[Capability]bool{
 		OwnProfileWrite:  true,
 		OwnEarningsRead:  true,
 		ClientNotesWrite: true,
+		OwnServicesWrite: true, // PP-3: owner sets her own services or prices.
 	},
 	Member: {
 		// Shared salon resources — read them, never write them. This whole
@@ -152,6 +156,7 @@ var matrix = map[Role]map[Capability]bool{
 		EarningsSalonRead:   false,
 		CalendarSalonRead:   false,
 		BookingsAnyWrite:    false,
+		MemberServicesWrite: false, // PP-3: member cannot change a colleague's services or prices.
 
 		// Personal — everything needed to run their own day.
 		//
@@ -166,6 +171,7 @@ var matrix = map[Role]map[Capability]bool{
 		OwnProfileWrite:  true,
 		OwnEarningsRead:  true,
 		ClientNotesWrite: true,
+		OwnServicesWrite: true, // PP-3: artist sets her own services or prices.
 	},
 	None: {},
 }

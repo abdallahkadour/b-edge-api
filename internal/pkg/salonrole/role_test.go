@@ -130,12 +130,19 @@ func TestCan_MemberCannotWriteSharedSalonResources(t *testing.T) {
 func TestCan_MemberCanRunTheirOwnDay(t *testing.T) {
 	required := []Capability{
 		MembersRead, OwnScheduleWrite, OwnBookingsWrite, OwnProfileWrite,
-		OwnEarningsRead, ClientNotesWrite,
+		OwnEarningsRead, ClientNotesWrite, OwnServicesWrite,
 	}
 	for _, c := range required {
 		if !Can(Member, c) {
 			t.Errorf("a salon member must hold %q to be able to work", c)
 		}
+	}
+}
+
+func TestCan_MemberCannotSetAnotherMembersPrices(t *testing.T) {
+	// PP-3: the artist sets her own; only the owner may change a colleague's.
+	if Can(Member, MemberServicesWrite) {
+		t.Fatal("a member must not be able to change another member's services or prices")
 	}
 }
 

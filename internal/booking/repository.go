@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
 )
 
@@ -75,8 +76,15 @@ type Repository interface {
 	// GetBusinessHoursException checks if a store has a holiday or special hours on a date.
 	GetBusinessHoursException(ctx context.Context, storeID uuid.UUID, date time.Time) (*BusinessHoursException, error)
 
-	// GetService fetches a service by ID for duration and deposit info.
-	GetService(ctx context.Context, serviceID uuid.UUID) (*SalonService, error)
+	// GetOfferedService returns the service as THIS ARTIST sells it: her
+	// price and deposit where she set them, the salon's otherwise, the
+	// deposit capped at the price. ErrServiceNotFound when the service does
+	// not exist, is inactive, or she does not offer it.
+	GetOfferedService(ctx context.Context, artistID, serviceID uuid.UUID) (*SalonService, error)
+
+	// GetServiceDepositDeadlineHours reads ONLY the deadline window. Approval
+	// uses it, and must quote the BOOKING's stored deposit - never the menu's.
+	GetServiceDepositDeadlineHours(ctx context.Context, serviceID uuid.UUID) (int, error)
 
 	// CreateGuestUser creates a minimal customer record for a guest booking.
 	// Returns the new user's UUID to use as customer_id on the booking.
@@ -582,7 +590,6 @@ func (r *pgRepo) GetBusinessHoursException(ctx context.Context, storeID uuid.UUI
 	return ex, nil
 }
 
-// GetService fetches a service by ID.
 // ArtistPlacement - one round trip for both facts validateBookingParties
 // needs about the artist. The EXISTS is evaluated per artist row, so an
 // artist with no artist_stores links at all reads worksAtStore=false rather
@@ -607,25 +614,50 @@ func (r *pgRepo) ArtistPlacement(ctx context.Context, artistID, storeID uuid.UUI
 	return salonID, works, nil
 }
 
-func (r *pgRepo) GetService(ctx context.Context, serviceID uuid.UUID) (*SalonService, error) {
+// GetOfferedService returns a service as THIS ARTIST sells it: her override
+// from artist_services where she set one, the salon's value otherwise, and
+// her deposit capped at her price (PP-6). The INNER JOIN is deliberate - no
+// row in artist_services means she does not offer this service at all, and
+// that must read identically to the service not existing (see
+// ErrServiceNotFound).
+func (r *pgRepo) GetOfferedService(ctx context.Context, artistID, serviceID uuid.UUID) (*SalonService, error) {
 	s := &SalonService{}
 	err := r.db.QueryRow(ctx, `
-		SELECT id, salon_id, name, duration_min, buffer_min, active_duration_min,
-		       price, deposit_amount, deposit_deadline_hours, is_active
-		FROM services
-		WHERE id = $1 AND is_active = TRUE`,
-		serviceID,
+		SELECT s.id, s.salon_id, s.name, s.duration_min, s.buffer_min, s.active_duration_min,
+		       `+pricing.Price("s", "os")+`, `+pricing.Deposit("s", "os")+`, `+pricing.DepositCapped("s", "os")+`,
+		       s.deposit_deadline_hours, s.is_active
+		  FROM services s
+		  JOIN artist_services os ON os.service_id = s.id AND os.artist_id = $1
+		 WHERE s.id = $2 AND s.is_active = TRUE`,
+		artistID, serviceID,
 	).Scan(
 		&s.ID, &s.SalonID, &s.Name, &s.DurationMin, &s.BufferMin, &s.ActiveDurationMin,
-		&s.Price, &s.DepositAmount, &s.DepositDeadlineHours, &s.IsActive,
+		&s.Price, &s.DepositAmount, &s.DepositCapped,
+		&s.DepositDeadlineHours, &s.IsActive,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrServiceNotFound
+	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("service not found: %w", err)
-		}
-		return nil, fmt.Errorf("get service: %w", err)
+		return nil, fmt.Errorf("get offered service: %w", err)
 	}
 	return s, nil
+}
+
+// GetServiceDepositDeadlineHours reads only the deadline window, deliberately
+// without an is_active filter - approving an already-agreed booking (PP-9)
+// must not depend on the menu still listing the service.
+func (r *pgRepo) GetServiceDepositDeadlineHours(ctx context.Context, serviceID uuid.UUID) (int, error) {
+	var hours int
+	err := r.db.QueryRow(ctx,
+		`SELECT deposit_deadline_hours FROM services WHERE id = $1`, serviceID).Scan(&hours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrServiceNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get service deposit deadline: %w", err)
+	}
+	return hours, nil
 }
 
 // GetArtistBookingsForDate returns all blocking bookings for an artist on a date.

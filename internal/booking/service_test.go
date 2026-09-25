@@ -192,8 +192,14 @@ func (m *mockRepo) ArtistPlacement(_ context.Context, _, _ uuid.UUID) (*uuid.UUI
 	}
 	return &salon, !m.placementUnlinked, nil
 }
-func (m *mockRepo) GetService(_ context.Context, _ uuid.UUID) (*SalonService, error) {
+func (m *mockRepo) GetOfferedService(_ context.Context, _, _ uuid.UUID) (*SalonService, error) {
 	return m.getServiceSvc, m.getServiceErr
+}
+func (m *mockRepo) GetServiceDepositDeadlineHours(_ context.Context, _ uuid.UUID) (int, error) {
+	if m.getServiceSvc == nil {
+		return 0, m.getServiceErr
+	}
+	return m.getServiceSvc.DepositDeadlineHours, m.getServiceErr
 }
 func (m *mockRepo) GetArtistBookingsForDate(_ context.Context, _ uuid.UUID, _ time.Time) ([]*Booking, error) {
 	return m.getArtistBookingsBookings, m.getArtistBookingsErr
@@ -2744,4 +2750,62 @@ func TestListEnrichedBookingsByArtist_NegativeLimit_ClampedToDefault(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, defaultPageSize, repo.listEnrichedByArtistLimit,
 		"a negative limit must be clamped, never reach SQL as LIMIT -5")
+}
+
+func TestApproveBooking_MessageQuotesTheBookingsDeposit(t *testing.T) {
+	// The booking was made at a $60 deposit (Rania's own). The salon menu
+	// says $30. The customer must be asked for what she agreed to, not for
+	// whatever the menu says today.
+	artistID := uuid.New()
+	b := &Booking{
+		ID: uuid.New(), ArtistID: artistID, CustomerID: uuid.New(), ServiceID: uuid.New(),
+		StartTime:     time.Now().UTC().Add(72 * time.Hour),
+		Status:        StatusPending,
+		DepositAmount: decimal.RequireFromString("60.00"),
+	}
+	menu := defaultService()
+	menu.DepositAmount = decimal.RequireFromString("30.00")
+	repo := &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID, // the requester IS the booking's artist
+		getServiceSvc:               menu,
+		notificationContextCustomer: "Maya",
+		notificationContextService:  "Bridal",
+	}
+
+	_, err := newTestService(repo).ApproveBooking(context.Background(), b.ID, uuid.New())
+	require.NoError(t, err)
+
+	require.NotEmpty(t, repo.enqueuedNotifications, "an approval must notify the customer")
+	msg := repo.enqueuedNotifications[len(repo.enqueuedNotifications)-1].Message
+	assert.Contains(t, msg, "$60", "must quote the booking's deposit")
+	assert.NotContains(t, msg, "$30", "must not quote the menu's current deposit")
+}
+
+func TestApproveBooking_NoDeposit_MessageSkipsTheDepositAsk(t *testing.T) {
+	// The deposit gate reads the BOOKING's deposit (zero here), not the
+	// menu's - a $0-deposit booking must get the plain approval message,
+	// never "send a $0 deposit within X hours".
+	artistID := uuid.New()
+	b := &Booking{
+		ID: uuid.New(), ArtistID: artistID, CustomerID: uuid.New(), ServiceID: uuid.New(),
+		StartTime:     time.Now().UTC().Add(72 * time.Hour),
+		Status:        StatusPending,
+		DepositAmount: decimal.Zero,
+	}
+	repo := &mockRepo{
+		getBookingByIDBooking:       b,
+		getArtistIDByUserIDArtistID: artistID,
+		getServiceSvc:               defaultService(), // menu deposit is positive - must not leak in
+		notificationContextCustomer: "Maya",
+		notificationContextService:  "Bridal",
+	}
+
+	_, err := newTestService(repo).ApproveBooking(context.Background(), b.ID, uuid.New())
+	require.NoError(t, err)
+
+	require.NotEmpty(t, repo.enqueuedNotifications, "an approval must notify the customer")
+	msg := repo.enqueuedNotifications[len(repo.enqueuedNotifications)-1].Message
+	assert.NotContains(t, msg, "$", "a zero-deposit booking must not ask for a deposit")
+	assert.Contains(t, msg, "final confirmation shortly")
 }

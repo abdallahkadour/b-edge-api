@@ -59,9 +59,17 @@ import (
 func (s *Service) validateBookingParties(ctx context.Context,
 	artistID, storeID, serviceID uuid.UUID) (*SalonService, *Store, error) {
 
-	// GetService filters on is_active, so an inactive service is not found.
-	service, err := s.repo.GetService(ctx, serviceID)
-	if err != nil || service == nil {
+	// Resolved AS THIS ARTIST SELLS IT (migration 052): her price, and not
+	// found at all if she does not offer it. A switched-off service is
+	// therefore refused here with the same 404 as a missing one.
+	service, err := s.repo.GetOfferedService(ctx, artistID, serviceID)
+	if err != nil {
+		if errors.Is(err, ErrServiceNotFound) {
+			return nil, nil, errServiceNotFound()
+		}
+		return nil, nil, fmt.Errorf("booking parties: get offered service: %w", err)
+	}
+	if service == nil {
 		return nil, nil, errServiceNotFound()
 	}
 

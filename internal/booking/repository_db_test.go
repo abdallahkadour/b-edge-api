@@ -510,3 +510,76 @@ func TestArtistPlacement_ArtistWithNoSalon_NilSalon(t *testing.T) {
 	assert.Nil(t, salon, "an artist with no salon must report nil, not a zero UUID")
 	assert.False(t, works)
 }
+
+func offer(t *testing.T, pool *pgxpool.Pool, artist, service uuid.UUID, price, deposit *string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO artist_services (artist_id, service_id, price, deposit_amount)
+		 VALUES ($1,$2,$3::numeric,$4::numeric)`, artist, service, price, deposit)
+	require.NoError(t, err)
+}
+
+// strp is declared in payer_test.go (no build tag, so it's already visible
+// here); reused rather than redeclared.
+
+func TestGetOfferedService_Override_Wins(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool) // service price 100.00, deposit 0
+	offer(t, pool, f.ArtistID, f.ServiceID, strp("200.00"), strp("40.00"))
+
+	s, err := NewRepository(pool).GetOfferedService(context.Background(), f.ArtistID, f.ServiceID)
+
+	require.NoError(t, err)
+	assert.True(t, s.Price.Equal(decimal.RequireFromString("200")), "got %s", s.Price)
+	assert.True(t, s.DepositAmount.Equal(decimal.RequireFromString("40")), "got %s", s.DepositAmount)
+}
+
+func TestGetOfferedService_NoOverride_SalonPrice(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	offer(t, pool, f.ArtistID, f.ServiceID, nil, nil)
+
+	s, err := NewRepository(pool).GetOfferedService(context.Background(), f.ArtistID, f.ServiceID)
+
+	require.NoError(t, err)
+	assert.True(t, s.Price.Equal(decimal.RequireFromString("100")), "got %s", s.Price)
+}
+
+func TestGetOfferedService_NotOffered_ErrServiceNotFound(t *testing.T) {
+	// Breaks if the JOIN becomes a LEFT JOIN: every artist would then be
+	// bookable for every service, which is the behaviour PP-4 removes.
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	offer(t, pool, f.Artist2ID, f.ServiceID, nil, nil) // a COLLEAGUE offers it; she does not
+
+	_, err := NewRepository(pool).GetOfferedService(context.Background(), f.ArtistID, f.ServiceID)
+
+	assert.ErrorIs(t, err, ErrServiceNotFound)
+}
+
+func TestGetOfferedService_InactiveService_ErrServiceNotFound(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	offer(t, pool, f.ArtistID, f.ServiceID, nil, nil)
+	_, err := pool.Exec(context.Background(), `UPDATE services SET is_active=false WHERE id=$1`, f.ServiceID)
+	require.NoError(t, err)
+
+	_, err = NewRepository(pool).GetOfferedService(context.Background(), f.ArtistID, f.ServiceID)
+
+	assert.ErrorIs(t, err, ErrServiceNotFound)
+}
+
+func TestGetServiceDepositDeadlineHours_InactiveServiceStillAnswers(t *testing.T) {
+	// PP-9: approving an already-agreed booking must not depend on the menu
+	// still listing the service.
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	_, err := pool.Exec(context.Background(),
+		`UPDATE services SET is_active=false, deposit_deadline_hours=12 WHERE id=$1`, f.ServiceID)
+	require.NoError(t, err)
+
+	h, err := NewRepository(pool).GetServiceDepositDeadlineHours(context.Background(), f.ServiceID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 12, h)
+}

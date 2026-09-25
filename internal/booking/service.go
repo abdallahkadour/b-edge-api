@@ -619,13 +619,15 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 		return nil, apperror.Conflict("BOOKING_TIME_PASSED", "This booking's appointment time has already passed and can no longer be approved")
 	}
 
-	// Fetch service to get deposit deadline hours
-	service, err := s.repo.GetService(ctx, b.ServiceID)
+	// Only the deadline window comes from the menu. The deposit comes from
+	// the BOOKING: it was agreed when the booking was made, and since
+	// migration 052 it can be the artist's own rather than the salon's.
+	// This used to quote service.DepositAmount - the menu's CURRENT value.
+	deadlineRaw, err := s.repo.GetServiceDepositDeadlineHours(ctx, b.ServiceID)
 	if err != nil {
-		return nil, fmt.Errorf("approve booking: get service: %w", err)
+		return nil, fmt.Errorf("approve booking: get deposit deadline: %w", err)
 	}
-
-	deadlineHours := time.Duration(service.DepositDeadlineHours) * time.Hour
+	deadlineHours := time.Duration(deadlineRaw) * time.Hour
 	if deadlineHours == 0 {
 		deadlineHours = depositDeadlineDefault
 	}
@@ -662,7 +664,7 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
 	if ctxErr == nil {
 		var message string
-		if service.DepositAmount.IsPositive() {
+		if b.DepositAmount.IsPositive() {
 			// Report the real time left until depositDeadline, not the
 			// service's nominal window - when the grace-window fallback
 			// above kicked in, deadlineHours would otherwise claim "24
@@ -671,7 +673,7 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 			message = fmt.Sprintf(
 				"Hi %s! Your %s request for %s has been approved. Please send a $%s deposit within %d hours to confirm your spot.",
 				customerName, serviceName, notificationTimeLabel(b.StartTime),
-				service.DepositAmount.String(), hoursRemaining,
+				b.DepositAmount.String(), hoursRemaining,
 			)
 		} else {
 			// No deposit required, but this booking still isn't

@@ -22,6 +22,7 @@ package booking
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestHoldGuestSlot_ForeignService_IndistinguishableFromMissing(t *testing.T)
 	// look exactly like one that does not exist. Breaks if the cross-salon
 	// branch returns its own code or wording - which would let anyone probe
 	// which service IDs are real.
-	missing := &mockRepo{getServiceErr: ErrStoreNotFound, getStoreStore: defaultStore()}
+	missing := &mockRepo{getServiceErr: ErrServiceNotFound, getStoreStore: defaultStore()}
 	foreign := &mockRepo{getServiceSvc: foreignService(), getStoreStore: defaultStore()}
 
 	_, errMissing := newTestService(missing).HoldGuestSlot(context.Background(), holdReq())
@@ -216,4 +217,28 @@ func TestJoinWaitlist_ServiceFromAnotherSalon_NotFoundAndNothingWritten(t *testi
 
 	assert.Equal(t, "SERVICE_NOT_FOUND", appErrOf(t, err).Code)
 	assert.False(t, repo.createWaitlistEntryCalled, "REFUSED BUT STILL WROTE THE WAITLIST ENTRY")
+}
+
+func TestHoldGuestSlot_ServiceNotOffered_NotFoundAndNothingWritten(t *testing.T) {
+	// PP-4: a service she has switched off is refused exactly like a missing
+	// one. The repository reports both as ErrServiceNotFound; this asserts the
+	// guard turns that into the SAME 404 and writes nothing.
+	repo := &mockRepo{getServiceErr: ErrServiceNotFound, getStoreStore: defaultStore()}
+
+	_, err := newTestService(repo).HoldGuestSlot(context.Background(), holdReq())
+
+	assert.Equal(t, "SERVICE_NOT_FOUND", appErrOf(t, err).Code)
+	assert.Nil(t, repo.createBookingCaptured)
+}
+
+func TestHoldGuestSlot_DatabaseErrorOnService_IsNotA404(t *testing.T) {
+	// Breaks if every error is mapped to "not found": a database outage
+	// would then tell customers the service does not exist.
+	repo := &mockRepo{getServiceErr: errors.New("connection reset"), getStoreStore: defaultStore()}
+
+	_, err := newTestService(repo).HoldGuestSlot(context.Background(), holdReq())
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	assert.False(t, errors.As(err, &appErr), "a database error must surface as an internal error, got %v", err)
 }

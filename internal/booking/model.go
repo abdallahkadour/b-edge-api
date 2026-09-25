@@ -112,6 +112,11 @@ var (
 	// critical error. Found while verifying the AUTH-02 fix, 2026-09-05.
 	ErrStoreNotFound = errors.New("store not found")
 
+	// ErrServiceNotFound: the service does not exist, is inactive, or THIS
+	// artist does not offer it. The three are one error on purpose - a
+	// switched-off service must be indistinguishable from a missing one.
+	ErrServiceNotFound = errors.New("service not found")
+
 	// ErrDiscountAlreadyRedeemed is the partial unique index on
 	// discount_redemptions firing. It means a concurrent checkout committed
 	// this customer's one use of the code first - the eligibility check passed
@@ -297,12 +302,15 @@ type SalonService struct {
 	DurationMin int       `db:"duration_min"`
 	// BufferMin is cleanup time reserved AFTER the appointment. Never shown
 	// to the customer - they did not buy the cleanup. See migration 033.
-	BufferMin            int             `db:"buffer_min"`
-	ActiveDurationMin    *int            `db:"active_duration_min"`
-	Price                decimal.Decimal `db:"price"`
-	DepositAmount        decimal.Decimal `db:"deposit_amount"`
-	DepositDeadlineHours int             `db:"deposit_deadline_hours"`
-	IsActive             bool            `db:"is_active"`
+	BufferMin         int             `db:"buffer_min"`
+	ActiveDurationMin *int            `db:"active_duration_min"`
+	Price             decimal.Decimal `db:"price"`
+	DepositAmount     decimal.Decimal `db:"deposit_amount"`
+	// DepositCapped is true when her deposit (or the salon's, if she left
+	// hers blank) exceeded her price and was capped to it. See pricing.Deposit.
+	DepositCapped        bool `db:"deposit_capped"`
+	DepositDeadlineHours int  `db:"deposit_deadline_hours"`
+	IsActive             bool `db:"is_active"`
 }
 
 // ArtistStoreBuffer holds travel buffer config between two stores.

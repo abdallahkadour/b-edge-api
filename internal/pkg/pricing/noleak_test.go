@@ -39,7 +39,6 @@ var (
 var allowedReaders = map[string]string{
 	"artist/repository.go:GetServicesBySalon":  "the owner's menu screen - it shows and edits the SALON price, which is what it must read",
 	"artist/repository.go:GetServiceByID":      "the owner editing one service of the salon menu",
-	"booking/repository.go:GetService":         "TEMPORARY - replaced by GetOfferedService in Task 3",
 	"discovery/repository.go:GetSalonServices": "TEMPORARY - replaced by GetArtistServices in Task 5",
 }
 

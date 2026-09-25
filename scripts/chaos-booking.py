@@ -655,9 +655,11 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
             f"{e_sto or 'ACCEPTED'}")
 
     # ── 3.7 per-artist pricing: shown == charged, per artist ──────────────
-    # Two artists of ONE salon, one service. The member sets 200; the owner
-    # keeps the salon price. Each hold must charge the right one, the hold's
-    # quote must equal what was stored, and a switched-off service refuses.
+    # Salon A has an owner (A1) and TWO members (spec §8: "two members of one
+    # salon at $200 and $100 both charged correctly"). member1 sets 200, member2
+    # sets 100, the owner keeps the salon price - and spec §8 requires the
+    # three-way equality (profile == hold == stored) for ALL three, WITH and
+    # WITHOUT an override, not just the overridden member.
     #
     # Ruling P4: the API trims trailing zeros ("200") while psql prints
     # "200.00" - a bare string comparison of listed/shown/stored would fail
@@ -665,12 +667,42 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
     # compared numerically; a None anywhere (never silently coerced to
     # "equal" another None) fails the case. The raw strings still go in the
     # detail message so a failure is readable.
-    owner_key, member_key = "A1", member
     svc_id = SV["A"]
-    tok_m = login(f"{TAG}.{member_key.lower()}@test.bedge.com")
-    call("PUT", f"/artists/salon/my-services/{svc_id}",
-         {"offered": True, "price": "200.00"}, tok_m)
+    member1_key = member
+    member2_key = next((k for k in A if k.startswith("A") and k not in ("A1", member1_key)), None)
+    if member2_key is None:
+        raise RuntimeError("3.7 needs a second member of salon A - topology changed?")
+
+    def set_member_price(artist_key, price):
+        # A fixture PUT, not the assertion under test - a failure here is a
+        # SETUP problem and must be diagnosed as one, not misread as a
+        # pricing bug three lines below (review round 1, Minor).
+        tok = login(f"{TAG}.{artist_key.lower()}@test.bedge.com")
+        st, r = call("PUT", f"/artists/salon/my-services/{svc_id}",
+                     {"offered": True, "price": price}, tok)
+        if st >= 400:
+            raise RuntimeError(f"3.7 setup: set {artist_key}'s price to {price}: {st} {err(r)}")
+        return tok
+
+    tok_m1 = set_member_price(member1_key, "200.00")
+    set_member_price(member2_key, "100.00")
     salon_price = sql(f"SELECT price FROM services WHERE id='{svc_id}'")
+
+    def listed_price(artist_id):
+        # The price a customer SEES on her profile, before any hold. Discovery
+        # first; if an artist is not listed there (visibility is keyed on
+        # subscriptions, which is not what this case tests), the funnel's own
+        # list. If NEITHER shows the service, this stays None and the leg
+        # FAILS below - never skip the comparison. One code path for all
+        # three legs (owner and both members) rather than one-off inline
+        # lookups (review round 1, Important #1).
+        st_p, r_p = call("GET", f"/discovery/artists/{artist_id}")
+        v = next((x.get("price") for x in ((r_p.get("data") or {}).get("services") or [])
+                  if x.get("id") == svc_id), None)
+        if v is None:
+            st_p, r_p = call("GET", f"/artists/{artist_id}/services")
+            v = next((x.get("price") for x in (r_p.get("data") or []) if x.get("id") == svc_id), None)
+        return v
 
     def quote(artist, phone):
         st, r = call("POST", "/bookings/guest/hold", {
@@ -686,41 +718,42 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
             sql(f"DELETE FROM bookings WHERE id='{d['booking_id']}'")
         return st, d.get("original_price"), stored, err(r)
 
-    # The price a customer SEES on her profile, before any hold. Discovery
-    # first; if a member is not listed there (visibility is keyed on
-    # subscriptions, which is not what this case tests), the funnel's own
-    # list. If NEITHER shows the service, `listed` stays None and 3.7 FAILS -
-    # never skip the comparison.
-    st_p, r_p = call("GET", f"/discovery/artists/{A[member_key]}")
-    listed = next((x.get("price") for x in ((r_p.get("data") or {}).get("services") or [])
-                   if x.get("id") == svc_id), None)
-    if listed is None:
-        st_p, r_p = call("GET", f"/artists/{A[member_key]}/services")
-        listed = next((x.get("price") for x in (r_p.get("data") or []) if x.get("id") == svc_id), None)
-    st_m, shown_m, stored_m, _ = quote(A[member_key], "+96176000471")
-    st_o, shown_o, stored_o, _ = quote(A[owner_key], "+96176000472")
-
     def dec(x):
         # None must NEVER become "equal" to another None below - a missing
         # value is a FAIL, not a wildcard.
         return Decimal(str(x)) if x is not None else None
 
-    listed_d, shown_m_d, stored_m_d = dec(listed), dec(shown_m), dec(stored_m)
-    shown_o_d, stored_o_d, salon_d = dec(shown_o), dec(stored_o), dec(salon_price)
-    two_hundred = Decimal("200.00")
-    all_present = all(v is not None for v in
-                       (listed_d, shown_m_d, stored_m_d, shown_o_d, stored_o_d, salon_d))
-    ok = (st_m < 400 and st_o < 400 and all_present
-          and listed_d == shown_m_d == stored_m_d == two_hundred
-          and shown_o_d == stored_o_d == salon_d)
-    rec("3.7", "PASS" if ok else "FAIL",
-        f"member override: profile {listed} / hold {shown_m} / stored {stored_m}; "
-        f"owner at salon price: hold {shown_o} / stored {stored_o} (salon {salon_price})")
+    # (label, artist key, expected price, probe phone) - a distinct phone
+    # per quote, a slot free for each (different artist_id, same time: the
+    # exclusion constraint is per-artist so this never collides).
+    legs = [
+        ("owner",   "A1",         salon_price, "+96176000471"),
+        ("member1", member1_key,  "200.00",    "+96176000472"),
+        ("member2", member2_key,  "100.00",    "+96176000473"),
+    ]
+    all_ok = True
+    segments = []
+    for label, key, expected, phone in legs:
+        aid = A[key]
+        listed = listed_price(aid)
+        st, shown, stored, _ = quote(aid, phone)
+        expected_d, listed_d, shown_d, stored_d = dec(expected), dec(listed), dec(shown), dec(stored)
+        leg_ok = (st < 400
+                  and all(v is not None for v in (expected_d, listed_d, shown_d, stored_d))
+                  and listed_d == shown_d == stored_d == expected_d)
+        all_ok = all_ok and leg_ok
+        segments.append(f"{label} {key} (expect {expected}): profile {listed} / "
+                         f"hold {shown} / stored {stored}")
+    rec("3.7", "PASS" if all_ok else "FAIL", "; ".join(segments))
 
-    call("PUT", f"/artists/salon/my-services/{svc_id}", {"offered": False}, tok_m)
-    st_off, _, _, e_off = quote(A[member_key], "+96176000473")
+    st_switch_off, r_switch_off = call(
+        "PUT", f"/artists/salon/my-services/{svc_id}", {"offered": False}, tok_m1)
+    if st_switch_off >= 400:
+        raise RuntimeError(
+            f"3.7b setup: switch off {member1_key}: {st_switch_off} {err(r_switch_off)}")
+    st_off, _, _, e_off = quote(A[member1_key], "+96176000474")
     rec("3.7b", "PASS" if e_off == "SERVICE_NOT_FOUND" else "FAIL",
-        f"after she switched it off: {st_off} {e_off or 'ACCEPTED'}")
+        f"after {member1_key} switched it off: {st_off} {e_off or 'ACCEPTED'}")
 
 
 def state_ledger():

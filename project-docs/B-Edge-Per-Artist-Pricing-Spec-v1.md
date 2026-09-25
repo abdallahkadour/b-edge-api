@@ -116,8 +116,8 @@ Two capabilities in the existing owner/member matrix:
 
 | Endpoint | Capability |
 |---|---|
-| `GET /artists/me/services` | any artist in a salon |
-| `PUT /artists/me/services/:serviceId` | `own_services:write` |
+| `GET /artists/salon/my-services` | `own_services:write` |
+| `PUT /artists/salon/my-services/:serviceId` | `own_services:write` |
 | `GET /artists/salon/members/:artistId/services` | `member_services:write` |
 | `PUT /artists/salon/members/:artistId/services/:serviceId` | `member_services:write` |
 
@@ -136,7 +136,12 @@ Two capabilities in the existing owner/member matrix:
   service outside her salon (404); a member of another salon (404).
 - **Audited:** every change, with the actor. The owner changing Maya's price
   records the owner.
-- The route-coverage guard enforces a capability on both `PUT` routes.
+- The route-coverage guard enforces a capability on both `PUT` routes. *(The
+  artist's own routes were first specified as `/artists/me/services`; they
+  moved under `/artists/salon/` during planning precisely so that
+  `routecoverage_test.go`, which only inspects that prefix, enforces them.)*
+- Money errors are `400 INVALID_PRICE` / `INVALID_DEPOSIT_AMOUNT` from
+  `internal/pkg/money`; a deposit above the price is `422 VALIDATION_ERROR`.
 
 **Lifecycle hooks:**
 

@@ -1,5 +1,24 @@
 # WhatsApp delivery setup
 
+> **Status 2026-09-26, read this first. The text below it (2026-08-22) is
+> history: "the only thing missing is a real Twilio account" is no longer
+> true.** The Twilio account exists and is configured in development, and
+> Twilio's own business check (Trust Hub) is approved. Delivery is now
+> blocked by **Meta**: it requires business verification of the WhatsApp
+> sender, which needs proof that B-Edge is a registered business (a
+> commercial register entry or tax document, with a matching address and
+> website). Until then Twilio accepts messages and WhatsApp drops them;
+> every delivery checked so far has come back undelivered.
+>
+> - `notifications.status = 'sent'` only means Twilio accepted the message.
+>   Read `delivery_status`, or send a real one with `scripts/wa-status.sh`.
+> - After verification, one code change is still needed: Meta no longer
+>   accepts free-form business-initiated messages, and
+>   `internal/notification/worker.go` still sends a free-form `Body`. The
+>   messages need approved templates (`ContentSid` + `ContentVariables`).
+> - SMS is a second transport the worker already supports: set
+>   `TWILIO_SMS_FROM`.
+
 > Written 2026-08-22. The delivery pipeline is fully built and already
 > running in production (`internal/notification/worker.go`, a supervised
 > background goroutine started in `cmd/main.go`). It polls the

@@ -49,44 +49,34 @@ internal/domain/{domain}/
 
 ### Repository structure
 
+Folder level only, so it stays true as files are added. Verified 2026-09-26.
+
 ```
 b-edge-api/
 ├── cmd/
-│   ├── main.go              # Entry point — starts server, wires dependencies
-│   └── migrate/
-│       └── main.go          # Migration runner — apply SQL files to DB
+│   ├── main.go          # Entry point: starts the server, wires every domain
+│   ├── migrate/         # Migration runner
+│   └── seedadmin/       # Creates the admin account
 ├── internal/
-│   ├── config/
-│   │   ├── database.go      # pgx connection pool
-│   │   ├── env.go           # Validates required environment variables
-│   │   ├── logger.go        # Zap logger (JSON in prod, readable in dev)
-│   │   └── telemetry.go     # OpenTelemetry → Jaeger
-│   ├── domain/
-│   │   └── auth/
-│   │       ├── model.go     # User, RefreshToken, PasswordReset structs
-│   │       ├── repository.go# All auth SQL queries
-│   │       ├── service.go   # Auth business logic
-│   │       └── handler.go   # Auth HTTP handlers
-│   ├── middleware/
-│   │   ├── auth.go          # JWT guard, role check, context helpers
-│   │   ├── logger.go        # Structured Zap request logger
-│   │   └── register.go      # Global middleware chain
-│   └── pkg/
-│       ├── apperror/        # AppError type + global Fiber error handler
-│       ├── response/        # Standard JSON response helpers
-│       ├── jwt/             # Generate and verify JWT tokens
-│       └── hash/            # bcrypt password hashing
-├── db/
-│   └── migrations/
-│       ├── 001_initial_schema.up.sql  # 17 tables + GIST constraint
-│       ├── 002_indexes.up.sql         # All indexes
-│       ├── 003_*.up.sql               # no-op (superseded by 001)
-│       └── 004_*.up.sql               # no-op (superseded by 001)
-├── docs/                    # All project documentation (PRD, HLD, LLD, etc.)
-├── .env.example             # Environment variable template
-├── .air.toml                # Hot reload configuration
-├── docker-compose.yml       # PostgreSQL + Jaeger for local development
-└── Makefile                 # All build commands
+│   ├── <domain>/        # One folder per domain: model, repository, service, handler
+│   │                    #   admin, artist, audit, billing, booking, calendar, client,
+│   │                    #   customerauth, discovery, earnings, inbox, maintenance, media,
+│   │                    #   membership, notification, offering, onboarding, payout,
+│   │                    #   product, promo, report, review, share
+│   ├── domain/auth/     # Artist and admin sign-in
+│   ├── config/          # Database pool, environment checks, logging, tracing
+│   ├── middleware/      # Auth, roles, salon permissions, rate limits, security headers
+│   └── pkg/             # 20 shared leaf packages (money, pricing, salonrole, ...)
+├── db/migrations/       # Paired NNN_name.up.sql / .down.sql, each with a prose header
+├── scripts/             # Checks and harnesses: chaos-booking.py, check-docs.sh,
+│                        #   doc-facts.sh, erd.py, verify-*.py, wa-status.sh, ...
+├── project-docs/        # ALL hand-written documentation; start at DOCUMENTATION.md
+├── docs/                # GENERATED swagger output (make swagger), gitignored:
+│                        #   anything written here by hand is silently lost
+├── .env.example         # Environment variable template
+├── .air.toml            # Hot reload (builds with -tags devbypass)
+├── docker-compose.yml   # PostgreSQL + Jaeger for local development
+└── Makefile             # Build, test, docs-check, chaos, mutation, ...
 ```
 
 ---
@@ -201,6 +191,10 @@ Expected response:
 ## API
 
 Base URL: `http://localhost:3000/api/v1`
+
+The full, current API is documented by Swagger: run `make swagger`, start the
+server and open `http://localhost:3000/swagger/index.html`. Only the sign-in
+endpoints are listed below.
 
 All responses use the standard envelope:
 

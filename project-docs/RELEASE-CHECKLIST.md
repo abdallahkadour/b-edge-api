@@ -1,5 +1,12 @@
 # First-release checklist
 
+> **Status 2026-09-26.** For the current release view read
+> `B-Edge-Reliability-Plan-v1.md` (2026-09-23), which scores engineering and
+> delivery separately. The biggest open item here is still open: customers
+> cannot be reached, because WhatsApp delivery is blocked by Meta's business
+> verification (see the status note at the top of `WHATSAPP-SETUP.md`). The
+> checklist below is kept as written on 2026-08-22 and 2026-08-31.
+
 > Written 2026-08-22, after a long live-testing effort covering every core
 > flow (see `b-edge-web/project-docs/E2E-TEST-PLAN.md` for the full detail —
 > this document is the summary view, not a replacement). Verified against

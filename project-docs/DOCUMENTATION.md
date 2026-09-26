@@ -25,8 +25,10 @@
 > **Verified against code 2026-09-26:** **52 migrations**
 > (latest `052_artist_services`), **36 tables**, **20 route-bearing
 > domains** (26 directories under `internal/`, excluding `pkg`), **20 leaf
-> packages**, **163 route registrations** across **135 swagger paths**,
-> **1166 Go tests**, **28 environment variable names** read via `os.Getenv`
+> packages**, **157 route registrations** across **135 swagger paths** (corrected
+> 2026-09-26: the counter had included ~30 routes that tests mount on
+> throwaway apps and missed 24 registered with a `base+` prefix),
+> **1188 Go tests**, **28 environment variable names** read via `os.Getenv`
 > (test files included). Frontend: **46 Angular routes**, **11 spec files**
 > carrying **55 passing tests** (shared 42, artist-dashboard 8,
 > customer-pwa 5), **47 help topics** (15 customer, 28 artist, 4 admin).

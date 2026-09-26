@@ -66,7 +66,10 @@ domains_total=$(find "$API_DIR/internal" -maxdepth 1 -mindepth 1 -type d ! -name
 domains_routed=$(find "$API_DIR/internal" -maxdepth 2 -name 'handler.go' 2>/dev/null | wc -l | tr -d ' ')
 leaf_packages=$(find "$API_DIR/internal/pkg" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
 
-routes=$(count '\.(Get|Post|Put|Patch|Delete)\("' "$API_DIR/internal" --include='*.go')
+# A route's path is a string literal or a prefix variable (base+"/..."), and
+# both count. Test files mount throwaway apps and are excluded. Until
+# 2026-09-26 this counted test routes (~30) and missed prefixed ones (24).
+routes=$(count '\.(Get|Post|Put|Patch|Delete)\(("|[a-zA-Z_]+ *\+)' "$API_DIR/internal" --include='*.go' --exclude='*_test.go')
 go_tests=$(count '^func Test[A-Za-z0-9_]+' "$API_DIR" --include='*_test.go')
 
 swagger_paths=$(python3 -c "

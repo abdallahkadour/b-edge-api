@@ -1,537 +1,848 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>B-Edge — Database ERD</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B-Edge Database Map</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; overflow: hidden; }
-
-#toolbar {
-  position: fixed; top: 0; left: 0; right: 0; height: 48px;
-  background: #1a1d27; border-bottom: 1px solid #2d3148;
-  display: flex; align-items: center; padding: 0 16px; gap: 12px; z-index: 100;
-}
-#toolbar h1 { font-size: 14px; font-weight: 600; color: #a78bfa; margin-right: 8px; }
-#toolbar span { font-size: 12px; color: #64748b; }
-.tb-btn {
-  padding: 4px 12px; border-radius: 6px; border: 1px solid #2d3148;
-  background: #252836; color: #94a3b8; font-size: 12px; cursor: pointer;
-  transition: all .15s;
-}
-.tb-btn:hover { background: #2d3148; color: #e2e8f0; }
-#zoom-label { font-size: 12px; color: #64748b; min-width: 40px; text-align: center; }
-
-#legend {
-  position: fixed; bottom: 16px; left: 16px; z: 100;
-  background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px;
-  padding: 12px 16px; font-size: 11px;
-}
-#legend h3 { font-size: 11px; color: #64748b; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
-.leg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: #94a3b8; }
-.leg-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
-
-#canvas-wrap { position: fixed; top: 48px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }
-#canvas-wrap.dragging { cursor: grabbing; }
-#canvas { position: absolute; transform-origin: 0 0; }
-
-svg.erd { pointer-events: none; position: absolute; top: 0; left: 0; }
-svg.erd line, svg.erd path { pointer-events: none; }
-
-.table-card {
-  position: absolute; border-radius: 10px; border: 1px solid;
-  overflow: hidden; min-width: 200px; cursor: pointer;
-  transition: box-shadow .2s;
-}
-.table-card:hover { box-shadow: 0 0 0 2px #a78bfa88; }
-.table-card.selected { box-shadow: 0 0 0 2px #a78bfa; }
-
-.card-header {
-  padding: 8px 12px; font-size: 12px; font-weight: 600;
-  display: flex; align-items: center; gap: 6px;
-}
-.card-header .icon { font-size: 14px; }
-
-.card-body { padding: 0; }
-.col-row {
-  display: flex; align-items: center; padding: 3px 12px;
-  font-size: 11px; gap: 6px; border-top: 1px solid rgba(255,255,255,.04);
-}
-.col-row.pk { background: rgba(167,139,250,.08); }
-.col-row.fk { background: rgba(96,165,250,.05); }
-.col-name { flex: 1; color: #e2e8f0; }
-.col-name.pk-name { color: #a78bfa; font-weight: 600; }
-.col-name.fk-name { color: #60a5fa; }
-.col-type { color: #64748b; font-size: 10px; }
-.col-badge {
-  font-size: 9px; padding: 1px 4px; border-radius: 3px;
-  font-weight: 600; letter-spacing: .03em;
-}
-.badge-pk { background: #a78bfa22; color: #a78bfa; }
-.badge-fk { background: #60a5fa22; color: #60a5fa; }
-.badge-nn { background: #34d39922; color: #34d399; }
-.badge-u  { background: #fbbf2422; color: #fbbf24; }
-
-/* color themes per table group */
-.t-core   { background: #1e1f2e; border-color: #a78bfa44; }
-.t-core .card-header { background: #a78bfa18; color: #a78bfa; }
-.t-booking { background: #1e2030; border-color: #60a5fa44; }
-.t-booking .card-header { background: #60a5fa18; color: #60a5fa; }
-.t-store  { background: #1e2820; border-color: #34d39944; }
-.t-store .card-header { background: #34d39918; color: #34d399; }
-.t-artist { background: #2a1e20; border-color: #f8717144; }
-.t-artist .card-header { background: #f8717118; color: #f87171; }
-.t-service { background: #2a2218; border-color: #fbbf2444; }
-.t-service .card-header { background: #fbbf2418; color: #fbbf24; }
-.t-ops    { background: #1e2028; border-color: #94a3b844; }
-.t-ops .card-header { background: #94a3b818; color: #94a3b8; }
-
-.fk-line { stroke-width: 1.5; fill: none; opacity: .5; }
-.fk-line:hover { opacity: 1; }
+  :root { --bg:#FAFAFA; --surface:#FFFFFF; --line:#E4E4E7; --ink:#0A0A0A; --ink-2:#3F3F46; --muted:#71717A; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#121214; --surface:#1A1A1D; --line:#34343A; --ink:#FAFAFA; --ink-2:#D4D4D8; --muted:#A5A5AF; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg:#121214; --surface:#1A1A1D; --line:#34343A; --ink:#FAFAFA; --ink-2:#D4D4D8; --muted:#A5A5AF; color-scheme: dark; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:40px 16px 64px; display:grid; gap:44px; }
+  h1 { margin:0; font-size:clamp(26px,4vw,36px); letter-spacing:-0.02em; }
+  h2 { margin:0 0 6px; font-size:21px; letter-spacing:-0.01em; }
+  p { margin:0 0 8px; color:var(--ink-2); max-width:72ch; }
+  code { font:0.86em ui-monospace, "SF Mono", Menlo, monospace; background:var(--line); padding:1px 5px; border-radius:4px; color:var(--ink); }
+  .meta { color:var(--muted); font-size:13px; }
+  .toc { margin:0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:6px 18px; }
+  .toc li { border-top:1px solid var(--line); padding:8px 0; }
+  .toc span { color:var(--muted); font-size:13px; }
+  a { color:inherit; }
+  .stubs { font-size:13px; color:var(--muted); }
+  /* The diagrams stay on a light panel in both themes: mermaid draws its
+     own colours, and a light panel keeps them legible on a dark page. */
+  .panel { background:#FFFFFF; border:1px solid var(--line); border-radius:12px; padding:12px; overflow-x:auto; }
+  .panel pre { margin:0; }
+  .key { display:grid; gap:4px; font-size:14px; color:var(--ink-2); }
 </style>
 </head>
 <body>
-
-<div id="toolbar">
-  <h1>⬡ B-Edge ERD</h1>
-  <span>17 tables · PostgreSQL 15</span>
-  <div style="flex:1"></div>
-  <button class="tb-btn" onclick="resetView()">Reset view</button>
-  <button class="tb-btn" onclick="zoom(-0.15)">−</button>
-  <span id="zoom-label">100%</span>
-  <button class="tb-btn" onclick="zoom(0.15)">+</button>
-  <button class="tb-btn" onclick="toggleLines()">Toggle FK lines</button>
-</div>
-
-<div id="legend">
-  <h3>Legend</h3>
-  <div class="leg-row"><div class="leg-dot" style="background:#a78bfa"></div>Core identity</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#60a5fa"></div>Bookings</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#34d399"></div>Store / hours</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#f87171"></div>Artists</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#fbbf24"></div>Services</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#94a3b8"></div>Operations</div>
-</div>
-
-<div id="canvas-wrap">
-  <svg class="erd" id="svg-lines" width="4000" height="3000"></svg>
-  <div id="canvas"></div>
-</div>
-
+<main>
+<header>
+  <p class="meta">Generated by <code>scripts/erd.py</code> from the live schema, migration 52, on 2026-09-26. Do not edit by hand: run the script after a migration and commit the result.</p>
+  <h1>B-Edge database map</h1>
+  <p>36 tables and 69 links between them, one diagram per area.</p>
+</header>
+<section class="key" aria-label="How to read the diagrams">
+  <h2>How to read the diagrams</h2>
+  <div>Each box is a table with its columns. <code>PK</code> is the primary key, <code>FK</code> points to another table, <code>UK</code> must be unique.</div>
+  <div>A line runs from the table holding the link to the table it points at, labelled with the linking column. The crow's foot is the "many" side; a circle means that side is optional.</div>
+  <div>Boxes marked <code>other_area</code> belong to a different area and are shown only so their links stay visible.</div>
+</section>
+<nav aria-label="Areas"><ul class="toc">
+<li><a href="#area-1">Accounts and sign-in</a> <span>4 tables</span></li>
+<li><a href="#area-2">Salons and team</a> <span>6 tables</span></li>
+<li><a href="#area-3">Menu and pricing</a> <span>5 tables</span></li>
+<li><a href="#area-4">Opening hours and schedules</a> <span>4 tables</span></li>
+<li><a href="#area-5">Bookings</a> <span>7 tables</span></li>
+<li><a href="#area-6">Shop</a> <span>3 tables</span></li>
+<li><a href="#area-7">Billing</a> <span>3 tables</span></li>
+<li><a href="#area-8">Messages and records</a> <span>4 tables</span></li>
+</ul></nav>
+<section id="area-1"><h2>Accounts and sign-in</h2><p>Every person is one users row; artists and customers sign in differently.</p><p class="tables"><code>users</code>, <code>refresh_tokens</code>, <code>password_resets</code>, <code>customer_otps</code></p><p class="stubs">Also shown, from other areas: artist_services, artists, audit_events, bookings, client_notes, discount_redemptions, invoices, notifications, orders, reports, reviews, salon_invitations, salons, user_notifications, waitlist_entries.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  users {
+    uuid id PK
+    varchar name
+    varchar email UK
+    varchar password_hash
+    varchar role
+    varchar phone
+    varchar status
+    timestamptz created_at
+    timestamptz updated_at
+    timestamptz deleted_at
+    timestamptz phone_verified_at
+  }
+  refresh_tokens {
+    uuid id PK
+    uuid user_id FK
+    varchar token_hash UK
+    timestamptz expires_at
+    timestamptz revoked_at
+    timestamptz created_at
+  }
+  password_resets {
+    uuid id PK
+    uuid user_id FK
+    varchar token UK
+    timestamptz expires_at
+    timestamptz used_at
+    timestamptz created_at
+  }
+  customer_otps {
+    uuid id PK
+    varchar phone
+    varchar otp_hash
+    timestamptz expires_at
+    int4 attempts
+    timestamptz verified_at
+    timestamptz created_at
+  }
+  artist_services {
+    other_area see_its_section
+  }
+  artists {
+    other_area see_its_section
+  }
+  audit_events {
+    other_area see_its_section
+  }
+  bookings {
+    other_area see_its_section
+  }
+  client_notes {
+    other_area see_its_section
+  }
+  discount_redemptions {
+    other_area see_its_section
+  }
+  invoices {
+    other_area see_its_section
+  }
+  notifications {
+    other_area see_its_section
+  }
+  orders {
+    other_area see_its_section
+  }
+  reports {
+    other_area see_its_section
+  }
+  reviews {
+    other_area see_its_section
+  }
+  salon_invitations {
+    other_area see_its_section
+  }
+  salons {
+    other_area see_its_section
+  }
+  user_notifications {
+    other_area see_its_section
+  }
+  waitlist_entries {
+    other_area see_its_section
+  }
+  artist_services }o--o| users : &quot;updated_by&quot;
+  artists |o--|| users : &quot;user_id&quot;
+  audit_events }o--o| users : &quot;actor_id&quot;
+  bookings }o--|| users : &quot;customer_id&quot;
+  client_notes }o--|| users : &quot;customer_id&quot;
+  discount_redemptions }o--|| users : &quot;customer_id&quot;
+  invoices }o--o| users : &quot;confirmed_by&quot;
+  notifications }o--o| users : &quot;user_id&quot;
+  orders }o--|| users : &quot;customer_id&quot;
+  password_resets }o--|| users : &quot;user_id&quot;
+  refresh_tokens }o--|| users : &quot;user_id&quot;
+  reports }o--|| users : &quot;reporter_user_id&quot;
+  reports }o--o| users : &quot;resolved_by&quot;
+  reviews }o--|| users : &quot;customer_id&quot;
+  salon_invitations }o--o| users : &quot;accepted_by&quot;
+  salon_invitations }o--|| users : &quot;invited_by&quot;
+  salons }o--|| users : &quot;owner_id&quot;
+  user_notifications }o--|| users : &quot;user_id&quot;
+  waitlist_entries }o--|| users : &quot;customer_id&quot;
+</pre></div></section>
+<section id="area-2"><h2>Salons and team</h2><p>A salon, its owner and members, its stores, and invitations to join.</p><p class="tables"><code>salons</code>, <code>artists</code>, <code>salon_invitations</code>, <code>stores</code>, <code>artist_stores</code>, <code>artist_store_buffers</code></p><p class="stubs">Also shown, from other areas: artist_schedule_exceptions, artist_schedules, artist_services, audit_events, bookings, business_hours, business_hours_exceptions, client_notes, discounts, invoices, orders, products, reports, reviews, salon_payment_methods, services, subscriptions, users, waitlist_entries.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  salons {
+    uuid id PK
+    uuid owner_id FK
+    varchar name
+    varchar name_ar
+    varchar subscription_plan
+    timestamptz plan_expires_at
+    bool is_active
+    timestamptz created_at
+    timestamptz updated_at
+    timestamptz deleted_at
+  }
+  artists {
+    uuid id PK
+    uuid user_id FK
+    uuid salon_id FK
+    text bio
+    text bio_ar
+    varchar instagram
+    numeric rating
+    int4 review_count
+    bool is_verified
+    timestamptz created_at
+    timestamptz updated_at
+    varchar category
+    text avatar_url
+    varchar handle
+    varchar status
+  }
+  salon_invitations {
+    uuid id PK
+    uuid salon_id FK
+    uuid invited_by FK
+    varchar phone
+    varchar email
+    text token_hash
+    varchar status
+    timestamptz expires_at
+    uuid accepted_by FK
+    timestamptz accepted_at
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  stores {
+    uuid id PK
+    uuid salon_id FK
+    varchar name
+    varchar name_ar
+    text address
+    varchar city
+    varchar country
+    varchar phone
+    int4 same_day_notice_hours
+    time early_bird_cutoff
+    numeric early_bird_fee
+    int4 weekday_buffer_min
+    int4 weekend_buffer_min
+    bool is_active
+    timestamptz created_at
+    timestamptz updated_at
+    varchar timezone
+    float8 latitude
+    float8 longitude
+    numeric rating
+    int4 review_count
+    time default_open_time
+    time default_close_time
+  }
+  artist_stores {
+    uuid id PK
+    uuid artist_id FK
+    uuid store_id FK
+    timestamptz created_at
+  }
+  artist_store_buffers {
+    uuid id PK
+    uuid artist_id FK
+    uuid from_store_id FK
+    uuid to_store_id FK
+    int4 weekday_buffer_min
+    int4 weekend_buffer_min
+    timestamptz created_at
+  }
+  artist_schedule_exceptions {
+    other_area see_its_section
+  }
+  artist_schedules {
+    other_area see_its_section
+  }
+  artist_services {
+    other_area see_its_section
+  }
+  audit_events {
+    other_area see_its_section
+  }
+  bookings {
+    other_area see_its_section
+  }
+  business_hours {
+    other_area see_its_section
+  }
+  business_hours_exceptions {
+    other_area see_its_section
+  }
+  client_notes {
+    other_area see_its_section
+  }
+  discounts {
+    other_area see_its_section
+  }
+  invoices {
+    other_area see_its_section
+  }
+  orders {
+    other_area see_its_section
+  }
+  products {
+    other_area see_its_section
+  }
+  reports {
+    other_area see_its_section
+  }
+  reviews {
+    other_area see_its_section
+  }
+  salon_payment_methods {
+    other_area see_its_section
+  }
+  services {
+    other_area see_its_section
+  }
+  subscriptions {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  waitlist_entries {
+    other_area see_its_section
+  }
+  artist_schedule_exceptions }o--|| artists : &quot;artist_id&quot;
+  artist_schedule_exceptions }o--o| stores : &quot;store_id&quot;
+  artist_schedules }o--|| artists : &quot;artist_id&quot;
+  artist_schedules }o--|| stores : &quot;store_id&quot;
+  artist_services }o--|| artists : &quot;artist_id&quot;
+  artist_store_buffers }o--|| artists : &quot;artist_id&quot;
+  artist_store_buffers }o--|| stores : &quot;from_store_id&quot;
+  artist_store_buffers }o--|| stores : &quot;to_store_id&quot;
+  artist_stores }o--|| artists : &quot;artist_id&quot;
+  artist_stores }o--|| stores : &quot;store_id&quot;
+  artists }o--o| salons : &quot;salon_id&quot;
+  artists |o--|| users : &quot;user_id&quot;
+  audit_events }o--o| salons : &quot;salon_id&quot;
+  bookings }o--|| artists : &quot;artist_id&quot;
+  bookings }o--|| salons : &quot;salon_id&quot;
+  bookings }o--|| stores : &quot;store_id&quot;
+  business_hours }o--|| stores : &quot;store_id&quot;
+  business_hours_exceptions }o--|| stores : &quot;store_id&quot;
+  client_notes }o--|| artists : &quot;artist_id&quot;
+  client_notes }o--|| salons : &quot;salon_id&quot;
+  discounts }o--|| salons : &quot;salon_id&quot;
+  invoices }o--|| artists : &quot;artist_id&quot;
+  orders }o--|| salons : &quot;salon_id&quot;
+  products }o--|| salons : &quot;salon_id&quot;
+  reports }o--o| artists : &quot;artist_id&quot;
+  reviews }o--|| artists : &quot;artist_id&quot;
+  reviews }o--o| stores : &quot;store_id&quot;
+  salon_invitations }o--o| users : &quot;accepted_by&quot;
+  salon_invitations }o--|| users : &quot;invited_by&quot;
+  salon_invitations }o--|| salons : &quot;salon_id&quot;
+  salon_payment_methods }o--|| salons : &quot;salon_id&quot;
+  salons }o--|| users : &quot;owner_id&quot;
+  services }o--|| salons : &quot;salon_id&quot;
+  stores }o--|| salons : &quot;salon_id&quot;
+  subscriptions |o--|| artists : &quot;artist_id&quot;
+  waitlist_entries }o--|| artists : &quot;artist_id&quot;
+  waitlist_entries }o--|| stores : &quot;store_id&quot;
+</pre></div></section>
+<section id="area-3"><h2>Menu and pricing</h2><p>The salon&#x27;s service menu, each artist&#x27;s switch and own price, and portfolio tags.</p><p class="tables"><code>services</code>, <code>service_categories</code>, <code>artist_services</code>, <code>media</code>, <code>media_services</code></p><p class="stubs">Also shown, from other areas: artists, bookings, salons, users, waitlist_entries.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  services {
+    uuid id PK
+    uuid salon_id FK
+    uuid category_id FK
+    varchar name
+    varchar name_ar
+    text description
+    int4 duration_min
+    int4 active_duration_min
+    numeric price
+    numeric deposit_amount
+    int4 deposit_deadline_hours
+    bool is_active
+    bool is_custom
+    uuid template_id FK
+    timestamptz created_at
+    timestamptz updated_at
+    time earliest_start_time
+    int4 buffer_min
+  }
+  service_categories {
+    uuid id PK
+    varchar name UK
+    varchar name_ar
+    bool has_processing_gap
+    time earliest_start_time
+    timestamptz created_at
+  }
+  artist_services {
+    uuid artist_id PK, FK
+    uuid service_id PK, FK
+    numeric price
+    numeric deposit_amount
+    uuid updated_by FK
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  media {
+    uuid id PK
+    varchar owner_type
+    uuid owner_id
+    varchar url
+    varchar cloudinary_id
+    varchar type
+    int4 display_order
+    timestamptz created_at
+  }
+  media_services {
+    uuid id PK
+    uuid media_id FK
+    uuid service_id FK
+    timestamptz created_at
+  }
+  artists {
+    other_area see_its_section
+  }
+  bookings {
+    other_area see_its_section
+  }
+  salons {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  waitlist_entries {
+    other_area see_its_section
+  }
+  artist_services }o--|| artists : &quot;artist_id&quot;
+  artist_services }o--|| services : &quot;service_id&quot;
+  artist_services }o--o| users : &quot;updated_by&quot;
+  bookings }o--|| services : &quot;service_id&quot;
+  media_services }o--|| media : &quot;media_id&quot;
+  media_services }o--|| services : &quot;service_id&quot;
+  services }o--o| service_categories : &quot;category_id&quot;
+  services }o--|| salons : &quot;salon_id&quot;
+  services }o--o| services : &quot;template_id&quot;
+  waitlist_entries }o--|| services : &quot;service_id&quot;
+</pre></div></section>
+<section id="area-4"><h2>Opening hours and schedules</h2><p>When stores are open and when each artist works.</p><p class="tables"><code>business_hours</code>, <code>business_hours_exceptions</code>, <code>artist_schedules</code>, <code>artist_schedule_exceptions</code></p><p class="stubs">Also shown, from other areas: artists, stores.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  business_hours {
+    uuid id PK
+    uuid store_id FK
+    int4 day_of_week
+    time open_time
+    time close_time
+    bool is_open
+    timestamptz created_at
+  }
+  business_hours_exceptions {
+    uuid id PK
+    uuid store_id FK
+    date exception_date
+    bool is_closed
+    time open_time
+    time close_time
+    varchar reason
+    timestamptz created_at
+  }
+  artist_schedules {
+    uuid id PK
+    uuid artist_id FK
+    uuid store_id FK
+    int2 day_of_week
+    time start_time
+    time end_time
+    bool is_working
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  artist_schedule_exceptions {
+    uuid id PK
+    uuid artist_id FK
+    uuid store_id FK
+    date exception_date
+    bool is_unavailable
+    time start_time
+    time end_time
+    varchar reason
+    timestamptz created_at
+  }
+  artists {
+    other_area see_its_section
+  }
+  stores {
+    other_area see_its_section
+  }
+  artist_schedule_exceptions }o--|| artists : &quot;artist_id&quot;
+  artist_schedule_exceptions }o--o| stores : &quot;store_id&quot;
+  artist_schedules }o--|| artists : &quot;artist_id&quot;
+  artist_schedules }o--|| stores : &quot;store_id&quot;
+  business_hours }o--|| stores : &quot;store_id&quot;
+  business_hours_exceptions }o--|| stores : &quot;store_id&quot;
+</pre></div></section>
+<section id="area-5"><h2>Bookings</h2><p>A booking ties a customer to one artist, store and service; reviews, waitlist and discounts hang off it.</p><p class="tables"><code>bookings</code>, <code>waitlist_entries</code>, <code>reviews</code>, <code>discounts</code>, <code>discount_redemptions</code>, <code>client_notes</code>, <code>salon_payment_methods</code></p><p class="stubs">Also shown, from other areas: artists, notifications, orders, reports, salons, services, stores, users.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  bookings {
+    uuid id PK
+    uuid salon_id FK
+    uuid store_id FK
+    uuid artist_id FK
+    uuid customer_id FK
+    uuid service_id FK
+    timestamptz start_time
+    timestamptz end_time
+    timestamptz held_until
+    varchar status
+    numeric original_price
+    numeric discount_amount
+    numeric final_price
+    numeric deposit_amount
+    timestamptz deposit_deadline
+    timestamptz deposit_paid_at
+    varchar channel
+    text special_requests
+    text cancellation_reason
+    timestamptz cancelled_at
+    timestamptz completed_at
+    timestamptz no_show_at
+    timestamptz created_at
+    timestamptz updated_at
+    timestamptz deleted_at
+    varchar deposit_reference
+    varchar review_token
+    varchar calendar_token
+    int4 calendar_sequence
+    int4 buffer_min
+    timestamptz blocked_until
+    varchar discount_code
+    int4 reschedule_count
+    varchar deposit_payer_phone
+  }
+  waitlist_entries {
+    uuid id PK
+    uuid artist_id FK
+    uuid store_id FK
+    uuid service_id FK
+    uuid customer_id FK
+    date requested_date
+    varchar status
+    timestamptz notified_at
+    timestamptz confirm_deadline
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  reviews {
+    uuid id PK
+    uuid booking_id FK
+    uuid customer_id FK
+    uuid artist_id FK
+    int4 rating
+    text comment
+    bool is_visible
+    timestamptz created_at
+    bool would_recommend
+    uuid store_id FK
+    int4 salon_rating
+  }
+  discounts {
+    uuid id PK
+    uuid salon_id FK
+    varchar code
+    text description
+    varchar kind
+    numeric value
+    timestamptz starts_at
+    timestamptz ends_at
+    int4 max_redemptions
+    bool first_time_only
+    bool is_active
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  discount_redemptions {
+    uuid id PK
+    uuid discount_id FK
+    uuid customer_id FK
+    uuid booking_id FK
+    uuid order_id FK
+    numeric amount
+    bool consumed
+    timestamptz created_at
+  }
+  client_notes {
+    uuid id PK
+    uuid salon_id FK
+    uuid artist_id FK
+    uuid customer_id FK
+    text content
+    timestamptz updated_at
+    timestamptz created_at
+  }
+  salon_payment_methods {
+    uuid id PK
+    uuid salon_id FK
+    varchar method
+    varchar account_name
+    varchar account_ref
+    bool is_active
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  artists {
+    other_area see_its_section
+  }
+  notifications {
+    other_area see_its_section
+  }
+  orders {
+    other_area see_its_section
+  }
+  reports {
+    other_area see_its_section
+  }
+  salons {
+    other_area see_its_section
+  }
+  services {
+    other_area see_its_section
+  }
+  stores {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  bookings }o--|| artists : &quot;artist_id&quot;
+  bookings }o--|| users : &quot;customer_id&quot;
+  bookings }o--|| salons : &quot;salon_id&quot;
+  bookings }o--|| services : &quot;service_id&quot;
+  bookings }o--|| stores : &quot;store_id&quot;
+  client_notes }o--|| artists : &quot;artist_id&quot;
+  client_notes }o--|| users : &quot;customer_id&quot;
+  client_notes }o--|| salons : &quot;salon_id&quot;
+  discount_redemptions }o--o| bookings : &quot;booking_id&quot;
+  discount_redemptions }o--|| users : &quot;customer_id&quot;
+  discount_redemptions }o--|| discounts : &quot;discount_id&quot;
+  discount_redemptions }o--o| orders : &quot;order_id&quot;
+  discounts }o--|| salons : &quot;salon_id&quot;
+  notifications }o--o| bookings : &quot;booking_id&quot;
+  reports }o--o| bookings : &quot;booking_id&quot;
+  reviews }o--|| artists : &quot;artist_id&quot;
+  reviews |o--|| bookings : &quot;booking_id&quot;
+  reviews }o--|| users : &quot;customer_id&quot;
+  reviews }o--o| stores : &quot;store_id&quot;
+  salon_payment_methods }o--|| salons : &quot;salon_id&quot;
+  waitlist_entries }o--|| artists : &quot;artist_id&quot;
+  waitlist_entries }o--|| users : &quot;customer_id&quot;
+  waitlist_entries }o--|| services : &quot;service_id&quot;
+  waitlist_entries }o--|| stores : &quot;store_id&quot;
+</pre></div></section>
+<section id="area-6"><h2>Shop</h2><p>Products a salon sells and the orders customers place.</p><p class="tables"><code>products</code>, <code>orders</code>, <code>order_items</code></p><p class="stubs">Also shown, from other areas: discount_redemptions, salons, users.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  products {
+    uuid id PK
+    uuid salon_id FK
+    varchar name
+    text description
+    varchar category
+    numeric price
+    varchar image_url
+    bool is_active
+    timestamptz created_at
+    timestamptz updated_at
+    int4 stock_quantity
+  }
+  orders {
+    uuid id PK
+    uuid salon_id FK
+    uuid customer_id FK
+    varchar status
+    numeric total_amount
+    varchar payment_reference
+    text delivery_notes
+    text cancellation_reason
+    timestamptz confirmed_at
+    timestamptz shipped_at
+    timestamptz delivered_at
+    timestamptz cancelled_at
+    timestamptz created_at
+    timestamptz updated_at
+    timestamptz deleted_at
+    float8 delivery_lat
+    float8 delivery_lng
+    numeric discount_amount
+    varchar discount_code
+  }
+  order_items {
+    uuid id PK
+    uuid order_id FK
+    uuid product_id FK
+    varchar product_name
+    numeric unit_price
+    int4 quantity
+    numeric subtotal
+    timestamptz created_at
+  }
+  discount_redemptions {
+    other_area see_its_section
+  }
+  salons {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  discount_redemptions }o--o| orders : &quot;order_id&quot;
+  order_items }o--|| orders : &quot;order_id&quot;
+  order_items }o--|| products : &quot;product_id&quot;
+  orders }o--|| users : &quot;customer_id&quot;
+  orders }o--|| salons : &quot;salon_id&quot;
+  products }o--|| salons : &quot;salon_id&quot;
+</pre></div></section>
+<section id="area-7"><h2>Billing</h2><p>Plans, each artist&#x27;s subscription, and invoices.</p><p class="tables"><code>plans</code>, <code>subscriptions</code>, <code>invoices</code></p><p class="stubs">Also shown, from other areas: artists, users.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  plans {
+    varchar code PK
+    varchar name
+    numeric monthly_price
+    varchar currency
+    numeric seat_price
+    int4 included_seats
+    text description
+    jsonb features
+    bool is_public
+    int4 sort_order
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  subscriptions {
+    uuid id PK
+    uuid artist_id FK
+    varchar plan_code FK
+    int4 seats
+    numeric monthly_price
+    varchar currency
+    timestamptz trial_ends_at
+    timestamptz current_period_end
+    timestamptz cancelled_at
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  invoices {
+    uuid id PK
+    uuid subscription_id FK
+    uuid artist_id FK
+    int4 invoice_number UK
+    date period_start
+    date period_end
+    date due_date
+    numeric amount
+    varchar currency
+    int4 seats_billed
+    varchar plan_code
+    varchar status
+    varchar payment_reference
+    timestamptz submitted_at
+    uuid confirmed_by FK
+    timestamptz paid_at
+    text void_reason
+    timestamptz created_at
+  }
+  artists {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  invoices }o--|| artists : &quot;artist_id&quot;
+  invoices }o--o| users : &quot;confirmed_by&quot;
+  invoices }o--|| subscriptions : &quot;subscription_id&quot;
+  subscriptions |o--|| artists : &quot;artist_id&quot;
+  subscriptions }o--|| plans : &quot;plan_code&quot;
+</pre></div></section>
+<section id="area-8"><h2>Messages and records</h2><p>Outbound messages, the in-app inbox, the audit trail and user reports.</p><p class="tables"><code>notifications</code>, <code>user_notifications</code>, <code>audit_events</code>, <code>reports</code></p><p class="stubs">Also shown, from other areas: artists, bookings, salons, users.</p><div class="panel"><pre class="mermaid">
+erDiagram
+  notifications {
+    uuid id PK
+    uuid booking_id FK
+    uuid user_id FK
+    varchar template_name
+    varchar channel
+    varchar status
+    jsonb payload
+    int4 attempts
+    timestamptz last_attempted_at
+    timestamptz sent_at
+    text error_message
+    timestamptz created_at
+    varchar recipient_phone
+    timestamptz scheduled_at
+    varchar provider_message_id
+    varchar delivery_status
+    timestamptz delivery_checked_at
+  }
+  user_notifications {
+    uuid id PK
+    uuid user_id FK
+    varchar kind
+    varchar level
+    varchar title
+    text body
+    varchar link
+    varchar group_key
+    int4 item_count
+    timestamptz read_at
+    timestamptz archived_at
+    timestamptz created_at
+  }
+  audit_events {
+    uuid id PK
+    uuid salon_id FK
+    uuid actor_id FK
+    varchar actor_role
+    varchar entity_type
+    uuid entity_id
+    varchar action
+    jsonb old_values
+    jsonb new_values
+    inet ip_address
+    timestamptz created_at
+  }
+  reports {
+    uuid id PK
+    uuid reporter_user_id FK
+    varchar reporter_role
+    uuid booking_id FK
+    uuid artist_id FK
+    varchar category
+    text description
+    varchar status
+    text resolution_note
+    uuid resolved_by FK
+    timestamptz resolved_at
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  artists {
+    other_area see_its_section
+  }
+  bookings {
+    other_area see_its_section
+  }
+  salons {
+    other_area see_its_section
+  }
+  users {
+    other_area see_its_section
+  }
+  audit_events }o--o| users : &quot;actor_id&quot;
+  audit_events }o--o| salons : &quot;salon_id&quot;
+  notifications }o--o| bookings : &quot;booking_id&quot;
+  notifications }o--o| users : &quot;user_id&quot;
+  reports }o--o| artists : &quot;artist_id&quot;
+  reports }o--o| bookings : &quot;booking_id&quot;
+  reports }o--|| users : &quot;reporter_user_id&quot;
+  reports }o--o| users : &quot;resolved_by&quot;
+  user_notifications }o--|| users : &quot;user_id&quot;
+</pre></div></section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
 <script>
-const tables = [
-  // ── Core identity ──────────────────────────────────────────────────────
-  { id: 'users', label: 'users', theme: 't-core', icon: '👤', x: 60, y: 80,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'name', t:'VARCHAR(100)', nn:true },
-      { n:'email', t:'VARCHAR(255)', nn:true, u:true },
-      { n:'password_hash', t:'VARCHAR(255)', nn:true },
-      { n:'role', t:'VARCHAR(20)', nn:true },
-      { n:'phone', t:'VARCHAR(20)' },
-      { n:'status', t:'VARCHAR(20)', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'deleted_at', t:'TIMESTAMPTZ' },
-    ]
-  },
-  { id: 'salons', label: 'salons', theme: 't-core', icon: '💅', x: 340, y: 80,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'owner_id', t:'UUID FK → users', fk:'users' },
-      { n:'name', t:'VARCHAR(200)', nn:true },
-      { n:'name_ar', t:'VARCHAR(200)' },
-      { n:'subscription_plan', t:'VARCHAR(20)', nn:true },
-      { n:'plan_expires_at', t:'TIMESTAMPTZ' },
-      { n:'is_active', t:'BOOLEAN', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'deleted_at', t:'TIMESTAMPTZ' },
-    ]
-  },
-
-  // ── Store / hours ──────────────────────────────────────────────────────
-  { id: 'stores', label: 'stores', theme: 't-store', icon: '🏠', x: 640, y: 60,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
-      { n:'name', t:'VARCHAR(200)', nn:true },
-      { n:'name_ar', t:'VARCHAR(200)' },
-      { n:'address', t:'TEXT' },
-      { n:'city', t:'VARCHAR(100)', nn:true },
-      { n:'country', t:'VARCHAR(100)', nn:true },
-      { n:'phone', t:'VARCHAR(20)' },
-      { n:'same_day_notice_hours', t:'INTEGER', nn:true },
-      { n:'early_bird_cutoff', t:'TIME' },
-      { n:'early_bird_fee', t:'NUMERIC(10,2)', nn:true },
-      { n:'weekday_buffer_min', t:'INTEGER', nn:true },
-      { n:'weekend_buffer_min', t:'INTEGER', nn:true },
-      { n:'is_active', t:'BOOLEAN', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'business_hours', label: 'business_hours', theme: 't-store', icon: '🕐', x: 940, y: 60,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'day_of_week', t:'INTEGER(0-6)', nn:true },
-      { n:'open_time', t:'TIME', nn:true },
-      { n:'close_time', t:'TIME', nn:true },
-      { n:'is_open', t:'BOOLEAN', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'business_hours_exceptions', label: 'business_hours_exceptions', theme: 't-store', icon: '📅', x: 940, y: 320,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'exception_date', t:'DATE', nn:true },
-      { n:'is_closed', t:'BOOLEAN', nn:true },
-      { n:'open_time', t:'TIME' },
-      { n:'close_time', t:'TIME' },
-      { n:'reason', t:'VARCHAR(255)' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-
-  // ── Artists ────────────────────────────────────────────────────────────
-  { id: 'artists', label: 'artists', theme: 't-artist', icon: '🎨', x: 60, y: 420,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'user_id', t:'UUID FK → users', fk:'users' },
-      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
-      { n:'bio', t:'TEXT' },
-      { n:'bio_ar', t:'TEXT' },
-      { n:'instagram', t:'VARCHAR(255)' },
-      { n:'rating', t:'NUMERIC(3,2)', nn:true },
-      { n:'review_count', t:'INTEGER', nn:true },
-      { n:'is_verified', t:'BOOLEAN', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'artist_stores', label: 'artist_stores', theme: 't-artist', icon: '🔗', x: 340, y: 420,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
-      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'artist_store_buffers', label: 'artist_store_buffers', theme: 't-artist', icon: '🚗', x: 340, y: 620,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
-      { n:'from_store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'to_store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'weekday_buffer_min', t:'INTEGER', nn:true },
-      { n:'weekend_buffer_min', t:'INTEGER', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-
-  // ── Services ───────────────────────────────────────────────────────────
-  { id: 'service_categories', label: 'service_categories', theme: 't-service', icon: '🏷️', x: 640, y: 570,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'name', t:'VARCHAR(100)', nn:true, u:true },
-      { n:'name_ar', t:'VARCHAR(100)' },
-      { n:'has_processing_gap', t:'BOOLEAN', nn:true },
-      { n:'earliest_start_time', t:'TIME' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'services', label: 'services', theme: 't-service', icon: '✂️', x: 640, y: 800,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
-      { n:'category_id', t:'UUID FK → service_categories', fk:'service_categories' },
-      { n:'name', t:'VARCHAR(200)', nn:true },
-      { n:'name_ar', t:'VARCHAR(200)' },
-      { n:'description', t:'TEXT' },
-      { n:'duration_min', t:'INTEGER', nn:true },
-      { n:'active_duration_min', t:'INTEGER' },
-      { n:'price', t:'NUMERIC(10,2)', nn:true },
-      { n:'deposit_amount', t:'NUMERIC(10,2)', nn:true },
-      { n:'deposit_deadline_hours', t:'INTEGER', nn:true },
-      { n:'is_active', t:'BOOLEAN', nn:true },
-      { n:'is_custom', t:'BOOLEAN', nn:true },
-      { n:'template_id', t:'UUID FK → services', fk:'services' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-
-  // ── Bookings ───────────────────────────────────────────────────────────
-  { id: 'bookings', label: 'bookings', theme: 't-booking', icon: '📋', x: 1200, y: 400,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
-      { n:'store_id', t:'UUID FK → stores', fk:'stores' },
-      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
-      { n:'customer_id', t:'UUID FK → users', fk:'users' },
-      { n:'service_id', t:'UUID FK → services', fk:'services' },
-      { n:'session_id', t:'UUID (multi-artist)' },
-      { n:'start_time', t:'TIMESTAMPTZ', nn:true },
-      { n:'end_time', t:'TIMESTAMPTZ', nn:true },
-      { n:'held_until', t:'TIMESTAMPTZ' },
-      { n:'status', t:'VARCHAR(30)', nn:true },
-      { n:'original_price', t:'NUMERIC(10,2)', nn:true },
-      { n:'discount_amount', t:'NUMERIC(10,2)', nn:true },
-      { n:'final_price', t:'NUMERIC(10,2)', nn:true },
-      { n:'deposit_amount', t:'NUMERIC(10,2)', nn:true },
-      { n:'deposit_deadline', t:'TIMESTAMPTZ' },
-      { n:'deposit_paid_at', t:'TIMESTAMPTZ' },
-      { n:'channel', t:'VARCHAR(30)', nn:true },
-      { n:'special_requests', t:'TEXT' },
-      { n:'cancellation_reason', t:'TEXT' },
-      { n:'cancelled_at', t:'TIMESTAMPTZ' },
-      { n:'completed_at', t:'TIMESTAMPTZ' },
-      { n:'no_show_at', t:'TIMESTAMPTZ' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'updated_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'deleted_at', t:'TIMESTAMPTZ' },
-    ]
-  },
-  { id: 'reviews', label: 'reviews', theme: 't-booking', icon: '⭐', x: 1200, y: 900,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'booking_id', t:'UUID FK → bookings', fk:'bookings', u:true },
-      { n:'customer_id', t:'UUID FK → users', fk:'users' },
-      { n:'artist_id', t:'UUID FK → artists', fk:'artists' },
-      { n:'rating', t:'INTEGER(1-5)', nn:true },
-      { n:'comment', t:'TEXT' },
-      { n:'is_visible', t:'BOOLEAN', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'media', label: 'media', theme: 't-booking', icon: '🖼️', x: 1500, y: 900,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'owner_type', t:'VARCHAR(20)', nn:true },
-      { n:'owner_id', t:'UUID', nn:true },
-      { n:'url', t:'VARCHAR(500)', nn:true },
-      { n:'cloudinary_id', t:'VARCHAR(255)' },
-      { n:'type', t:'VARCHAR(20)', nn:true },
-      { n:'display_order', t:'INTEGER', nn:true },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-
-  // ── Operations ─────────────────────────────────────────────────────────
-  { id: 'notifications', label: 'notifications', theme: 't-ops', icon: '🔔', x: 1500, y: 400,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'booking_id', t:'UUID FK → bookings', fk:'bookings' },
-      { n:'user_id', t:'UUID FK → users', fk:'users' },
-      { n:'template_name', t:'VARCHAR(100)', nn:true },
-      { n:'channel', t:'VARCHAR(20)', nn:true },
-      { n:'status', t:'VARCHAR(20)', nn:true },
-      { n:'payload', t:'JSONB' },
-      { n:'attempts', t:'INTEGER', nn:true },
-      { n:'last_attempted_at', t:'TIMESTAMPTZ' },
-      { n:'sent_at', t:'TIMESTAMPTZ' },
-      { n:'error_message', t:'TEXT' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'audit_events', label: 'audit_events', theme: 't-ops', icon: '📝', x: 1500, y: 650,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'salon_id', t:'UUID FK → salons', fk:'salons' },
-      { n:'actor_id', t:'UUID FK → users', fk:'users' },
-      { n:'actor_role', t:'VARCHAR(20)' },
-      { n:'entity_type', t:'VARCHAR(50)', nn:true },
-      { n:'entity_id', t:'UUID', nn:true },
-      { n:'action', t:'VARCHAR(50)', nn:true },
-      { n:'old_values', t:'JSONB' },
-      { n:'new_values', t:'JSONB' },
-      { n:'ip_address', t:'INET' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'refresh_tokens', label: 'refresh_tokens', theme: 't-ops', icon: '🔑', x: 60, y: 800,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'user_id', t:'UUID FK → users', fk:'users' },
-      { n:'token_hash', t:'VARCHAR(255)', nn:true, u:true },
-      { n:'expires_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'revoked_at', t:'TIMESTAMPTZ' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-  { id: 'password_resets', label: 'password_resets', theme: 't-ops', icon: '🔒', x: 60, y: 1010,
-    cols: [
-      { n:'id', t:'UUID PK', pk:true },
-      { n:'user_id', t:'UUID FK → users', fk:'users' },
-      { n:'token', t:'VARCHAR(255)', nn:true, u:true },
-      { n:'expires_at', t:'TIMESTAMPTZ', nn:true },
-      { n:'used_at', t:'TIMESTAMPTZ' },
-      { n:'created_at', t:'TIMESTAMPTZ', nn:true },
-    ]
-  },
-];
-
-// FK lines to draw
-const fkLines = [
-  { from:'salons', to:'users', color:'#a78bfa' },
-  { from:'stores', to:'salons', color:'#34d399' },
-  { from:'business_hours', to:'stores', color:'#34d399' },
-  { from:'business_hours_exceptions', to:'stores', color:'#34d399' },
-  { from:'artists', to:'users', color:'#f87171' },
-  { from:'artists', to:'salons', color:'#f87171' },
-  { from:'artist_stores', to:'artists', color:'#f87171' },
-  { from:'artist_stores', to:'stores', color:'#f87171' },
-  { from:'artist_store_buffers', to:'artists', color:'#f87171' },
-  { from:'services', to:'salons', color:'#fbbf24' },
-  { from:'services', to:'service_categories', color:'#fbbf24' },
-  { from:'bookings', to:'salons', color:'#60a5fa' },
-  { from:'bookings', to:'stores', color:'#60a5fa' },
-  { from:'bookings', to:'artists', color:'#60a5fa' },
-  { from:'bookings', to:'users', color:'#60a5fa' },
-  { from:'bookings', to:'services', color:'#60a5fa' },
-  { from:'reviews', to:'bookings', color:'#60a5fa' },
-  { from:'reviews', to:'users', color:'#60a5fa' },
-  { from:'reviews', to:'artists', color:'#60a5fa' },
-  { from:'notifications', to:'bookings', color:'#94a3b8' },
-  { from:'notifications', to:'users', color:'#94a3b8' },
-  { from:'audit_events', to:'salons', color:'#94a3b8' },
-  { from:'audit_events', to:'users', color:'#94a3b8' },
-  { from:'refresh_tokens', to:'users', color:'#94a3b8' },
-  { from:'password_resets', to:'users', color:'#94a3b8' },
-];
-
-// ─── Build DOM ──────────────────────────────────────────────────────────────
-const canvas = document.getElementById('canvas');
-const svgEl  = document.getElementById('svg-lines');
-const cardMap = {};
-
-tables.forEach(t => {
-  const card = document.createElement('div');
-  card.className = `table-card ${t.theme}`;
-  card.id = `card-${t.id}`;
-  card.style.left = t.x + 'px';
-  card.style.top  = t.y + 'px';
-
-  const header = document.createElement('div');
-  header.className = 'card-header';
-  header.innerHTML = `<span class="icon">${t.icon}</span>${t.label}`;
-  card.appendChild(header);
-
-  const body = document.createElement('div');
-  body.className = 'card-body';
-  t.cols.forEach(c => {
-    const row = document.createElement('div');
-    row.className = 'col-row' + (c.pk ? ' pk' : '') + (c.fk ? ' fk' : '');
-    const nameClass = c.pk ? 'pk-name' : (c.fk ? 'fk-name' : '');
-    const badges = [
-      c.pk ? '<span class="col-badge badge-pk">PK</span>' : '',
-      c.fk ? '<span class="col-badge badge-fk">FK</span>' : '',
-      c.nn ? '<span class="col-badge badge-nn">NN</span>' : '',
-      c.u  ? '<span class="col-badge badge-u">U</span>'  : '',
-    ].join('');
-    row.innerHTML = `<span class="col-name ${nameClass}">${c.n}</span><span class="col-type">${c.t}</span>${badges}`;
-    body.appendChild(row);
-  });
-  card.appendChild(body);
-
-  card.addEventListener('click', () => {
-    document.querySelectorAll('.table-card').forEach(c => c.classList.remove('selected'));
-    card.classList.toggle('selected');
-  });
-
-  // Make draggable
-  let ox, oy, mx, my, dragging = false;
-  card.addEventListener('mousedown', e => {
-    e.stopPropagation();
-    dragging = true;
-    ox = parseInt(card.style.left); oy = parseInt(card.style.top);
-    mx = e.clientX; my = e.clientY;
-    card.style.zIndex = 50;
-  });
-  document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const dx = (e.clientX - mx) / scale;
-    const dy = (e.clientY - my) / scale;
-    card.style.left = (ox + dx) + 'px';
-    card.style.top  = (oy + dy) + 'px';
-    drawLines();
-  });
-  document.addEventListener('mouseup', () => { dragging = false; card.style.zIndex = ''; });
-
-  canvas.appendChild(card);
-  cardMap[t.id] = card;
-});
-
-// ─── FK Lines ───────────────────────────────────────────────────────────────
-let showLines = true;
-
-function getCenter(card) {
-  return {
-    x: parseInt(card.style.left) + card.offsetWidth / 2,
-    y: parseInt(card.style.top)  + card.offsetHeight / 2,
-  };
-}
-
-function drawLines() {
-  svgEl.innerHTML = '';
-  if (!showLines) return;
-  fkLines.forEach(fl => {
-    const fc = cardMap[fl.from];
-    const tc = cardMap[fl.to];
-    if (!fc || !tc) return;
-    const fs = { x: parseInt(fc.style.left), y: parseInt(fc.style.top), w: fc.offsetWidth, h: fc.offsetHeight };
-    const ts = { x: parseInt(tc.style.left), y: parseInt(tc.style.top), w: tc.offsetWidth, h: tc.offsetHeight };
-    const fx = fs.x + fs.w / 2, fy = fs.y + fs.h / 2;
-    const tx = ts.x + ts.w / 2, ty = ts.y + ts.h / 2;
-    const mx = (fx + tx) / 2;
-
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', `M${fx},${fy} C${mx},${fy} ${mx},${ty} ${tx},${ty}`);
-    path.setAttribute('stroke', fl.color);
-    path.setAttribute('class', 'fk-line');
-    svgEl.appendChild(path);
-  });
-}
-
-function toggleLines() { showLines = !showLines; drawLines(); }
-
-// ─── Pan & Zoom ─────────────────────────────────────────────────────────────
-let scale = 0.75, tx = 40, ty = 40;
-const wrap = document.getElementById('canvas-wrap');
-const lbl  = document.getElementById('zoom-label');
-
-function applyTransform() {
-  canvas.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
-  svgEl.style.transform  = `translate(${tx}px,${ty}px) scale(${scale})`;
-  lbl.textContent = Math.round(scale * 100) + '%';
-}
-applyTransform();
-drawLines();
-setTimeout(drawLines, 100);
-
-function zoom(delta) {
-  scale = Math.max(0.2, Math.min(2, scale + delta));
-  applyTransform();
-}
-function resetView() { scale = 0.75; tx = 40; ty = 40; applyTransform(); }
-
-let panning = false, px, py;
-wrap.addEventListener('mousedown', e => { panning = true; px = e.clientX; py = e.clientY; wrap.classList.add('dragging'); });
-document.addEventListener('mousemove', e => {
-  if (!panning) return;
-  tx += e.clientX - px; ty += e.clientY - py;
-  px = e.clientX; py = e.clientY;
-  applyTransform();
-});
-document.addEventListener('mouseup', () => { panning = false; wrap.classList.remove('dragging'); });
-
-wrap.addEventListener('wheel', e => {
-  e.preventDefault();
-  zoom(e.deltaY < 0 ? 0.08 : -0.08);
-}, { passive: false });
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", er: { useMaxWidth: false }, securityLevel: "strict" });
 </script>
 </body>
 </html>

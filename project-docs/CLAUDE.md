@@ -148,11 +148,17 @@ Two suites are worth knowing before writing tests:
   `noleak_test.go` fails the build on any other read of `services.price`.**
   The fragment is `COALESCE(os.price, s.price)` (and the matching deposit,
   capped at that price) — one shape, used by every reader: discovery's
-  artist-profile service list, the artist domain's public services, the
-  guest hold, `POST /bookings`, and the discount resolver's base price. The
-  guard test parses `internal/` and carries an explicit allowlist, each entry
-  with its reason (the owner's own menu; admin reporting of the salon menu
-  rather than what customers paid) — proven to fire before it was trusted.
+  artist-profile service list (`discovery/repository.go:GetArtistServices`),
+  the artist domain's public services list
+  (`artist/repository.go:GetOfferedServicesByArtist`), booking's
+  `GetOfferedService` — which every booking entry point resolves through
+  `validateBookingParties` (the guest hold, `POST /bookings`, the slots
+  endpoint and the waitlist) — and the offering settings screen
+  (`offering/repository.go`'s `pricing.Detail`). The guard test parses
+  `internal/` and carries an explicit allowlist of exactly two entries, both
+  the owner's own menu screen (`artist/repository.go:GetServicesBySalon` and
+  `GetServiceByID`, which must show and edit the SALON price) — proven to
+  fire before it was trusted.
 
 - **Every money string from a request body goes through `internal/pkg/money`.**
   Never call `decimal.NewFromString` on user input directly. It accepts `"1e3"`

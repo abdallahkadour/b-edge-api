@@ -151,16 +151,17 @@ Two suites are worth knowing before writing tests:
 
 - **A customer-facing price is read through `internal/pkg/pricing`;
   `noleak_test.go` fails the build on the common shapes of any other read of
-  `services.price` — not on every possible one.** It matches one string
-  literal at a time: `services` named after `FROM`/`JOIN` or in a comma join,
-  bare, `public.`-qualified or quoted, together with `price`/`deposit_amount`
-  or a `SELECT *` / `s.*` / `services.*`. **It cannot see SQL whose table and
-  column sit in different literals** — two constants concatenated at the call
-  site (booking's `enrichedSelectCols` + `enrichedFrom` are already built that
-  way: `enrichedFrom` joins `services`, so an `s.price` added to
-  `enrichedSelectCols` would pass), a table name spliced in with
-  `fmt.Sprintf`, or `UPDATE … RETURNING`. Treat it as a tripwire; review still
-  reads the SQL.
+  `services.price` — not on every possible one.** It checks each string
+  literal and SQL assembled from package constants with `+` or
+  `fmt.Sprintf` (booking's `enrichedSelectCols` + `enrichedFrom` included):
+  `services` named after `FROM`/`JOIN` or in a comma join, bare,
+  `public.`-qualified or quoted, together with a `price`/`deposit_amount`
+  column that belongs to `services` or `artist_services` (unqualified, or
+  qualified by those tables or their aliases — the booking's own
+  `b.deposit_amount` does not count), or a `SELECT *` / `s.*` /
+  `services.*`. **It cannot see** SQL assembled at run time, a non-constant
+  `Sprintf` argument, whole-row references, or `UPDATE … RETURNING`. Treat it
+  as a tripwire; review still reads the SQL.
 
   The fragment is `COALESCE(os.price, s.price)` (and the matching deposit,
   capped at that price) — one shape, used by every reader: discovery's
@@ -179,8 +180,9 @@ Two suites are worth knowing before writing tests:
   current-salon predicate — a false positive kept visible rather than split
   into two literals to dodge the guard. Every shape
   it claims was proven to fire before it was trusted: each was injected into
-  a throwaway file and named by the failing test, and the split-constant
-  probe beside them was not — the limit above, measured.
+  a throwaway file and named by the failing test; split SQL was proven on
+  the real code, by injecting `s.price` into `enrichedSelectCols` and
+  watching the guard name all five enriched booking functions.
 
 - **Every money string from a request body goes through `internal/pkg/money`.**
   Never call `decimal.NewFromString` on user input directly. It accepts `"1e3"`

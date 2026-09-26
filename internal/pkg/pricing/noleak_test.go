@@ -18,18 +18,22 @@ package pricing
 // Allowlisted by FUNCTION, not file: artist/repository.go holds the owner's
 // menu (which must read the salon price) beside code that must not.
 //
-// WHAT IT CANNOT SEE - stated, not hidden. It matches one literal at a time,
-// so SQL whose table and column live in DIFFERENT literals is invisible:
-// two string constants concatenated at the call site (booking/repository.go
-// already builds its enriched queries from enrichedSelectCols + enrichedFrom
-// this way - enrichedFrom joins services, enrichedSelectCols reads only b.*
-// money today; adding s.price to enrichedSelectCols would NOT be caught), a
-// table name spliced in with fmt.Sprintf, or SQL assembled at run time.
-// Within one literal it also misses whole-row references (row_to_json(s),
-// SELECT s ... FROM services s, (s).*), `TABLE services`, and a comment
-// between JOIN and services. It ignores UPDATE/INSERT ... RETURNING and
-// test files. It is a tripwire for the common shapes, not a proof; review
-// still has to read the SQL.
+// WHAT IT SEES: each string literal, and SQL ASSEMBLED from package string
+// constants joined with + or fmt.Sprintf (added 2026-09-26).
+// booking/repository.go builds its enriched queries as
+// fmt.Sprintf("SELECT %s %s ...", enrichedSelectCols, enrichedFrom); an
+// s.price added to the column constant is now named by function. A money
+// column counts only when it belongs to services or artist_services -
+// unqualified, or qualified by those tables or their aliases - so the
+// booking's own b.deposit_amount beside a JOIN on services is not a read.
+//
+// WHAT IT CANNOT SEE - stated, not hidden: SQL assembled at run time (a
+// builder, a joined slice, a parameter), a Sprintf argument or operand that
+// is not a package constant (a function-local const included), whole-row
+// references (row_to_json(s), SELECT s ... FROM services s, (s).*), `TABLE
+// services`, and a comment between JOIN and services. It ignores
+// UPDATE/INSERT ... RETURNING and test files. It is a tripwire for the
+// common shapes, not a proof; review still has to read the SQL.
 //
 // PROVEN TO FIRE: the original FROM/JOIN shape in the commit that introduced
 // it. The widened shapes (comma join, comma join without a space,
@@ -37,8 +41,10 @@ package pricing
 // string, SELECT *, s.*, services.*) were each injected into a temporary
 // internal/zzprobe/probe.go on 2026-09-26: this version listed all eight by
 // function name and failed; the previous version passed with all eight
-// present. A split-constant probe in the same file was NOT listed, which is
-// the limit above, measured. The probe was deleted afterwards.
+// present. A split-constant probe in the same file was NOT listed then; that
+// limit was closed the same day, and proven on the real code: s.price
+// injected into booking's enrichedSelectCols made TestNoStrayReadsOfServiceMoney
+// name all five enriched booking functions (restored afterwards).
 
 import (
 	"go/ast"
@@ -67,7 +73,18 @@ var (
 	reServicesAfterComma = regexp.MustCompile(`(?i),\s*(?:only\s+)?` + servicesRelation)
 	reFromKeyword        = regexp.MustCompile(`(?i)\bfrom\b`)
 
-	reMoneyColumn = regexp.MustCompile(`(?i)(^|[^a-z_])(price|deposit_amount)\b`)
+	// artist_services named in a FROM list, with its alias (captured): her
+	// raw override beside the salon menu bypasses the resolver as surely as
+	// the menu's own price does.
+	reArtistServicesAfterFromJoin = regexp.MustCompile(`(?i)\b(?:from|join)\s+(?:only\s+)?` +
+		`(?:(?:"public"|public)\s*\.\s*)?(?:"artist_services"|artist_services\b)` +
+		`(?:\s+(?:as\s+)?"?([a-z_][a-z0-9_]*)"?)?`)
+
+	// A money column and its qualifier, if any (captured). Not preceded by a
+	// letter, digit, underscore, dot or quote, so final_price does not match
+	// and ".deposit_amount" cannot match without its qualifier.
+	reMoneyToken = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_."])` +
+		`(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?"?(?:price|deposit_amount)"?(?:[^a-z0-9_]|$)`)
 	// SELECT * / SELECT DISTINCT * reads every column of every relation in
 	// the FROM list, the price included. count(*) is not matched.
 	reSelectStar = regexp.MustCompile(`(?i)\bselect\s+(?:distinct\s+)?\*`)
@@ -120,8 +137,25 @@ func readsServiceMoney(lit string) bool {
 		return false
 	}
 
-	if reMoneyColumn.MatchString(sql) || reSelectStar.MatchString(sql) {
+	if reSelectStar.MatchString(sql) {
 		return true
+	}
+	// Owner-aware: a money column counts when it is unqualified (ambiguous)
+	// or qualified by services, artist_services or one of their aliases -
+	// never b.deposit_amount, the deposit stored on a booking.
+	owners := map[string]bool{"services": true, "artist_services": true}
+	for _, a := range aliases {
+		owners[strings.ToLower(a)] = true
+	}
+	for _, m := range reArtistServicesAfterFromJoin.FindAllStringSubmatch(sql, -1) {
+		if m[1] != "" {
+			owners[strings.ToLower(m[1])] = true
+		}
+	}
+	for _, m := range reMoneyToken.FindAllStringSubmatch(sql, -1) {
+		if m[1] == "" || owners[strings.ToLower(m[1])] {
+			return true
+		}
 	}
 	for _, a := range aliases {
 		star := regexp.MustCompile(`(?i)(?:^|[^a-z0-9_"])"?` + regexp.QuoteMeta(a) + `"?\s*\.\s*\*`)
@@ -138,9 +172,22 @@ func moneyReaders(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("resolving internal/: %v", err)
 	}
-	found := map[string]bool{}
+	return moneyReadersIn(t, root)
+}
+
+// moneyReadersIn scans every non-test .go file under root (except
+// pkg/pricing) and returns "rel/path.go:Name" for each function or
+// package-level declaration whose SQL reads service money. Parameterised on
+// root so a test can point it at a throwaway package.
+func moneyReadersIn(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	type parsed struct {
+		rel  string
+		file *ast.File
+	}
+	byDir := map[string][]parsed{}
 	fset := token.NewFileSet()
-	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -156,46 +203,150 @@ func moneyReaders(t *testing.T) map[string]bool {
 		if perr != nil {
 			return nil
 		}
-		for _, decl := range file.Decls {
-			// Package-level SQL is scanned too. Several repositories keep
-			// column lists as consts (bookingSelectCols, enrichedSelectCols);
-			// a guard that only looked inside functions would miss one of
-			// those reading services.price outright.
-			var name string
-			var node ast.Node
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				if d.Body == nil {
-					continue
-				}
-				name, node = d.Name.Name, d.Body
-			case *ast.GenDecl:
-				if len(d.Specs) == 0 {
-					continue
-				}
-				if vs, ok := d.Specs[0].(*ast.ValueSpec); ok && len(vs.Names) > 0 {
-					name = vs.Names[0].Name
-				} else {
-					name = "(decl)"
-				}
-				node = d
-			default:
-				continue
-			}
-			ast.Inspect(node, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if ok && lit.Kind == token.STRING && readsServiceMoney(lit.Value) {
-					found[rel+":"+name] = true
-				}
-				return true
-			})
-		}
+		dir := filepath.Dir(path)
+		byDir[dir] = append(byDir[dir], parsed{rel, file})
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking internal/: %v", err)
+		t.Fatalf("walking %s: %v", root, err)
+	}
+
+	found := map[string]bool{}
+	for _, files := range byDir {
+		asts := make([]*ast.File, 0, len(files))
+		for _, p := range files {
+			asts = append(asts, p.file)
+		}
+		consts := packageStrings(asts)
+		for _, p := range files {
+			for _, decl := range p.file.Decls {
+				// Package-level SQL is scanned too. Several repositories keep
+				// column lists as consts (bookingSelectCols, enrichedSelectCols);
+				// a guard that only looked inside functions would miss one of
+				// those reading services.price outright.
+				var name string
+				var node ast.Node
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					if d.Body == nil {
+						continue
+					}
+					name, node = d.Name.Name, d.Body
+				case *ast.GenDecl:
+					if len(d.Specs) == 0 {
+						continue
+					}
+					if vs, ok := d.Specs[0].(*ast.ValueSpec); ok && len(vs.Names) > 0 {
+						name = vs.Names[0].Name
+					} else {
+						name = "(decl)"
+					}
+					node = d
+				default:
+					continue
+				}
+				ast.Inspect(node, func(n ast.Node) bool {
+					switch x := n.(type) {
+					case *ast.BasicLit:
+						if x.Kind == token.STRING && readsServiceMoney(x.Value) {
+							found[p.rel+":"+name] = true
+						}
+					case *ast.BinaryExpr, *ast.CallExpr:
+						// SQL assembled from constants: check the whole query.
+						if sql := resolveSQL(x.(ast.Expr), consts); sql != "" && readsServiceMoney(sql) {
+							found[p.rel+":"+name] = true
+						}
+					}
+					return true
+				})
+			}
+		}
 	}
 	return found
+}
+
+// packageStrings maps each package-level string constant or variable to its
+// text, resolving ones built from other constants with + or fmt.Sprintf.
+// Three passes settle declarations that refer to later ones.
+func packageStrings(files []*ast.File) map[string]string {
+	consts := map[string]string{}
+	for pass := 0; pass < 3; pass++ {
+		for _, f := range files {
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) != len(vs.Values) {
+						continue
+					}
+					for i, v := range vs.Values {
+						if text := resolveSQL(v, consts); text != "" {
+							consts[vs.Names[i].Name] = text
+						}
+					}
+				}
+			}
+		}
+	}
+	return consts
+}
+
+// reFormatVerb is one fmt verb, optionally indexed (%[2]s); %% is literal.
+var reFormatVerb = regexp.MustCompile(`%(?:\[(\d+)\])?[-+# 0]*\d*(?:\.\d+)?[a-zA-Z%]`)
+
+// resolveSQL returns the text a string expression evaluates to, as far as
+// it can be known statically: literals, package constants, + chains and
+// fmt.Sprintf. Anything else (a call such as pricing.Price, a parameter)
+// contributes nothing, which can only hide a column, never invent one.
+func resolveSQL(e ast.Expr, consts map[string]string) string {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		if x.Kind == token.STRING {
+			if u, err := strconv.Unquote(x.Value); err == nil {
+				return u
+			}
+		}
+	case *ast.Ident:
+		return consts[x.Name]
+	case *ast.ParenExpr:
+		return resolveSQL(x.X, consts)
+	case *ast.BinaryExpr:
+		if x.Op == token.ADD {
+			return resolveSQL(x.X, consts) + resolveSQL(x.Y, consts)
+		}
+	case *ast.CallExpr:
+		sel, ok := x.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Sprintf" || len(x.Args) == 0 {
+			return ""
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
+			return ""
+		}
+		args := make([]string, 0, len(x.Args)-1)
+		for _, a := range x.Args[1:] {
+			args = append(args, resolveSQL(a, consts))
+		}
+		next := 0
+		return reFormatVerb.ReplaceAllStringFunc(resolveSQL(x.Args[0], consts), func(v string) string {
+			if v == "%%" {
+				return "%"
+			}
+			i := next
+			if m := reFormatVerb.FindStringSubmatch(v); m[1] != "" {
+				n, _ := strconv.Atoi(m[1])
+				i = n - 1
+			}
+			next = i + 1
+			if i >= 0 && i < len(args) {
+				return args[i]
+			}
+			return ""
+		})
+	}
+	return ""
 }
 
 func TestNoStrayReadsOfServiceMoney(t *testing.T) {
@@ -310,5 +461,91 @@ func TestReadsServiceMoney_OtherAliasStar_NotFlagged(t *testing.T) {
 func TestReadsServiceMoney_NoServicesTable_NotFlagged(t *testing.T) {
 	if readsServiceMoney(`SELECT price, deposit_amount FROM artist_services WHERE artist_id = $1`) {
 		t.Fatal("artist_services is not the services table")
+	}
+}
+
+// ── Owner-aware money columns ────────────────────────────────────────────
+//
+// A money column counts only when it belongs to services or artist_services:
+// unqualified, or qualified by one of those tables or their aliases. That is
+// what lets the guard check a whole ASSEMBLED query - bookings JOIN services,
+// reading the booking's own stored deposit - without a false alarm.
+
+func TestReadsServiceMoney_AnotherTablesQualifiedMoney_NotFlagged(t *testing.T) {
+	// b.deposit_amount is the deposit STORED on the booking, not the menu's.
+	if readsServiceMoney(`SELECT b.deposit_amount, s.name FROM bookings b JOIN services s ON s.id = b.service_id`) {
+		t.Fatal("a money column qualified by another table's alias is not a read of services money")
+	}
+}
+
+func TestReadsServiceMoney_ArtistServicesAliasMoney_Flagged(t *testing.T) {
+	// Her raw override read beside the salon menu bypasses the resolver too.
+	if !readsServiceMoney(`SELECT os.price FROM services s JOIN artist_services os ON os.service_id = s.id`) {
+		t.Fatal("an artist_services money column beside services must be flagged")
+	}
+}
+
+func TestReadsServiceMoney_UnqualifiedMoney_Flagged(t *testing.T) {
+	// Unqualified is ambiguous, so it counts.
+	if !readsServiceMoney(`SELECT name, price FROM services WHERE id = $1`) {
+		t.Fatal("an unqualified money column in a services query must be flagged")
+	}
+}
+
+// ── SQL split across constants ──────────────────────────────────────────
+//
+// booking/repository.go builds its enriched queries as
+// fmt.Sprintf("SELECT %s %s ...", enrichedSelectCols, enrichedFrom): the
+// columns in one constant, the JOIN on services in another. Checked one
+// literal at a time, adding s.price to the column list would never be seen.
+// The guard now resolves string constants joined with + or fmt.Sprintf and
+// checks the ASSEMBLED query.
+
+// fakePackage writes one Go file into a throwaway root for moneyReadersIn.
+func fakePackage(t *testing.T, src string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "fake")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+const splitConsts = "package fake\n\nimport \"fmt\"\n\n" +
+	"const cols = `b.id, s.price`\n" +
+	"const from = ` FROM bookings b JOIN services s ON s.id = b.service_id`\n\n"
+
+func TestGuard_SplitAcrossConstantsViaSprintf_Flagged(t *testing.T) {
+	found := moneyReadersIn(t, fakePackage(t, splitConsts+
+		"func Get() string { return fmt.Sprintf(\"SELECT %s %s WHERE b.id = $1\", cols, from) }\n"))
+	if !found["fake/repo.go:Get"] {
+		t.Fatalf("columns and the services JOIN assembled by fmt.Sprintf must be flagged; found %v", found)
+	}
+	if found["fake/repo.go:cols"] || found["fake/repo.go:from"] {
+		t.Fatalf("neither constant reads service money on its own; found %v", found)
+	}
+}
+
+func TestGuard_SplitAcrossConstantsViaPlus_Flagged(t *testing.T) {
+	found := moneyReadersIn(t, fakePackage(t, splitConsts+
+		"var _ = fmt.Sprint\n\nfunc Get() string { return \"SELECT \" + cols + from }\n"))
+	if !found["fake/repo.go:Get"] {
+		t.Fatalf("columns and the services JOIN assembled with + must be flagged; found %v", found)
+	}
+}
+
+func TestGuard_SplitBookingShape_NotFlagged(t *testing.T) {
+	// The real enriched-booking shape: the booking's OWN stored money beside
+	// a JOIN on services for the service's name.
+	found := moneyReadersIn(t, fakePackage(t, "package fake\n\nimport \"fmt\"\n\n"+
+		"const cols = `b.id, b.final_price, b.deposit_amount, s.name AS service_name`\n"+
+		"const from = ` FROM bookings b JOIN services s ON s.id = b.service_id`\n\n"+
+		"func Get() string { return fmt.Sprintf(\"SELECT %s %s\", cols, from) }\n"))
+	if len(found) != 0 {
+		t.Fatalf("a booking's own stored money beside a services join is not a read of service money; found %v", found)
 	}
 }

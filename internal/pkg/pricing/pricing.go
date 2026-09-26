@@ -11,9 +11,9 @@
 // shipped that class three times (subscriptionVisibleCond, calendar_sequence,
 // the cross-salon booking). So the calculation lives here, once, and
 // noleak_test.go fails the build on the common shapes of any other SQL
-// reading services.price or services.deposit_amount. It matches one string
-// literal at a time, so SQL split across two literals is not seen - its
-// header lists the shapes it is known to miss.
+// reading services.price or services.deposit_amount - in a single literal
+// or assembled from constants with + or fmt.Sprintf. Its header lists the
+// shapes it is known to miss.
 //
 // # WHY SQL EXPRESSIONS WITHOUT ALIASES
 //

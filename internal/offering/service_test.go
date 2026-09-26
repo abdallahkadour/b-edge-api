@@ -20,6 +20,7 @@ type mockRepo struct {
 	artistID    uuid.UUID
 	artistIDErr error // ruling 3: a non-ErrNotFound failure from ArtistIDForUser must surface as a 500
 	inSalon     bool
+	inSalonErr  error
 	current     *Offering
 	getErr      error
 	upserts     []UpsertParams
@@ -31,7 +32,7 @@ func (m *mockRepo) ArtistIDForUser(context.Context, uuid.UUID) (uuid.UUID, error
 	return m.artistID, m.artistIDErr
 }
 func (m *mockRepo) ArtistInSalon(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return m.inSalon, nil
+	return m.inSalon, m.inSalonErr
 }
 func (m *mockRepo) List(context.Context, uuid.UUID, uuid.UUID) ([]*Offering, error) {
 	return []*Offering{m.current}, nil
@@ -285,4 +286,26 @@ func TestUpdateMine_UpsertRefusesForeignService_404(t *testing.T) {
 
 	assert.Equal(t, "SERVICE_NOT_FOUND", code(t, err))
 	assert.Empty(t, aud.events, "nothing was written, so nothing is audited")
+}
+
+func TestListMine_SalonCheckFails_IsNotA404(t *testing.T) {
+	// Breaks if the membership re-check maps a database error to "not found":
+	// an outage would then tell her she is not in her own salon.
+	repo := &mockRepo{artistID: uuid.New(), inSalonErr: errors.New("connection reset")}
+
+	_, err := NewService(repo, &captureAudit{}).ListMine(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	assert.False(t, errors.As(err, &appErr), "a database error must surface as an internal error, got %v", err)
+}
+
+func TestListForMember_SalonCheckFails_IsNotA404(t *testing.T) {
+	repo := &mockRepo{inSalonErr: errors.New("connection reset")}
+
+	_, err := NewService(repo, &captureAudit{}).ListForMember(context.Background(), uuid.New(), uuid.New())
+
+	require.Error(t, err)
+	var appErr *apperror.AppError
+	assert.False(t, errors.As(err, &appErr), "a database error must surface as an internal error, got %v", err)
 }

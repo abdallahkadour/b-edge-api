@@ -12,6 +12,12 @@ import (
 // owner_id. Everything else must go through Can.
 //
 // Paths are relative to the repository's internal/ directory.
+//
+// Exempt a FILE only when the file holds nothing else. artist/repository.go
+// was once exempt as a whole for one statement in CreateService; measured on
+// 2026-09-26, an inline owner check added anywhere in it passed this test.
+// That statement now lives alone in artist/owner_seed.go, and the same probe
+// in artist/repository.go fails here, naming the file.
 var allowedSalonOwnerFiles = map[string]string{
 	"pkg/salonrole/role.go":     "defines Resolve, the one derivation of the role",
 	"onboarding/repository.go":  "creates the salon and therefore writes owner_id once",
@@ -19,9 +25,10 @@ var allowedSalonOwnerFiles = map[string]string{
 	"domain/auth/service.go":    "resolves the role at token issue",
 	"domain/auth/repository.go": "loads the owner_id that token issue resolves against",
 	"domain/auth/model.go":      "declares the SalonOwnerID field that load scans into",
-	"artist/repository.go": "CreateService (PP-7) identifies the owning artist via " +
-		"salons.owner_id to seed her first-offering row in the same statement; a data " +
-		"lookup for that seed, not an authorization decision",
+	"artist/owner_seed.go": "holds ONLY createServiceWithOwnerOfferSQL: CreateService (PP-7) " +
+		"identifies the owning artist via salons.owner_id to seed her artist_services row " +
+		"in the same statement; a data lookup for that seed, not an authorization decision. " +
+		"Its own file so the rest of artist/repository.go stays guarded",
 }
 
 // salonOwnerRefs matches a SQL statement or expression that ties the salons

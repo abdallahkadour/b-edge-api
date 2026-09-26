@@ -513,31 +513,10 @@ func (r *pgRepo) GetServiceByID(ctx context.Context, id uuid.UUID) (*SalonServic
 
 func (r *pgRepo) CreateService(ctx context.Context, s *SalonServiceRecord) error {
 	// PP-7: the owner offers what she creates; members switch it on
-	// themselves. Written in the same statement as the insert (owner_offers
-	// CTE) so a service can never exist with an empty owner menu.
-	err := r.db.QueryRow(ctx, `
-		WITH svc AS (
-			INSERT INTO services (
-				id, salon_id, category_id, name, name_ar, description,
-				duration_min, buffer_min, active_duration_min, price,
-				deposit_amount, deposit_deadline_hours,
-				is_active, is_custom
-			) VALUES (
-				$1, $2, $3, $4, $5, $6,
-				$7, $8, $9, $10,
-				$11, $12,
-				$13, $14
-			)
-			RETURNING id, salon_id, created_at, updated_at
-		), owner_offers AS (
-			-- PP-7: the owner offers what she creates; members switch it on.
-			INSERT INTO artist_services (artist_id, service_id)
-			SELECT a.id, svc.id
-			  FROM svc
-			  JOIN salons sa ON sa.id = svc.salon_id
-			  JOIN artists a ON a.user_id = sa.owner_id AND a.salon_id = sa.id
-		)
-		SELECT created_at, updated_at FROM svc`,
+	// themselves. One statement - the insert and the owner's artist_services
+	// row together - so a service can never exist with an empty owner menu.
+	// The SQL lives in owner_seed.go; see there for why.
+	err := r.db.QueryRow(ctx, createServiceWithOwnerOfferSQL,
 		s.ID, s.SalonID, s.CategoryID, s.Name, s.NameAr, s.Description,
 		s.DurationMin, s.BufferMin, s.ActiveDurationMin, s.Price,
 		s.DepositAmount, s.DepositDeadlineHours,

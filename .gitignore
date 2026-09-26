@@ -47,3 +47,8 @@ project-docs/slot-baseline-*.json
 # and committing the HTML without its (ignored) asset folder would be broken.
 project-docs/*_files/
 project-docs/Multi-Artist Salons.html
+
+# Python bytecode caches (scripts/*.py). Generated on every run; one was
+# committed by accident and untracked on 2026-09-26.
+__pycache__/
+*.pyc

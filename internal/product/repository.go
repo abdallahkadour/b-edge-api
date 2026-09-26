@@ -236,21 +236,28 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem, 
 	return nil
 }
 
-func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*OrderItem, error) {
+// orderColumns is every column an Order carries, in scanOrder's order. Every
+// order read uses this one list: each read typing its own is how three of
+// them came to leave the discount out, so a $40 order paid with a $10 code
+// read back as $40 of items and a $30 total with nothing in between.
+const orderColumns = `id, salon_id, customer_id, status, total_amount, discount_amount, discount_code, request_id,
+	payment_reference, delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
+	confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at`
+
+// scanOrder reads one row selected with orderColumns.
+func scanOrder(row pgx.Row) (*Order, error) {
 	o := &Order{}
-	err := r.db.QueryRow(ctx, `
-		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
-		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
-		FROM orders
-		WHERE id = $1
-		AND deleted_at IS NULL`,
-		id,
-	).Scan(
-		&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.PaymentReference,
-		&o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
+	err := row.Scan(
+		&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.DiscountAmount, &o.DiscountCode, &o.RequestID,
+		&o.PaymentReference, &o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
 		&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
 	)
+	return o, err
+}
+
+func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*OrderItem, error) {
+	o, err := scanOrder(r.db.QueryRow(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE id = $1 AND deleted_at IS NULL`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil, ErrOrderNotFound
@@ -265,24 +272,9 @@ func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*Ord
 	return o, items, nil
 }
 
-// GetOrderByRequestID reads the discount too, unlike GetOrderByID: a retry
-// must answer with exactly what the first attempt would have, and that
-// included the code and the amount it took off.
 func (r *pgRepo) GetOrderByRequestID(ctx context.Context, requestID uuid.UUID) (*Order, []*OrderItem, error) {
-	o := &Order{}
-	err := r.db.QueryRow(ctx, `
-		SELECT id, salon_id, customer_id, status, total_amount, discount_amount, discount_code, request_id,
-		       payment_reference, delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
-		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
-		FROM orders
-		WHERE request_id = $1
-		AND deleted_at IS NULL`,
-		requestID,
-	).Scan(
-		&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.DiscountAmount, &o.DiscountCode, &o.RequestID,
-		&o.PaymentReference, &o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
-		&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
-	)
+	o, err := scanOrder(r.db.QueryRow(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE request_id = $1 AND deleted_at IS NULL`, requestID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil, ErrOrderNotFound
@@ -371,13 +363,7 @@ func (r *pgRepo) GetOrderItems(ctx context.Context, orderID uuid.UUID) ([]*Order
 }
 
 func (r *pgRepo) GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*Order, error) {
-	q := `
-		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
-		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
-		FROM orders
-		WHERE salon_id = $1
-		AND deleted_at IS NULL`
+	q := `SELECT ` + orderColumns + ` FROM orders WHERE salon_id = $1 AND deleted_at IS NULL`
 	args := []interface{}{salonID}
 	if status != "" {
 		q += ` AND status = $2`
@@ -398,7 +384,7 @@ func (r *pgRepo) GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status
 // doc comment for why both matter for this specific, artist-facing view.
 func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*EnrichedOrderResponse, error) {
 	q := `
-		SELECT o.id, o.status, o.total_amount, o.payment_reference,
+		SELECT o.id, o.status, o.total_amount, o.discount_amount, o.discount_code, o.payment_reference,
 		       o.delivery_notes, o.delivery_lat, o.delivery_lng, o.cancellation_reason,
 		       o.confirmed_at, o.shipped_at, o.delivered_at, o.cancelled_at, o.created_at,
 		       u.name, u.phone
@@ -426,8 +412,9 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 	for rows.Next() {
 		e := &EnrichedOrderResponse{}
 		var orderID uuid.UUID
+		var discount decimal.Decimal
 		if err := rows.Scan(
-			&orderID, &e.Status, &e.TotalAmount, &e.PaymentReference,
+			&orderID, &e.Status, &e.TotalAmount, &discount, &e.DiscountCode, &e.PaymentReference,
 			&e.DeliveryNotes, &e.DeliveryLat, &e.DeliveryLng, &e.CancellationReason,
 			&e.ConfirmedAt, &e.ShippedAt, &e.DeliveredAt, &e.CancelledAt, &e.CreatedAt,
 			&e.CustomerName, &e.CustomerPhone,
@@ -435,6 +422,8 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 			return nil, fmt.Errorf("scan enriched order: %w", err)
 		}
 		e.ID = orderID
+		// Same rule as toOrderResponse: no discount, no discount line.
+		e.DiscountAmount = positiveOrNil(discount)
 		result = append(result, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -466,14 +455,8 @@ func (r *pgRepo) GetEnrichedOrdersBySalon(ctx context.Context, salonID uuid.UUID
 }
 
 func (r *pgRepo) GetOrdersByCustomer(ctx context.Context, customerID uuid.UUID) ([]*Order, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT id, salon_id, customer_id, status, total_amount, payment_reference,
-		       delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
-		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
-		FROM orders
-		WHERE customer_id = $1
-		AND deleted_at IS NULL
-		ORDER BY created_at DESC`,
+	rows, err := r.db.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE customer_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
 		customerID,
 	)
 	if err != nil {
@@ -489,12 +472,8 @@ func scanOrders(rows pgx.Rows) ([]*Order, error) {
 	// and only ApiService.getArray coalesces it away on the client.
 	result := make([]*Order, 0)
 	for rows.Next() {
-		o := &Order{}
-		if err := rows.Scan(
-			&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.PaymentReference,
-			&o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
-			&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
-		); err != nil {
+		o, err := scanOrder(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan order: %w", err)
 		}
 		result = append(result, o)

@@ -157,3 +157,69 @@ func TestMigration054_DownThenUp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, col())
 }
+
+func TestOrderReads_CarryTheDiscount(t *testing.T) {
+	// A $40 order paid with a $10 code. Every screen lists $40 of items and a
+	// $30 total, so a read that drops the discount makes the two disagree -
+	// on the customer's receipt and on the screen where the artist confirms
+	// she was paid $30.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newShop(t, pool)
+	repo := NewRepository(pool)
+	code := "SAVE10"
+	o, items := f.order(nil)
+	o.TotalAmount = decimal.RequireFromString("30")
+	o.DiscountAmount = decimal.RequireFromString("10")
+	o.DiscountCode = &code
+	require.NoError(t, repo.CreateOrder(ctx, o, items, nil))
+
+	check := func(read string, got *Order) {
+		t.Helper()
+		assert.True(t, decimal.RequireFromString("10").Equal(got.DiscountAmount), "%s: discount %s", read, got.DiscountAmount)
+		if assert.NotNil(t, got.DiscountCode, read) {
+			assert.Equal(t, code, *got.DiscountCode, read)
+		}
+	}
+
+	byID, _, err := repo.GetOrderByID(ctx, o.ID)
+	require.NoError(t, err)
+	check("GetOrderByID", byID)
+
+	byCustomer, err := repo.GetOrdersByCustomer(ctx, f.Customer)
+	require.NoError(t, err)
+	require.Len(t, byCustomer, 1)
+	check("GetOrdersByCustomer", byCustomer[0])
+
+	bySalon, err := repo.GetOrdersBySalon(ctx, f.Salon, "")
+	require.NoError(t, err)
+	require.Len(t, bySalon, 1)
+	check("GetOrdersBySalon", bySalon[0])
+
+	queue, err := repo.GetEnrichedOrdersBySalon(ctx, f.Salon, "")
+	require.NoError(t, err)
+	require.Len(t, queue, 1)
+	if assert.NotNil(t, queue[0].DiscountAmount, "GetEnrichedOrdersBySalon") {
+		assert.True(t, decimal.RequireFromString("10").Equal(*queue[0].DiscountAmount))
+	}
+	if assert.NotNil(t, queue[0].DiscountCode, "GetEnrichedOrdersBySalon") {
+		assert.Equal(t, code, *queue[0].DiscountCode)
+	}
+}
+
+func TestOrderReads_NoDiscount_NoDiscountLine(t *testing.T) {
+	// The artist's queue omits the field when nothing was taken off, so a
+	// receipt shows a discount line only when there is one.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newShop(t, pool)
+	repo := NewRepository(pool)
+	o, items := f.order(nil)
+	require.NoError(t, repo.CreateOrder(ctx, o, items, nil))
+
+	queue, err := repo.GetEnrichedOrdersBySalon(ctx, f.Salon, "")
+	require.NoError(t, err)
+	require.Len(t, queue, 1)
+	assert.Nil(t, queue[0].DiscountAmount)
+	assert.Nil(t, queue[0].DiscountCode)
+}

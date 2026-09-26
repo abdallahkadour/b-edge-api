@@ -55,26 +55,41 @@ and deliberately not as far on duration.
 
 ## 3. Data — migration 052
 
+As built (`db/migrations/052_artist_services.up.sql`):
+
 ```sql
 CREATE TABLE artist_services (
-    artist_id      UUID NOT NULL REFERENCES artists(id)  ON DELETE CASCADE,
-    service_id     UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-    price          NUMERIC(10,2),          -- NULL = the salon's price
-    deposit_amount NUMERIC(10,2),          -- NULL = the salon's deposit
-    updated_by     UUID REFERENCES users(id),
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    artist_id      UUID          NOT NULL REFERENCES artists(id)  ON DELETE CASCADE,
+    service_id     UUID          NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    price          NUMERIC(10,2),                                -- NULL = the salon's price
+    deposit_amount NUMERIC(10,2),                                -- NULL = the salon's deposit
+    updated_by     UUID          REFERENCES users(id) ON DELETE SET NULL,
+    created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
     PRIMARY KEY (artist_id, service_id),
-    CHECK (price          IS NULL OR (price >= 0          AND price <> 'NaN')),
-    CHECK (deposit_amount IS NULL OR (deposit_amount >= 0 AND deposit_amount <> 'NaN'))
+    CONSTRAINT artist_services_price_valid
+        CHECK (price IS NULL OR (price >= 0 AND price <> 'NaN')),
+    CONSTRAINT artist_services_deposit_valid
+        CHECK (deposit_amount IS NULL OR (deposit_amount >= 0 AND deposit_amount <> 'NaN'))
 );
+
+-- The PK serves "this artist's services"; this serves the reverse, used by
+-- the cascade and by "who offers this service".
+CREATE INDEX idx_artist_services_service ON artist_services (service_id);
 ```
 
 - **A row means "offers it"; no row means she does not.** There is no
   `is_offered` column, so "offered" can never disagree with "has a row".
-- The **cross-table rule** — the service is in the artist's salon — cannot be a
-  CHECK. It is enforced where rows are written (§5) and re-checked on every
-  booking by `validateBookingParties`.
+- The **cross-table rule** — the service is in the artist's *current* salon —
+  cannot be a CHECK. It is held where rows are written and re-checked where
+  they are read: the offering `Upsert` statement itself writes only when the
+  service is on her current salon's menu (`INSERT … SELECT … WHERE EXISTS`,
+  0 rows → 404 `SERVICE_NOT_FOUND`); the owner seed on service creation and
+  onboarding only ever seeds the owner of that same salon; `DetachArtist`
+  deletes a leaver's rows in the same statement; the two customer-facing
+  lists (`discovery.GetArtistServices`, `artist.GetOfferedServicesByArtist`)
+  join `artists` on `a.salon_id = s.salon_id`, so a stray row could not
+  surface; and every booking re-checks through `validateBookingParties`.
 - **Backfill** in the same migration: one row per existing artist per service
   of her salon — **active and inactive** — prices NULL. Behaviour on release day
   is identical. Inactive services are included because the resolver already
@@ -100,18 +115,37 @@ COALESCE(os.deposit_amount, s.deposit_amount)
 --   ON os.service_id = s.id AND os.artist_id = $artist
 ```
 
-**Readers moved onto it:** discovery's artist-profile service list, the artist
-domain's `GetPublicServicesByArtist`, the hold, `POST /bookings`, and the base
-price handed to the discount resolver.
+**Readers on it, as built:** discovery's artist-profile service list
+(`discovery.GetArtistServices`); the artist domain's public service list
+(`artist.GetOfferedServicesByArtist`); booking's `GetOfferedService`, which
+every booking entry point resolves through `validateBookingParties` — the
+guest hold, `POST /bookings`, the slots endpoint and the waitlist; and the
+offering settings screen (`offering` repository, via `pricing.Detail`). The
+discount resolver is **not** a separate reader: it is handed the price the
+booking stores (the effective price from `GetOfferedService` at
+`POST /bookings`, the held row's `final_price` at guest submit and at
+preview), so it never reads `services.price` at all.
 
-**A build-breaking guard test** (M7 → 7) parses `internal/` and fails if any SQL
-reads the `price` or `deposit_amount` of the `services` table outside
-`internal/pkg/pricing`. It carries an **explicit allowlist, each entry with its
-reason** — the same shape as the route-coverage guard's `exemptRoutes`. Known
-legitimate entries: the owner's own menu (reading and writing the *salon*
-price is the point of that screen), and admin reporting if it reports the
-salon menu rather than what customers paid. Proven to fire before it is
-trusted.
+**A build-breaking guard test** (`internal/pkg/pricing/noleak_test.go`)
+parses `internal/` and fails on the **common shapes** of SQL reading the
+`price` or `deposit_amount` of the `services` table outside
+`internal/pkg/pricing`: `services` named after `FROM`/`JOIN` or in a comma
+join, bare, `public.`-qualified or quoted, together with `price` /
+`deposit_amount` or a `SELECT *` / `s.*` / `services.*`. It matches one
+string literal at a time, so **SQL split across two literals is not seen** —
+two constants concatenated at the call site (booking's `enrichedSelectCols` +
+`enrichedFrom` are already built that way), a table name spliced in with
+`fmt.Sprintf`, or `UPDATE … RETURNING`. It is a tripwire, not a proof.
+
+It carries an **explicit allowlist, each entry with its reason** — the same
+shape as the route-coverage guard's `exemptRoutes` — of exactly three
+entries: the owner's own menu, `artist.GetServicesBySalon` and
+`artist.GetServiceByID` (reading and writing the *salon* price is the point
+of that screen); and `offering`'s `Upsert`, which *writes* her override
+(`artist_services.price`) and joins `services` only for the current-salon
+predicate. Every shape was proven to fire before it was trusted: each was
+injected into a throwaway file and named by the failing test, and a
+split-constant probe beside them was not.
 
 **`validateBookingParties` gains one condition:** she has a row for the service.
 A switched-off service returns `errServiceNotFound()` — indistinguishable from
@@ -137,15 +171,21 @@ Two capabilities in the existing owner/member matrix:
   price and deposit (possibly null), the salon's, the **effective** values a
   customer will pay, and `deposit_capped`.
 - `PUT` body: `{ "offered": bool, "price": money|null, "deposit_amount": money|null }`.
-  `price` and `deposit_amount` are `optional.Field`, so an explicit `null`
-  **clears** an override back to the salon's value — the house pattern for
-  clearable fields. Money goes through `internal/pkg/money`.
+  `offered` is **required** — absent or `null` is `422 VALIDATION_ERROR` on
+  `offered`, because `false` deletes her row and her custom price, and a
+  body that only meant to change the deposit must not be read as "switch it
+  off". `price` and `deposit_amount` are `optional.Field`, so an explicit
+  `null` **clears** an override back to the salon's value and an absent key
+  keeps it — the house pattern for clearable fields. Money goes through
+  `internal/pkg/money`.
 - **Switching a service off deletes her row — including her custom price.**
   "No row" is what "not offered" means (PP-5), so there is nowhere to keep it.
   Switching back on starts again from the salon's values. The screen says so
   before she confirms turning off a service she has priced.
 - **Refused:** her own deposit above her own price (422, on `deposit_amount`); a
-  service outside her salon (404); a member of another salon (404).
+  service outside her current salon (404 `SERVICE_NOT_FOUND` — refused by
+  the lookup and again by the `Upsert` statement itself); a member of another
+  salon (404 `MEMBER_NOT_FOUND`).
 - **The own-services routes re-check salon membership against the database,
   not just the token.** `salon_id`/`salon_role` come off the access token,
   which stays valid until it expires even after `membership.Leave` revokes
@@ -157,8 +197,12 @@ Two capabilities in the existing owner/member matrix:
   her former salon in the window before her token expires — rows that can
   never be booked, but would silently switch services back ON if she later
   rejoins, breaking PP-7's "joining a salon: all switches off."
-- **Audited:** every change, with the actor. The owner changing Maya's price
-  records the owner.
+- **Audited:** every change, as an `audit_events` row (`entity_type`
+  `artist_service`, action `offering.update` or `offering.off`) with the
+  actor, `actor_role` `artist` and the client IP. Old and new values both
+  carry `{artist_id, service_id, offered, price, deposit_amount}`, so the
+  row says **whose** service changed: the owner changing Maya's price records
+  the owner as the actor and Maya's `artist_id` in the values.
 - The route-coverage guard enforces a capability on both `PUT` routes. *(The
   artist's own routes were first specified as `/artists/me/services`; they
   moved under `/artists/salon/` during planning precisely so that
@@ -170,10 +214,10 @@ Two capabilities in the existing owner/member matrix:
 
 | Event | Effect on `artist_services` |
 |---|---|
-| Owner creates a service (`artist/repository.go:488`) | row for the **owner** |
-| Onboarding creates the first service (`onboarding/repository.go:143`) | row for the **owner** |
+| Owner creates a service (`artist` `CreateService`; the statement is `createServiceWithOwnerOfferSQL` in `artist/owner_seed.go`) | row for the **owner**, same statement |
+| Onboarding creates the first service (`onboarding` `Complete`) | row for the **owner**, same transaction |
 | A member joins | **none** — she chooses in the join step |
-| A member leaves (`DetachArtist`) | **her rows deleted**, same transaction |
+| A member leaves (`membership` `DetachArtist`) | **her rows deleted**, same statement |
 | A service is deactivated | rows kept; the resolver filters `is_active`, so reactivating restores every artist's choice |
 | A service or artist is deleted | cascade |
 
@@ -186,7 +230,8 @@ Two capabilities in the existing owner/member matrix:
   deposit, cheapest first. Both customer-facing readers of an artist's menu —
   `artist.GetOfferedServicesByArtist` and `discovery.GetArtistServices` —
   `ORDER BY effective_price ASC, s.name ASC`; neither lists a service she has
-  not switched on (the `JOIN artist_services` excludes it).
+  not switched on (the `JOIN artist_services` excludes it), nor one of
+  another salon (both join `artists` on `a.salon_id = s.salon_id`).
 - **Checkout:** her price, plus the early-bird fee where it applies; discounts
   come off her price; the deposit is hers, capped.
 - **Shown = charged, made structural.** Today the last funnel screen displays
@@ -207,8 +252,9 @@ Two capabilities in the existing owner/member matrix:
    showing who last changed each price.
 
 Each row: the switch; when on, price and deposit pre-filled with the salon's
-values as placeholders; "use salon price" to clear; a note when the deposit cap
-applied. Switching a service OFF asks for confirmation first whenever she has
+values as placeholders; a "Use salon price & deposit" button that clears
+**both** overrides (it always did; the label now says so); a note when the
+deposit cap applied. Switching a service OFF asks for confirmation first whenever she has
 a custom price OR a custom deposit set on it (either alone is enough), naming
 what will be lost, because switching off deletes the row (§5) — nothing to
 confirm when neither is set, since there is nothing to lose.
@@ -226,16 +272,17 @@ only ever applies to the salon OWNER — a member's nav is never gated on it.
 
 | What | Proves |
 |---|---|
-| Migration up → down → up on a scratch DB | reversible, idempotent |
-| DB test: backfill | every existing artist × active service got a row — **nobody disappears** |
+| Migration up → down → up | reversible, repeatable. **Measured by hand** at build time on a dump of dev (`bedge_052`): 22 expected pairs, 22 rows, 0 missing, after the first up and again after down → up (Task 1). **Executed as a DB test** since 2026-09-26: `TestMigration052_DownUpDownUp_…` runs the real `.down.sql`/`.up.sql` twice against fixture data |
+| DB test: backfill (same test) | every artist × every service of **her** salon, **active and inactive**, got a row with NULL prices; no row for another salon's service; an artist with no salon gets none — **nobody disappears**. Watched it fail with the backfill narrowed to active services and with the backfill removed |
 | DB tests: resolver | override wins; NULL means the salon's; deposit capped; no row means not offered; inactive service excluded |
-| Guard test: no stray `services.price` | a new reader cannot bypass the resolver — **proven to fire** |
-| Service tests | capabilities, money validation, `null` clears, deposit above price refused, audit written with the actor |
+| Guard test: no stray `services.price` | a new reader in the common shapes (FROM/JOIN/comma join, `public.`/quoted names, `SELECT *`/`s.*`) cannot bypass the resolver — **each shape proven to fire**; SQL split across two literals is **not** caught (§4) |
+| Service tests | capabilities, money validation, `null` clears, `offered` required, deposit above price refused, audit written with the actor **and whose service** (owner acting on a member records the owner as actor and the member's `artist_id`) |
+| DB tests: invariant | `Upsert` of another salon's service writes nothing (`ErrNotFound`), a stray foreign row is not updated, and both customer-facing lists exclude a stray foreign-salon row |
 | `validateBookingParties` | switched-off service → `404 SERVICE_NOT_FOUND`, identical to missing |
 | **End to end** | profile price = hold price = stored booking price, with and without an override |
-| Chaos suite (3.7/3.7b) | owner + two members of one salon: owner at the salon price, one member at $200, one at $100 — listed == held == stored for all three; the switched-off member's service refused with `404 SERVICE_NOT_FOUND` |
-| WebKit, 390px | the switch screen, including the join step |
-| `make mutation` | on the resolver and the new service code |
+| Chaos suite (3.7/3.7b) | owner + two members of one salon: owner at the salon price, one member at $200, one at $100 — listed == held == stored for all three; the switched-off member's service refused with `404 SERVICE_NOT_FOUND` — 3.7b runs only when that member's 3.7 leg passed (a positive control, as in 3.6), so it cannot pass on a member who never offered the service |
+| WebKit, 390px (`b-edge-web/scripts/verify-offerings-ui.mjs`) | the switch screen, including the join step (Chromium); since the final-review fixes also: a cancelled turn-off confirm on a priced row keeps the switch ON and the row priced, "Use salon price & deposit" then a deposit-only save keeps the price NULL, the audit names whose service changed (with role and IP), and a PUT without `offered` is 422 — 23 pass, 0 fail, 0 residual out of 33 (2026-09-26). The browser checks were seen passing only; the same behaviours were watched failing in the component spec and Go tests |
+| `make mutation` | run on `internal/offering` only (Task 14): 13 killed, 1 lived, 28 not covered — gremlins runs without `-tags dbtest` and the package has no handler test, so repository and handler mutants are invisible to it. **Not run on the resolver** (`internal/pkg/pricing`), whose SQL only DB tests exercise |
 
 **Knock-on:** members who join after release offer nothing until they switch
 services on (PP-7). The chaos suite and E2E scripts book with newly joined
@@ -267,10 +314,13 @@ itself but fixed along the way because both would have gotten worse under it:
 2. **The confirmation screen omitted the early-bird fee.** The picker badges
    early-bird slots and the hold charges `price + early_bird_fee`, but the
    last funnel screen displayed `service().price` — a customer confirming at
-   $150 was actually charged $165. Fixed in `3240d1a` ("the hold returns what
-   it charged, early-bird fee included"): the hold now returns
-   `original_price`/`early_bird_fee`/`final_price`/`deposit_amount`, and the
-   confirmation screen shows those instead of the remembered catalogue price.
+   $150 was actually charged $165. Fixed in two halves: the API in
+   `b-edge-api` `3240d1a` ("the hold returns what it charged, early-bird fee
+   included") — the hold now returns
+   `original_price`/`early_bird_fee`/`final_price`/`deposit_amount`; and the
+   screen in `b-edge-web` `05d45cb` ("confirm at the price the hold charged,
+   early-bird fee included") — the confirmation screen shows those instead of
+   the remembered catalogue price.
 
 ## 11. Observed while designing — not part of this work
 

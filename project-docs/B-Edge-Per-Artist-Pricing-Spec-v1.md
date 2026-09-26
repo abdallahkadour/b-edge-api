@@ -1,6 +1,14 @@
 # B-Edge — Per-Artist Service Pricing · Spec v1
 
-**Status:** design approved section by section, 2026-09-25 · awaiting spec review
+**Status:** Built, 2026-09-26. Verified end to end: Go tests (plain, `devbypass`,
+`dbtest`), the chaos-booking suite (3.7/3.7b), and a WebKit/Chromium UI pass at
+390px (`b-edge-web/scripts/verify-offerings-ui.mjs`). One defect found and
+**not** fixed in that pass, filed rather than patched: a pending member's
+mobile bottom nav renders nothing at all (the bar is itself conditioned on
+having a "primary" item, which a pending member never has), so the "More"
+sheet that would reveal My services never appears — the desktop sidebar copy
+of the link is CSS-hidden below `md:`. Only the mobile viewport is affected;
+desktop and the join step's inline services screen are unaffected.
 **Overturns:** D-MS9 (*"Can a member set their own prices? No, v1."*) and the
 services half of BR-8 (*"owner-write, member-read"*)
 **Depends on:** `validateBookingParties` (FRAUD-16, commit `cc9d5be`), which this
@@ -134,6 +142,17 @@ Two capabilities in the existing owner/member matrix:
   before she confirms turning off a service she has priced.
 - **Refused:** her own deposit above her own price (422, on `deposit_amount`); a
   service outside her salon (404); a member of another salon (404).
+- **The own-services routes re-check salon membership against the database,
+  not just the token.** `salon_id`/`salon_role` come off the access token,
+  which stays valid until it expires even after `membership.Leave` revokes
+  refresh tokens — so a departed member's still-valid access token would
+  otherwise still carry her old salon_id. `ListMine`/`UpdateMine` call
+  `ArtistInSalon(artistID, salonID)` against the database before doing
+  anything, and answer `404 MEMBER_NOT_FOUND` if she is no longer in it.
+  Without this, a since-revoked artist could write `artist_services` rows for
+  her former salon in the window before her token expires — rows that can
+  never be booked, but would silently switch services back ON if she later
+  rejoins, breaking PP-7's "joining a salon: all switches off."
 - **Audited:** every change, with the actor. The owner changing Maya's price
   records the owner.
 - The route-coverage guard enforces a capability on both `PUT` routes. *(The
@@ -160,7 +179,10 @@ Two capabilities in the existing owner/member matrix:
   artist (`/book/:artistId`); there is no salon-wide page. No "from $X" is
   needed. Marketplace cards show no price today and do not change.
 - **Her profile** lists only services she has switched on, at her price and
-  deposit, cheapest first.
+  deposit, cheapest first. Both customer-facing readers of an artist's menu —
+  `artist.GetOfferedServicesByArtist` and `discovery.GetArtistServices` —
+  `ORDER BY effective_price ASC, s.name ASC`; neither lists a service she has
+  not switched on (the `JOIN artist_services` excludes it).
 - **Checkout:** her price, plus the early-bird fee where it applies; discounts
   come off her price; the deposit is hers, capped.
 - **Shown = charged, made structural.** Today the last funnel screen displays
@@ -182,7 +204,19 @@ Two capabilities in the existing owner/member matrix:
 
 Each row: the switch; when on, price and deposit pre-filled with the salon's
 values as placeholders; "use salon price" to clear; a note when the deposit cap
-applied. Hidden for solo salons (PP-8).
+applied. Switching a service OFF asks for confirmation first whenever she has
+a custom price OR a custom deposit set on it (either alone is enough), naming
+what will be lost, because switching off deletes the row (§5) — nothing to
+confirm when neither is set, since there is nothing to lose.
+
+**PP-8's "hidden for solo salons" is three states, not two**, driven by the
+owner's own headcount fetch: **loading** (request in flight) hides the link,
+to avoid a show-then-hide flicker for the common case of a solo owner;
+**unknown** (the fetch failed, or there was nothing to ask — an admin, a
+member, or an artist whose token predates any salon) SHOWS it, failing open
+so a real multi-artist owner never loses her entry point to one failed
+request; a confirmed **count ≤ 1** hides it, count `> 1` shows it. This gate
+only ever applies to the salon OWNER — a member's nav is never gated on it.
 
 ## 8. Testing
 
@@ -195,7 +229,7 @@ applied. Hidden for solo salons (PP-8).
 | Service tests | capabilities, money validation, `null` clears, deposit above price refused, audit written with the actor |
 | `validateBookingParties` | switched-off service → `404 SERVICE_NOT_FOUND`, identical to missing |
 | **End to end** | profile price = hold price = stored booking price, with and without an override |
-| Chaos suite | two members of one salon at $200 and $100 both charged correctly; switched-off service refused |
+| Chaos suite (3.7/3.7b) | owner + two members of one salon: owner at the salon price, one member at $200, one at $100 — listed == held == stored for all three; the switched-off member's service refused with `404 SERVICE_NOT_FOUND` |
 | WebKit, 390px | the switch screen, including the join step |
 | `make mutation` | on the resolver and the new service code |
 
@@ -214,7 +248,27 @@ first.
 - **Member-proposed prices needing owner approval** — PP-3 chose direct edit
   plus owner override instead.
 
-## 10. Observed while designing — not part of this work
+## 10. Two live defects this plan also fixed
+
+Found while reading the code during planning, unrelated to per-artist pricing
+itself but fixed along the way because both would have gotten worse under it:
+
+1. **Approval used to quote the menu's deposit, not the booking's.**
+   `ApproveBooking` built *"Please send a $X deposit"* from
+   `service.DepositAmount` — the salon menu's *current* value — instead of
+   `b.DepositAmount`, the amount stored when the booking was made. With
+   per-artist deposits this would have quoted the salon's deposit to a
+   customer who booked a member with a different one. Fixed in `2ed7834`
+   ("book her service at her price; approval quotes the booking's deposit").
+2. **The confirmation screen omitted the early-bird fee.** The picker badges
+   early-bird slots and the hold charges `price + early_bird_fee`, but the
+   last funnel screen displayed `service().price` — a customer confirming at
+   $150 was actually charged $165. Fixed in `3240d1a` ("the hold returns what
+   it charged, early-bird fee included"): the hold now returns
+   `original_price`/`early_bird_fee`/`final_price`/`deposit_amount`, and the
+   confirmation screen shows those instead of the remembered catalogue price.
+
+## 11. Observed while designing — not part of this work
 
 **Leaving a salon does not remove the member's `artist_stores` links**
 (`DetachArtist` only sets `salon_id = NULL`), and Discover joins on

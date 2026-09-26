@@ -144,6 +144,16 @@ Two suites are worth knowing before writing tests:
   and checks keyed on a **public** artist ID — a public ID has nothing to
   enumerate.
 
+- **A customer-facing price is read through `internal/pkg/pricing`;
+  `noleak_test.go` fails the build on any other read of `services.price`.**
+  The fragment is `COALESCE(os.price, s.price)` (and the matching deposit,
+  capped at that price) — one shape, used by every reader: discovery's
+  artist-profile service list, the artist domain's public services, the
+  guest hold, `POST /bookings`, and the discount resolver's base price. The
+  guard test parses `internal/` and carries an explicit allowlist, each entry
+  with its reason (the owner's own menu; admin reporting of the salon menu
+  rather than what customers paid) — proven to fire before it was trusted.
+
 - **Every money string from a request body goes through `internal/pkg/money`.**
   Never call `decimal.NewFromString` on user input directly. It accepts `"1e3"`
   as a thousand and unlimited scale, and `NUMERIC(10,2)` then rounds silently;

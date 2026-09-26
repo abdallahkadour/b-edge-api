@@ -175,7 +175,7 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 	// The guest user exists as of the line above, so a code can finally be
 	// checked against a real customer. AttachGuestAndSubmit writes the price,
 	// the status transition and the redemption in one transaction.
-	_, applied, err := s.applyDiscount(ctx, b.SalonID, guestUserID,
+	finalPrice, applied, err := s.applyDiscount(ctx, b.SalonID, guestUserID,
 		req.DiscountCode, b.FinalPrice, b.DepositAmount)
 	if err != nil {
 		return nil, err
@@ -196,6 +196,15 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 	b.Status = StatusPending
 	b.HeldUntil = nil
 	b.SpecialRequests = req.SpecialRequests
+	// The response states what AttachGuestAndSubmit just stored. With a code
+	// that is the discounted price, not the hold's - answering with b as read
+	// before the discount would contradict the row this call wrote. Without a
+	// code, finalPrice IS b.FinalPrice and the discount fields stay as held.
+	if applied != nil {
+		b.FinalPrice = finalPrice
+		b.DiscountAmount = discountAmountOf(applied)
+		b.DiscountCode = discountCodeOf(applied)
+	}
 	return toResponse(b), nil
 }
 

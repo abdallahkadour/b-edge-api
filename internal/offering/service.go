@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
@@ -78,7 +79,7 @@ func (s *Service) ListForMember(ctx context.Context, salonID, memberArtistID uui
 }
 
 func (s *Service) UpdateMine(ctx context.Context, salonID, userID, serviceID uuid.UUID,
-	req UpdateRequest) (*Offering, error) {
+	req UpdateRequest, ip string) (*Offering, error) {
 	artistID, err := s.repo.ArtistIDForUser(ctx, userID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, errMemberNotFound()
@@ -100,13 +101,13 @@ func (s *Service) UpdateMine(ctx context.Context, salonID, userID, serviceID uui
 	if !ok {
 		return nil, errMemberNotFound()
 	}
-	return s.update(ctx, salonID, artistID, serviceID, userID, req)
+	return s.update(ctx, salonID, artistID, serviceID, userID, req, ip)
 }
 
 // UpdateForMember is the owner acting on a member's behalf (PP-3). The member
 // must be in the caller's salon; otherwise 404, indistinguishable from absent.
 func (s *Service) UpdateForMember(ctx context.Context, salonID, actorUserID, memberArtistID,
-	serviceID uuid.UUID, req UpdateRequest) (*Offering, error) {
+	serviceID uuid.UUID, req UpdateRequest, ip string) (*Offering, error) {
 	ok, err := s.repo.ArtistInSalon(ctx, memberArtistID, salonID)
 	if err != nil {
 		return nil, fmt.Errorf("update for member: %w", err)
@@ -114,11 +115,11 @@ func (s *Service) UpdateForMember(ctx context.Context, salonID, actorUserID, mem
 	if !ok {
 		return nil, errMemberNotFound()
 	}
-	return s.update(ctx, salonID, memberArtistID, serviceID, actorUserID, req)
+	return s.update(ctx, salonID, memberArtistID, serviceID, actorUserID, req, ip)
 }
 
 func (s *Service) update(ctx context.Context, salonID, artistID, serviceID, actorUserID uuid.UUID,
-	req UpdateRequest) (*Offering, error) {
+	req UpdateRequest, ip string) (*Offering, error) {
 	if err := s.validate.Struct(req); err != nil {
 		return nil, validation.MapError(err)
 	}
@@ -137,7 +138,9 @@ func (s *Service) update(ctx context.Context, salonID, artistID, serviceID, acto
 			if err := s.repo.Delete(ctx, artistID, serviceID); err != nil {
 				return nil, err
 			}
-			s.log(ctx, salonID, actorUserID, serviceID, "offering.off", current, nil)
+			s.log(ctx, auditEntry{salonID: salonID, actor: actorUserID, ip: ip, action: "offering.off",
+				old: snapshot(artistID, serviceID, true, current.OwnPrice, current.OwnDeposit),
+				new: snapshot(artistID, serviceID, false, nil, nil)})
 		}
 		return s.repo.Get(ctx, salonID, artistID, serviceID)
 	}
@@ -185,13 +188,44 @@ func (s *Service) update(ctx context.Context, salonID, artistID, serviceID, acto
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return nil, err
 	}
-	s.log(ctx, salonID, actorUserID, serviceID, "offering.update", current, p)
+	s.log(ctx, auditEntry{salonID: salonID, actor: actorUserID, ip: ip, action: "offering.update",
+		old: snapshot(artistID, serviceID, current.Offered, current.OwnPrice, current.OwnDeposit),
+		new: snapshot(artistID, serviceID, true, newPrice, newDeposit)})
 	return s.repo.Get(ctx, salonID, artistID, serviceID)
 }
 
-func (s *Service) log(ctx context.Context, salonID, actor, serviceID uuid.UUID, action string, old, new any) {
+// offeringSnapshot is one side of an artist_service audit row. artist_id is
+// the point: every artist in the salon can have a row for the same service,
+// so "service X changed" alone cannot say WHOSE price it was - and when the
+// owner changes a member's price, the actor is the owner, not her.
+type offeringSnapshot struct {
+	ArtistID      uuid.UUID        `json:"artist_id"`
+	ServiceID     uuid.UUID        `json:"service_id"`
+	Offered       bool             `json:"offered"`
+	Price         *decimal.Decimal `json:"price"`          // her override; null = the salon's
+	DepositAmount *decimal.Decimal `json:"deposit_amount"` // her override; null = the salon's
+}
+
+func snapshot(artistID, serviceID uuid.UUID, offered bool, price, deposit *decimal.Decimal) offeringSnapshot {
+	return offeringSnapshot{ArtistID: artistID, ServiceID: serviceID, Offered: offered,
+		Price: price, DepositAmount: deposit}
+}
+
+type auditEntry struct {
+	salonID, actor uuid.UUID
+	ip, action     string
+	old, new       offeringSnapshot
+}
+
+// log records the change. ActorRole is "artist" because only an artist
+// holding a salon capability reaches these routes (an admin token carries no
+// salon and is refused NO_SALON first) - the same value internal/membership
+// records for the same actors. The IP is threaded from the handler
+// (clientip.From), as membership does.
+func (s *Service) log(ctx context.Context, e auditEntry) {
 	_ = s.audit.Log(ctx, audit.Event{
-		SalonID: &salonID, ActorID: &actor, EntityType: "artist_service",
-		EntityID: serviceID, Action: action, OldValues: old, NewValues: new,
+		SalonID: &e.salonID, ActorID: &e.actor, ActorRole: "artist", EntityType: "artist_service",
+		EntityID: e.new.ServiceID, Action: e.action, OldValues: e.old, NewValues: e.new,
+		IPAddress: e.ip,
 	})
 }

@@ -2,6 +2,7 @@ package offering
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestUpdateMine_SetsHerPrice_AndAuditsTheActor(t *testing.T) {
 	user := uuid.New()
 
 	_, err := svc.UpdateMine(context.Background(), uuid.New(), user, repo.current.ServiceID,
-		UpdateRequest{Offered: true, Price: optional.From("200.00")})
+		UpdateRequest{Offered: true, Price: optional.From("200.00")}, "")
 
 	require.NoError(t, err)
 	require.Len(t, repo.upserts, 1)
@@ -84,7 +85,7 @@ func TestUpdateMine_SetsHerPrice_AndAuditsTheActor(t *testing.T) {
 func TestUpdateMine_NullPrice_ClearsToSalon(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.Null[string]()})
+		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.Null[string]()}, "")
 	require.NoError(t, err)
 	assert.True(t, repo.upserts[0].PriceSet)
 	assert.Nil(t, repo.upserts[0].Price, "an explicit null must clear, not be ignored")
@@ -96,7 +97,7 @@ func TestUpdateMine_InvalidMoney_400(t *testing.T) {
 	// to 11.00 in the NUMERIC(10,2) column.
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("10.999")})
+		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("10.999")}, "")
 	assert.Equal(t, "INVALID_PRICE", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -105,7 +106,7 @@ func TestUpdateMine_OwnDepositAboveEffectivePrice_422(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
 		repo.current.ServiceID, UpdateRequest{Offered: true,
-			Price: optional.From("40.00"), DepositAmount: optional.From("50.00")})
+			Price: optional.From("40.00"), DepositAmount: optional.From("50.00")}, "")
 	assert.Equal(t, "VALIDATION_ERROR", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -113,7 +114,7 @@ func TestUpdateMine_OwnDepositAboveEffectivePrice_422(t *testing.T) {
 func TestUpdateMine_SwitchOff_Deletes(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: false})
+		repo.current.ServiceID, UpdateRequest{Offered: false}, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.deletes)
 	assert.Empty(t, repo.upserts)
@@ -122,7 +123,7 @@ func TestUpdateMine_SwitchOff_Deletes(t *testing.T) {
 func TestUpdateMine_ServiceNotInHerSalon_404(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, getErr: ErrNotFound}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), UpdateRequest{Offered: true})
+		uuid.New(), UpdateRequest{Offered: true}, "")
 	assert.Equal(t, "SERVICE_NOT_FOUND", code(t, err))
 }
 
@@ -138,7 +139,7 @@ func TestUpdateMine_ServiceNotInHerSalon_404(t *testing.T) {
 func TestUpdateMine_ArtistNoLongerInSalon_404(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: false, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("200.00")})
+		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("200.00")}, "")
 	assert.Equal(t, "MEMBER_NOT_FOUND", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -146,7 +147,7 @@ func TestUpdateMine_ArtistNoLongerInSalon_404(t *testing.T) {
 func TestUpdateForMember_ArtistOfAnotherSalon_404(t *testing.T) {
 	repo := &mockRepo{inSalon: false, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateForMember(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), repo.current.ServiceID, UpdateRequest{Offered: true})
+		uuid.New(), repo.current.ServiceID, UpdateRequest{Offered: true}, "")
 	assert.Equal(t, "MEMBER_NOT_FOUND", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -159,7 +160,7 @@ func TestUpdateForMember_ArtistOfAnotherSalon_404(t *testing.T) {
 func TestUpdateMine_ArtistLookupFails_Is500NotMemberNotFound(t *testing.T) {
 	repo := &mockRepo{artistIDErr: errors.New("connection reset by peer")}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), UpdateRequest{Offered: true})
+		uuid.New(), UpdateRequest{Offered: true}, "")
 
 	require.Error(t, err)
 	var appErr *apperror.AppError
@@ -177,4 +178,74 @@ func TestListMine_ArtistLookupFails_Is500NotMemberNotFound(t *testing.T) {
 	var appErr *apperror.AppError
 	assert.False(t, errors.As(err, &appErr),
 		"a generic ArtistIDForUser error must NOT become an AppError (would render as a 404, not a 500)")
+}
+
+// auditJSON is what audit.pgRepo.Log persists for a value: its JSON. The
+// assertions below read the audit row the way someone investigating it
+// later would, by key, not the Go type that happened to produce it.
+func auditJSON(t *testing.T, v any) map[string]any {
+	t.Helper()
+	require.NotNil(t, v, "the audit row must carry values, not NULL")
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	out := map[string]any{}
+	require.NoError(t, json.Unmarshal(b, &out))
+	return out
+}
+
+// TestUpdateForMember_AuditsOwnerAsActor_AndMembersArtistID is the positive
+// path of PP-3's audit: the OWNER changes MAYA's price. The row must name
+// the owner as the actor AND Maya as whose service changed - an audit that
+// records only "service X changed" cannot say whose price it was, and every
+// artist in the salon has a row for the same service.
+func TestUpdateForMember_AuditsOwnerAsActor_AndMembersArtistID(t *testing.T) {
+	repo := &mockRepo{inSalon: true, current: menuRow(true)}
+	aud := &captureAudit{}
+	salon, owner, maya := uuid.New(), uuid.New(), uuid.New()
+
+	_, err := NewService(repo, aud).UpdateForMember(context.Background(), salon, owner, maya,
+		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("120.00")}, "203.0.113.7")
+
+	require.NoError(t, err)
+	require.Len(t, aud.events, 1)
+	e := aud.events[0]
+	require.NotNil(t, e.ActorID)
+	assert.Equal(t, owner, *e.ActorID, "the actor is the owner who made the change")
+	assert.Equal(t, "artist", e.ActorRole)
+	assert.Equal(t, "203.0.113.7", e.IPAddress)
+	require.NotNil(t, e.SalonID)
+	assert.Equal(t, salon, *e.SalonID)
+	assert.Equal(t, "offering.update", e.Action)
+	for name, v := range map[string]any{"old": e.OldValues, "new": e.NewValues} {
+		vals := auditJSON(t, v)
+		assert.Equal(t, maya.String(), vals["artist_id"], "%s values must name whose service changed", name)
+		assert.Equal(t, repo.current.ServiceID.String(), vals["service_id"], "%s values", name)
+	}
+	assert.Equal(t, "120", auditJSON(t, e.NewValues)["price"], "the new values carry the price that was set")
+}
+
+// TestUpdateMine_SwitchOff_AuditCarriesArtistID: switching off deletes her
+// row, so the audit is the only record left of whose offering it was.
+func TestUpdateMine_SwitchOff_AuditCarriesArtistID(t *testing.T) {
+	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
+	aud := &captureAudit{}
+	user := uuid.New()
+
+	_, err := NewService(repo, aud).UpdateMine(context.Background(), uuid.New(), user,
+		repo.current.ServiceID, UpdateRequest{Offered: false}, "198.51.100.4")
+
+	require.NoError(t, err)
+	require.Len(t, aud.events, 1)
+	e := aud.events[0]
+	assert.Equal(t, "offering.off", e.Action)
+	require.NotNil(t, e.ActorID)
+	assert.Equal(t, user, *e.ActorID)
+	assert.Equal(t, "artist", e.ActorRole)
+	assert.Equal(t, "198.51.100.4", e.IPAddress)
+	oldVals, newVals := auditJSON(t, e.OldValues), auditJSON(t, e.NewValues)
+	assert.Equal(t, repo.artistID.String(), oldVals["artist_id"])
+	assert.Equal(t, repo.artistID.String(), newVals["artist_id"])
+	assert.Equal(t, repo.current.ServiceID.String(), newVals["service_id"])
+	assert.Equal(t, true, oldVals["offered"])
+	assert.Equal(t, false, newVals["offered"])
 }

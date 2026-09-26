@@ -9,6 +9,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
@@ -73,7 +74,7 @@ func (h *Handler) UpdateMine(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 	out, err := h.svc.UpdateMine(c.UserContext(), *middleware.SalonIDFromContext(c),
-		middleware.UserIDFromContext(c), serviceID, req)
+		middleware.UserIDFromContext(c), serviceID, req, clientip.From(c))
 	if err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func (h *Handler) UpdateForMember(c *fiber.Ctx) error {
 		return validation.MapBodyError(err)
 	}
 	out, err := h.svc.UpdateForMember(c.UserContext(), *middleware.SalonIDFromContext(c),
-		middleware.UserIDFromContext(c), artistID, serviceID, req)
+		middleware.UserIDFromContext(c), artistID, serviceID, req, clientip.From(c))
 	if err != nil {
 		return err
 	}

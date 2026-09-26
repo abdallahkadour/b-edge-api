@@ -23,6 +23,7 @@ type mockRepo struct {
 	current     *Offering
 	getErr      error
 	upserts     []UpsertParams
+	upsertErr   error
 	deletes     int
 }
 
@@ -40,7 +41,7 @@ func (m *mockRepo) Get(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*Offer
 }
 func (m *mockRepo) Upsert(_ context.Context, p UpsertParams) error {
 	m.upserts = append(m.upserts, p)
-	return nil
+	return m.upsertErr
 }
 func (m *mockRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error { m.deletes++; return nil }
 
@@ -269,4 +270,19 @@ func TestUpdateMine_OfferedAbsent_422(t *testing.T) {
 	assert.Equal(t, "offered", e.Details[0].Field)
 	assert.Equal(t, 0, repo.deletes, "a missing switch must never delete her row")
 	assert.Empty(t, repo.upserts)
+}
+
+// TestUpdateMine_UpsertRefusesForeignService_404 - the repository's Upsert
+// writes only when the service is on her CURRENT salon's menu and answers
+// ErrNotFound otherwise (a salon change between Get and Upsert, say). That
+// must reach the client as the same 404 as any other service she cannot
+// have - not a 500, and not an audit row for a change that never happened.
+func TestUpdateMine_UpsertRefusesForeignService_404(t *testing.T) {
+	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true), upsertErr: ErrNotFound}
+	aud := &captureAudit{}
+	_, err := NewService(repo, aud).UpdateMine(context.Background(), uuid.New(), uuid.New(),
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true), Price: optional.From("120.00")}, "")
+
+	assert.Equal(t, "SERVICE_NOT_FOUND", code(t, err))
+	assert.Empty(t, aud.events, "nothing was written, so nothing is audited")
 }

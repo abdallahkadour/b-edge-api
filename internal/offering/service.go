@@ -191,6 +191,9 @@ func (s *Service) update(ctx context.Context, salonID, artistID, serviceID, acto
 	}
 
 	if err := s.repo.Upsert(ctx, p); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, errServiceNotFound()
+		}
 		return nil, err
 	}
 	s.log(ctx, auditEntry{salonID: salonID, actor: actorUserID, ip: ip, action: "offering.update",

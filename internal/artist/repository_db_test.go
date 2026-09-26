@@ -197,3 +197,31 @@ func TestGetOfferedServicesByArtist_CheapestFirst(t *testing.T) {
 	assert.True(t, recs[0].Price.Equal(decimal.RequireFromString("40")), "got %s", recs[0].Price)
 	assert.Equal(t, "Acrylic", recs[1].Name)
 }
+
+// TestGetOfferedServicesByArtist_StrayForeignSalonRow_Excluded - the same
+// invariant as discovery's: a row for another salon's service (which no
+// write path should produce) must never surface on her public menu.
+func TestGetOfferedServicesByArtist_StrayForeignSalonRow_Excluded(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	artistID := newArtistFixture(t, pool)
+	var salon, bridal, otherOwner, otherSalon, foreign uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT salon_id FROM artists WHERE id=$1`, artistID).Scan(&salon))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Bridal',90,100) RETURNING id`, salon).Scan(&bridal))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO users (name,email,password_hash,role)
+		VALUES ('O','other@dbtest.local','x','artist') RETURNING id`).Scan(&otherOwner))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO salons (owner_id,name) VALUES ($1,'Other') RETURNING id`,
+		otherOwner).Scan(&otherSalon))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO services (salon_id,name,duration_min,price)
+		VALUES ($1,'Foreign',30,5) RETURNING id`, otherSalon).Scan(&foreign))
+	_, err := pool.Exec(ctx, `INSERT INTO artist_services (artist_id,service_id) VALUES ($1,$2),($1,$3)`,
+		artistID, bridal, foreign)
+	require.NoError(t, err, "precondition: her own row and a stray foreign one both exist")
+
+	recs, err := NewRepository(pool).GetOfferedServicesByArtist(ctx, artistID)
+
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "only her own salon's service may be listed")
+	assert.Equal(t, "Bridal", recs[0].Name)
+}

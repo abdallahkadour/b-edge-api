@@ -76,6 +76,9 @@ var (
 var allowedReaders = map[string]string{
 	"artist/repository.go:GetServicesBySalon": "the owner's menu screen - it shows and edits the SALON price, which is what it must read",
 	"artist/repository.go:GetServiceByID":     "the owner editing one service of the salon menu",
+	"offering/repository.go:Upsert": "WRITES artist_services.price/deposit_amount (her override); the " +
+		"services join is only the her-current-salon predicate and selects no services column. " +
+		"Kept in one literal on purpose - splitting it would only hide it from this guard",
 }
 
 // readsServiceMoney reports whether one SQL string literal reads the price

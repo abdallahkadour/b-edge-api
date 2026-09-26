@@ -34,7 +34,7 @@ type Repository interface {
 	ArtistInSalon(ctx context.Context, artistID, salonID uuid.UUID) (bool, error)
 	List(ctx context.Context, salonID, artistID uuid.UUID) ([]*Offering, error)
 	Get(ctx context.Context, salonID, artistID, serviceID uuid.UUID) (*Offering, error) // ErrNotFound
-	Upsert(ctx context.Context, p UpsertParams) error
+	Upsert(ctx context.Context, p UpsertParams) error                                   // ErrNotFound: not her current salon's service
 	Delete(ctx context.Context, artistID, serviceID uuid.UUID) error
 }
 
@@ -50,5 +50,6 @@ type UpsertParams struct {
 }
 
 // ErrNotFound is returned by Get when the service does not belong to the
-// given salon, or does not exist.
+// given salon, or does not exist, and by Upsert when the service is not on
+// the artist's current salon's menu (nothing is written).
 var ErrNotFound = errors.New("offering: not found")

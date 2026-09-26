@@ -472,6 +472,9 @@ func (r *pgRepo) GetOfferedServicesByArtist(ctx context.Context, artistID uuid.U
 		       s.deposit_deadline_hours, s.is_active, s.is_custom, s.created_at, s.updated_at
 		  FROM services s
 		  JOIN artist_services os ON os.service_id = s.id AND os.artist_id = $1
+		  -- Only her CURRENT salon's services, even if a stray row for
+		  -- another salon's service ever exists (no write path makes one).
+		  JOIN artists a ON a.id = os.artist_id AND a.salon_id = s.salon_id
 		 WHERE s.is_active = TRUE
 		 ORDER BY effective_price ASC, s.name ASC`,
 		artistID,

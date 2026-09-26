@@ -67,22 +67,39 @@ func (r *pgRepo) Get(ctx context.Context, salonID, artistID, serviceID uuid.UUID
 // Upsert switches the service on and applies whichever of price and deposit
 // were SENT. An absent field keeps the stored value; an explicit null clears
 // it to the salon's - the presence/value pair house pattern.
+//
+// It writes ONLY when the service is on the artist's CURRENT salon's menu
+// (the WHERE EXISTS): artist_services must never hold a row for another
+// salon's service, and that is now a property of the statement rather than
+// of every caller remembering to check first. When the predicate fails no
+// row is proposed, so neither the INSERT nor the ON CONFLICT update runs,
+// and the caller gets ErrNotFound.
 func (r *pgRepo) Upsert(ctx context.Context, p UpsertParams) error {
 	var actor any
 	if p.ActorUserID != uuid.Nil {
 		actor = p.ActorUserID
 	}
-	_, err := r.db.Exec(ctx, `
+	tag, err := r.db.Exec(ctx, `
 		INSERT INTO artist_services (artist_id, service_id, price, deposit_amount, updated_by)
-		VALUES ($1, $2, CASE WHEN $3 THEN $4::numeric END, CASE WHEN $5 THEN $6::numeric END, $7)
+		SELECT $1::uuid, $2::uuid,
+		       CASE WHEN $3::boolean THEN $4::numeric END,
+		       CASE WHEN $5::boolean THEN $6::numeric END,
+		       $7::uuid
+		 WHERE EXISTS (SELECT 1
+		                 FROM artists a
+		                 JOIN services s ON s.salon_id = a.salon_id
+		                WHERE a.id = $1::uuid AND s.id = $2::uuid)
 		ON CONFLICT (artist_id, service_id) DO UPDATE SET
-		    price          = CASE WHEN $3 THEN $4::numeric ELSE artist_services.price END,
-		    deposit_amount = CASE WHEN $5 THEN $6::numeric ELSE artist_services.deposit_amount END,
-		    updated_by     = $7,
+		    price          = CASE WHEN $3::boolean THEN $4::numeric ELSE artist_services.price END,
+		    deposit_amount = CASE WHEN $5::boolean THEN $6::numeric ELSE artist_services.deposit_amount END,
+		    updated_by     = $7::uuid,
 		    updated_at     = now()`,
 		p.ArtistID, p.ServiceID, p.PriceSet, p.Price, p.DepositSet, p.Deposit, actor)
 	if err != nil {
 		return fmt.Errorf("upsert offering: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

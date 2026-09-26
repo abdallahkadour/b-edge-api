@@ -124,3 +124,56 @@ func TestDetachArtist_RemovesHerOfferings(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1`, member).Scan(&n))
 	assert.Equal(t, 0, n, "a departed member must not keep offering the salon's services")
 }
+
+// TestUpsert_ServiceOfAnotherSalon_WritesNothing_ErrNotFound - artist_services
+// may only hold rows for services of the artist's CURRENT salon. The service
+// layer checks that through Get first; the statement itself now refuses too,
+// so no future caller can write a foreign row by skipping the check.
+func TestUpsert_ServiceOfAnotherSalon_WritesNothing_ErrNotFound(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	other := newFixture(t, pool) // a second salon with its own service
+	member := addMember(t, pool, f.SalonID)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+
+	// Positive control: her own salon's service IS written, so the refusal
+	// below is the predicate and not a statement that writes nothing ever.
+	require.NoError(t, repo.Upsert(ctx, UpsertParams{ArtistID: member, ServiceID: f.ServiceID,
+		PriceSet: true, Price: dec("120")}))
+	var own int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1 AND service_id=$2`,
+		member, f.ServiceID).Scan(&own))
+	require.Equal(t, 1, own)
+
+	err := repo.Upsert(ctx, UpsertParams{ArtistID: member, ServiceID: other.ServiceID,
+		PriceSet: true, Price: dec("120")})
+
+	assert.ErrorIs(t, err, ErrNotFound)
+	var foreign int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM artist_services WHERE artist_id=$1 AND service_id=$2`,
+		member, other.ServiceID).Scan(&foreign))
+	assert.Equal(t, 0, foreign, "no row for another salon's service")
+}
+
+// TestUpsert_StrayForeignRow_NotUpdated_ErrNotFound - the ON CONFLICT half of
+// the same rule: a foreign row that somehow already exists is not updated
+// either (no row is proposed, so there is no conflict to resolve).
+func TestUpsert_StrayForeignRow_NotUpdated_ErrNotFound(t *testing.T) {
+	pool := testdb.New(t)
+	f := newFixture(t, pool)
+	other := newFixture(t, pool)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `INSERT INTO artist_services (artist_id, service_id) VALUES ($1,$2)`,
+		f.OwnerArtist, other.ServiceID)
+	require.NoError(t, err, "precondition: a stray foreign row exists")
+
+	err = NewRepository(pool).Upsert(ctx, UpsertParams{ArtistID: f.OwnerArtist, ServiceID: other.ServiceID,
+		PriceSet: true, Price: dec("999")})
+
+	assert.ErrorIs(t, err, ErrNotFound)
+	var price *decimal.Decimal
+	require.NoError(t, pool.QueryRow(ctx, `SELECT price FROM artist_services WHERE artist_id=$1 AND service_id=$2`,
+		f.OwnerArtist, other.ServiceID).Scan(&price))
+	assert.Nil(t, price, "the stray row must not be written through")
+}

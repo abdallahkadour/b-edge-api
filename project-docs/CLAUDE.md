@@ -166,9 +166,13 @@ Two suites are worth knowing before writing tests:
   `validateBookingParties` (the guest hold, `POST /bookings`, the slots
   endpoint and the waitlist) — and the offering settings screen
   (`offering/repository.go`'s `pricing.Detail`). The guard test parses
-  `internal/` and carries an explicit allowlist of exactly two entries, both
-  the owner's own menu screen (`artist/repository.go:GetServicesBySalon` and
-  `GetServiceByID`, which must show and edit the SALON price). Every shape
+  `internal/` and carries an explicit allowlist of exactly three entries: the
+  owner's own menu screen (`artist/repository.go:GetServicesBySalon` and
+  `GetServiceByID`, which must show and edit the SALON price), and
+  `offering/repository.go:Upsert`, which WRITES her override
+  (`artist_services.price`) and joins `services` only for the
+  current-salon predicate — a false positive kept visible rather than split
+  into two literals to dodge the guard. Every shape
   it claims was proven to fire before it was trusted: each was injected into
   a throwaway file and named by the failing test, and the split-constant
   probe beside them was not — the limit above, measured.

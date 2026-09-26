@@ -13,6 +13,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
@@ -144,6 +145,8 @@ func (h *Handler) HoldGuestSlot(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return validation.MapBodyError(err)
 	}
+	// From the connection, after parsing, so a body cannot supply its own.
+	req.ClientIP = clientip.From(c)
 
 	res, err := h.svc.HoldGuestSlot(c.UserContext(), req)
 	if err != nil {

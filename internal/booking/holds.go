@@ -9,6 +9,9 @@ package booking
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -108,7 +111,11 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 	// SystemGuestPlaceholderID until SubmitGuestBooking creates the guest
 	// user. Eligibility is per customer, so there is nobody to check a code
 	// against at this point. The code is applied at submit instead.
-	if err := s.repo.CreateBooking(ctx, b, nil); err != nil {
+	if err := s.repo.CreateGuestHold(ctx, b, holdClientKey(req.ClientIP), MaxGuestHoldsPerArtistPerNetwork); err != nil {
+		if errors.Is(err, ErrTooManyHolds) {
+			return nil, apperror.TooManyRequests("TOO_MANY_HOLDS",
+				"You're already holding 2 times with this artist. Finish one of those bookings, or wait a few minutes for them to be released.")
+		}
 		if errors.Is(err, ErrSlotUnavailable) {
 			return nil, apperror.Conflict("SLOT_UNAVAILABLE", "This slot was just taken. Please choose another time.")
 		}
@@ -314,4 +321,28 @@ func validateBookingTime(startTime time.Time) error {
 	}
 
 	return nil
+}
+
+// MaxGuestHoldsPerArtistPerNetwork is how many unfinished guest holds one
+// network address may have with the same artist at once (migration 053, the
+// founder's rule of 2026-09-26). Per artist because Lebanese carriers put
+// many phones behind one address: two strangers on the same address rarely
+// hold the SAME artist in the same 10 minutes, while one person cannot take
+// an artist's whole day.
+const MaxGuestHoldsPerArtistPerNetwork = 2
+
+// holdClientKey turns a caller's address into the key the hold limit counts
+// by: an HMAC-SHA256 keyed with the server secret, truncated to 32 hex
+// characters. Keyed because a plain hash of an IPv4 address can be reversed
+// by trying all four billion. The secret is read at call time, never at
+// package init, which runs before main loads .env (see envinit_test.go). An
+// unknown address gives "", which CreateGuestHold treats as "no limit"
+// rather than lumping every unknown caller into one.
+func holdClientKey(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(os.Getenv("JWT_SECRET")))
+	mac.Write([]byte("guest-hold:" + ip))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
 }

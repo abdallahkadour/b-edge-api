@@ -87,8 +87,11 @@ var SystemGuestPlaceholderID = uuid.MustParse("00000000-0000-0000-0000-000000000
 // ── Sentinel errors ───────────────────────────────────────────────────────────
 
 var (
-	ErrBookingNotFound       = errors.New("booking not found")
-	ErrSlotUnavailable       = errors.New("slot unavailable")
+	ErrBookingNotFound = errors.New("booking not found")
+	ErrSlotUnavailable = errors.New("slot unavailable")
+	// ErrTooManyHolds: this network already holds the limit of unfinished
+	// guest holds with this artist (migration 053, CreateGuestHold).
+	ErrTooManyHolds          = errors.New("too many unfinished holds for this artist from this network")
 	ErrBookingNotPending     = errors.New("booking is not in pending status")
 	ErrBookingNotApproved    = errors.New("booking is not in approved status")
 	ErrBookingNotCancellable = errors.New("booking cannot be cancelled in its current status")
@@ -444,6 +447,10 @@ type HoldGuestSlotRequest struct {
 	StoreID   string `json:"store_id"   validate:"required,uuid"`
 	ServiceID string `json:"service_id" validate:"required,uuid"`
 	StartTime string `json:"start_time" validate:"required"`
+
+	// ClientIP is the caller's address, set by the handler from the
+	// connection - never from the body. It only feeds holdClientKey.
+	ClientIP string `json:"-"`
 }
 
 // SubmitGuestBookingRequest is the body for PATCH /api/v1/bookings/guest/:id/submit.

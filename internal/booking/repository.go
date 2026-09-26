@@ -121,6 +121,15 @@ type Repository interface {
 	// atomic guard - returns ErrSlotUnavailable on exclusion violation.
 	CreateBooking(ctx context.Context, b *Booking, applied *AppliedDiscount) error
 
+	// CreateGuestHold inserts a guest hold unless the network identified by
+	// client already has max unfinished holds with the same artist, in which
+	// case it returns ErrTooManyHolds and writes nothing. The count and the
+	// insert run in one transaction under an advisory lock on (artist,
+	// client), so a burst of simultaneous requests cannot all read a count
+	// below the limit. An empty client (the address was unknown) skips the
+	// limit rather than lumping every unknown caller together.
+	CreateGuestHold(ctx context.Context, b *Booking, client string, max int) error
+
 	// GetBookingByID fetches a single booking by primary key.
 	// Returns ErrBookingNotFound if not found or soft deleted.
 	GetBookingByID(ctx context.Context, id uuid.UUID) (*Booking, error)
@@ -754,27 +763,7 @@ func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking, applied *Applied
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
-	err = tx.QueryRow(ctx, `
-		INSERT INTO bookings (
-			id, salon_id, store_id, artist_id, customer_id, service_id,
-			start_time, end_time, blocked_until, buffer_min, held_until, status,
-			original_price, discount_amount, final_price,
-			deposit_amount, deposit_deadline, channel, special_requests,
-			discount_code
-		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12,
-			$13, $14, $15,
-			$16, $17, $18, $19,
-			$20
-		)
-		RETURNING created_at, updated_at`,
-		b.ID, b.SalonID, b.StoreID, b.ArtistID, b.CustomerID, b.ServiceID,
-		b.StartTime, b.EndTime, b.BlockedUntil, b.BufferMin, b.HeldUntil, b.Status,
-		b.OriginalPrice, b.DiscountAmount, b.FinalPrice,
-		b.DepositAmount, b.DepositDeadline, b.Channel, b.SpecialRequests,
-		b.DiscountCode,
-	).Scan(&b.CreatedAt, &b.UpdatedAt)
+	err = insertBookingTx(ctx, tx, b, nil)
 	if err != nil {
 		if isExclusionViolation(err) {
 			return ErrSlotUnavailable
@@ -790,6 +779,74 @@ func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking, applied *Applied
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("create booking: commit: %w", err)
+	}
+	return nil
+}
+
+// insertBookingTx writes one booking row inside tx. holdClient is the network
+// hash of a guest hold (migration 053) and nil for everything else. Shared by
+// CreateBooking and CreateGuestHold so the column list exists once.
+func insertBookingTx(ctx context.Context, tx pgx.Tx, b *Booking, holdClient *string) error {
+	return tx.QueryRow(ctx, `
+		INSERT INTO bookings (
+			id, salon_id, store_id, artist_id, customer_id, service_id,
+			start_time, end_time, blocked_until, buffer_min, held_until, status,
+			original_price, discount_amount, final_price,
+			deposit_amount, deposit_deadline, channel, special_requests,
+			discount_code, hold_client
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15,
+			$16, $17, $18, $19,
+			$20, $21
+		)
+		RETURNING created_at, updated_at`,
+		b.ID, b.SalonID, b.StoreID, b.ArtistID, b.CustomerID, b.ServiceID,
+		b.StartTime, b.EndTime, b.BlockedUntil, b.BufferMin, b.HeldUntil, b.Status,
+		b.OriginalPrice, b.DiscountAmount, b.FinalPrice,
+		b.DepositAmount, b.DepositDeadline, b.Channel, b.SpecialRequests,
+		b.DiscountCode, holdClient,
+	).Scan(&b.CreatedAt, &b.UpdatedAt)
+}
+
+func (r *pgRepo) CreateGuestHold(ctx context.Context, b *Booking, client string, max int) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create guest hold: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	var holdClient *string
+	if client != "" {
+		holdClient = &client
+		// One (artist, client) at a time: without this, every request in a
+		// burst reads the same count and all of them pass.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 0))`,
+			b.ArtistID.String(), client); err != nil {
+			return fmt.Errorf("create guest hold: lock: %w", err)
+		}
+		var active int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM bookings
+			 WHERE artist_id = $1 AND hold_client = $2
+			   AND status = $3 AND held_until > NOW() AND deleted_at IS NULL`,
+			b.ArtistID, client, StatusHeld).Scan(&active); err != nil {
+			return fmt.Errorf("create guest hold: count: %w", err)
+		}
+		if active >= max {
+			return ErrTooManyHolds
+		}
+	}
+
+	if err := insertBookingTx(ctx, tx, b, holdClient); err != nil {
+		if isExclusionViolation(err) {
+			return ErrSlotUnavailable
+		}
+		return fmt.Errorf("create guest hold: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create guest hold: commit: %w", err)
 	}
 	return nil
 }
@@ -1244,6 +1301,7 @@ func (r *pgRepo) AttachGuestAndSubmit(
 		    special_requests = $3,
 		    status           = $4,
 		    held_until       = NULL,
+		    hold_client      = NULL,
 		    discount_amount  = COALESCE($6, discount_amount),
 		    final_price      = COALESCE($7, final_price),
 		    discount_code    = COALESCE($8, discount_code),
@@ -1562,7 +1620,7 @@ func (r *pgRepo) ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error) {
 	// from the waitlist for as long as this returned one.
 	rows, err := r.db.Query(ctx, `
 		UPDATE bookings
-		SET status = $1, updated_at = NOW()
+		SET status = $1, hold_client = NULL, updated_at = NOW()
 		WHERE status = $2
 		AND held_until < NOW()
 		AND deleted_at IS NULL
@@ -1581,7 +1639,7 @@ func (r *pgRepo) ReleaseHeldGuestBooking(ctx context.Context, bookingID uuid.UUI
 	// already understands an expired hold keeps working.
 	rows, err := r.db.Query(ctx, `
 		UPDATE bookings
-		SET status = $1, updated_at = NOW()
+		SET status = $1, hold_client = NULL, updated_at = NOW()
 		WHERE id = $2
 		AND status = $3
 		AND customer_id = $4

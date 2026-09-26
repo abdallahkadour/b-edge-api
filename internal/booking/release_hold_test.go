@@ -60,3 +60,40 @@ func TestReleaseGuestHold_DatabaseError_IsNotA404(t *testing.T) {
 	var appErr *apperror.AppError
 	assert.False(t, errors.As(err, &appErr), "a database error must surface as an internal error, got %v", err)
 }
+
+// ── One network, at most 2 unfinished holds per artist (migration 053) ────
+
+func TestHoldGuestSlot_NetworkAlreadyHoldsTheLimit_429(t *testing.T) {
+	repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore(),
+		createGuestHoldErr: ErrTooManyHolds}
+	req := holdReq()
+	req.ClientIP = "203.0.113.7"
+
+	_, err := newTestService(repo).HoldGuestSlot(context.Background(), req)
+
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, "TOO_MANY_HOLDS", appErr.Code)
+	assert.Equal(t, 429, appErr.HTTPStatus)
+}
+
+func TestHoldGuestSlot_LimitsByAKeyedHashOfTheAddress(t *testing.T) {
+	// The limit is 2 per artist per network, and the network is recorded as
+	// a keyed hash - a plain hash of an IPv4 address is reversible by trying
+	// all four billion.
+	hold := func(ip string) *mockRepo {
+		repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore()}
+		req := holdReq()
+		req.ClientIP = ip
+		_, err := newTestService(repo).HoldGuestSlot(context.Background(), req)
+		require.NoError(t, err)
+		return repo
+	}
+	a1, a2, b := hold("203.0.113.7"), hold("203.0.113.7"), hold("198.51.100.9")
+
+	assert.Equal(t, 2, a1.createGuestHoldMax)
+	assert.Len(t, a1.createGuestHoldClient, 32)
+	assert.NotContains(t, a1.createGuestHoldClient, "203.0.113.7", "never the address itself")
+	assert.Equal(t, a1.createGuestHoldClient, a2.createGuestHoldClient, "one network, one key")
+	assert.NotEqual(t, a1.createGuestHoldClient, b.createGuestHoldClient, "another network, another key")
+}

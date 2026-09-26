@@ -30,6 +30,8 @@ package booking
 import (
 	"context"
 	"errors"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -649,4 +651,153 @@ func TestReleaseHeldGuestBooking_OnlyAnUnsubmittedHold(t *testing.T) {
 	freed, err = repo.ReleaseHeldGuestBooking(ctx, held.ID)
 	require.NoError(t, err)
 	assert.Empty(t, freed, "releasing twice frees nothing the second time")
+}
+
+// ── Guest-hold limit per network (migration 053) ──────────────────────────
+
+func guestHold(f fixture, artist uuid.UUID, start time.Time) *Booking {
+	b := f.booking(artist, start, StatusHeld)
+	b.CustomerID = SystemGuestPlaceholderID
+	until := time.Now().UTC().Add(10 * time.Minute)
+	b.HeldUntil = &until
+	return b
+}
+
+func holdClientOf(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) *string {
+	t.Helper()
+	var c *string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT hold_client FROM bookings WHERE id = $1`, id).Scan(&c))
+	return c
+}
+
+func TestCreateGuestHold_ThirdOnTheSameArtistFromOneNetwork_Refused(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newFixture(t, pool)
+	seedHoldPlaceholder(t, pool)
+	repo := NewRepository(pool)
+	base := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+
+	require.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base), "net-a", 2))
+	require.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base.Add(2*time.Hour)), "net-a", 2))
+
+	third := guestHold(f, f.ArtistID, base.Add(4*time.Hour))
+	assert.ErrorIs(t, repo.CreateGuestHold(ctx, third, "net-a", 2), ErrTooManyHolds)
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM bookings WHERE id = $1`, third.ID).Scan(&n))
+	assert.Zero(t, n, "a refused hold writes nothing")
+
+	assert.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.Artist2ID, base), "net-a", 2),
+		"another artist has her own limit")
+	assert.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base.Add(6*time.Hour)), "net-b", 2),
+		"another network is not affected")
+}
+
+func TestCreateGuestHold_ExpiredHoldsDoNotCount(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newFixture(t, pool)
+	seedHoldPlaceholder(t, pool)
+	repo := NewRepository(pool)
+	base := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+	require.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base), "net-a", 2))
+	require.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base.Add(2*time.Hour)), "net-a", 2))
+	_, err := pool.Exec(ctx, `UPDATE bookings SET held_until = NOW() - interval '1 minute' WHERE hold_client = 'net-a'`)
+	require.NoError(t, err)
+
+	assert.NoError(t, repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base.Add(4*time.Hour)), "net-a", 2),
+		"holds past their window no longer hold anything")
+}
+
+func TestCreateGuestHold_SimultaneousBurst_NeverPassesTheLimit(t *testing.T) {
+	// Count-then-insert without a lock lets every request in a burst read a
+	// count below the limit. The advisory lock is what makes it exactly 2.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newFixture(t, pool)
+	seedHoldPlaceholder(t, pool)
+	repo := NewRepository(pool)
+	base := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+
+	const n = 6
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = repo.CreateGuestHold(ctx, guestHold(f, f.ArtistID, base.Add(time.Duration(i)*2*time.Hour)), "net-burst", 2)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	ok, refused := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, ErrTooManyHolds):
+			refused++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equal(t, 2, ok, "exactly the limit gets through")
+	assert.Equal(t, n-2, refused)
+}
+
+func TestHoldClient_ClearedWhenTheHoldEnds(t *testing.T) {
+	// The network hash describes an unfinished hold, nothing more: released,
+	// expired or submitted, the row must not keep it.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newFixture(t, pool)
+	seedHoldPlaceholder(t, pool)
+	repo := NewRepository(pool)
+	base := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Hour)
+	released, expired, submitted := guestHold(f, f.ArtistID, base), guestHold(f, f.ArtistID, base.Add(2*time.Hour)),
+		guestHold(f, f.Artist2ID, base)
+	for _, h := range []*Booking{released, expired, submitted} {
+		require.NoError(t, repo.CreateGuestHold(ctx, h, "net-a", 5))
+		require.NotNil(t, holdClientOf(t, pool, h.ID), "positive control: a hold carries its network")
+	}
+
+	_, err := repo.ReleaseHeldGuestBooking(ctx, released.ID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE bookings SET held_until = NOW() - interval '1 minute' WHERE id = $1`, expired.ID)
+	require.NoError(t, err)
+	_, err = repo.ReleaseExpiredHolds(ctx)
+	require.NoError(t, err)
+	guest := insertUser(t, pool, uuid.NewString()+"@guest.local", "customer")
+	require.NoError(t, repo.AttachGuestAndSubmit(ctx, submitted.ID, guest, nil, nil))
+
+	assert.Nil(t, holdClientOf(t, pool, released.ID), "released")
+	assert.Nil(t, holdClientOf(t, pool, expired.ID), "expired")
+	assert.Nil(t, holdClientOf(t, pool, submitted.ID), "submitted")
+}
+
+func TestMigration053_DownThenUp(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	down, err := os.ReadFile("../../db/migrations/053_hold_client.down.sql")
+	require.NoError(t, err)
+	up, err := os.ReadFile("../../db/migrations/053_hold_client.up.sql")
+	require.NoError(t, err)
+	col := func() int {
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+			WHERE table_name = 'bookings' AND column_name = 'hold_client'`).Scan(&n))
+		return n
+	}
+	require.Equal(t, 1, col(), "positive control: the migrated template has the column")
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err)
+	assert.Equal(t, 0, col())
+	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err)
+	assert.Equal(t, 1, col())
 }

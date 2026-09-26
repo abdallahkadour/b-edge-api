@@ -148,6 +148,9 @@ type mockRepo struct {
 	confirmDepositReceivedErr             error
 	confirmDepositReceivedReferenceCalled *string
 	createBookingCaptured                 *Booking
+	createGuestHoldClient                 string
+	createGuestHoldMax                    int
+	createGuestHoldErr                    error
 
 	// waitlist
 	createWaitlistEntryID       uuid.UUID
@@ -221,6 +224,16 @@ func (m *mockRepo) CreateBooking(_ context.Context, b *Booking, applied *Applied
 	b.CreatedAt = time.Now()
 	b.UpdatedAt = time.Now()
 	m.createBookingCaptured = b
+	return m.createBookingErr
+}
+func (m *mockRepo) CreateGuestHold(_ context.Context, b *Booking, client string, max int) error {
+	b.CreatedAt = time.Now()
+	b.UpdatedAt = time.Now()
+	m.createBookingCaptured = b
+	m.createGuestHoldClient, m.createGuestHoldMax = client, max
+	if m.createGuestHoldErr != nil {
+		return m.createGuestHoldErr
+	}
 	return m.createBookingErr
 }
 func (m *mockRepo) GetBookingByID(_ context.Context, _ uuid.UUID) (*Booking, error) {

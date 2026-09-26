@@ -24,9 +24,12 @@ package pricing
 // already builds its enriched queries from enrichedSelectCols + enrichedFrom
 // this way - enrichedFrom joins services, enrichedSelectCols reads only b.*
 // money today; adding s.price to enrichedSelectCols would NOT be caught), a
-// table name spliced in with fmt.Sprintf, or SQL assembled at run time. It
-// also ignores UPDATE/INSERT ... RETURNING and test files. It is a tripwire
-// for the common shapes, not a proof; review still has to read the SQL.
+// table name spliced in with fmt.Sprintf, or SQL assembled at run time.
+// Within one literal it also misses whole-row references (row_to_json(s),
+// SELECT s ... FROM services s, (s).*), `TABLE services`, and a comment
+// between JOIN and services. It ignores UPDATE/INSERT ... RETURNING and
+// test files. It is a tripwire for the common shapes, not a proof; review
+// still has to read the SQL.
 //
 // PROVEN TO FIRE: the original FROM/JOIN shape in the commit that introduced
 // it. The widened shapes (comma join, comma join without a space,

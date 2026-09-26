@@ -13,7 +13,7 @@
 // noleak_test.go fails the build on the common shapes of any other SQL
 // reading services.price or services.deposit_amount. It matches one string
 // literal at a time, so SQL split across two literals is not seen - its
-// header lists exactly what it can and cannot catch.
+// header lists the shapes it is known to miss.
 //
 // # WHY SQL EXPRESSIONS WITHOUT ALIASES
 //

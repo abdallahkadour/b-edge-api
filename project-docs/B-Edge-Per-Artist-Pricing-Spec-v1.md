@@ -2,13 +2,17 @@
 
 **Status:** Built, 2026-09-26. Verified end to end: Go tests (plain, `devbypass`,
 `dbtest`), the chaos-booking suite (3.7/3.7b), and a WebKit/Chromium UI pass at
-390px (`b-edge-web/scripts/verify-offerings-ui.mjs`). One defect found and
-**not** fixed in that pass, filed rather than patched: a pending member's
-mobile bottom nav renders nothing at all (the bar is itself conditioned on
-having a "primary" item, which a pending member never has), so the "More"
-sheet that would reveal My services never appears — the desktop sidebar copy
-of the link is CSS-hidden below `md:`. Only the mobile viewport is affected;
-desktop and the join step's inline services screen are unaffected.
+390px (`b-edge-web/scripts/verify-offerings-ui.mjs`). One defect found during
+that pass — a pending member's mobile bottom nav rendered nothing at all (the
+bar was itself conditioned on having a "primary" item, which a pending member
+never has), so the "More" sheet that would reveal My services never appeared,
+and the desktop sidebar copy of the link was CSS-hidden below `md:` — is
+**fixed** as of 2026-09-26, commit `5836f48` (`b-edge-web`): the bar now falls
+back to showing the filtered nav itself as its primary items whenever none of
+it matches the usual primary set, so it is never empty. Re-verified with the
+same script: all checks pass, including the previously-unreachable pending-
+member path. Only the mobile viewport was ever affected; desktop and the join
+step's inline services screen were unaffected throughout.
 **Overturns:** D-MS9 (*"Can a member set their own prices? No, v1."*) and the
 services half of BR-8 (*"owner-write, member-read"*)
 **Depends on:** `validateBookingParties` (FRAUD-16, commit `cc9d5be`), which this

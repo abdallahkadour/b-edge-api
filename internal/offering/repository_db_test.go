@@ -85,6 +85,13 @@ func TestDelete_SwitchesItOff(t *testing.T) {
 	repo := NewRepository(pool)
 	ctx := context.Background()
 	require.NoError(t, repo.Upsert(ctx, UpsertParams{ArtistID: f.OwnerArtist, ServiceID: f.ServiceID}))
+	// Precondition: the row EXISTS before the delete. Without this, an
+	// Upsert that silently wrote nothing would leave "not offered" true
+	// before Delete ever ran, and this test would pass on a no-op Delete.
+	before, err := repo.Get(ctx, f.SalonID, f.OwnerArtist, f.ServiceID)
+	require.NoError(t, err)
+	require.True(t, before.Offered, "precondition: she offers it before switching it off")
+
 	require.NoError(t, repo.Delete(ctx, f.OwnerArtist, f.ServiceID))
 	o, err := repo.Get(ctx, f.SalonID, f.OwnerArtist, f.ServiceID)
 	require.NoError(t, err)

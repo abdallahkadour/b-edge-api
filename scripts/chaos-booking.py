@@ -732,6 +732,7 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
         ("member2", member2_key,  "100.00",    "+96176000473"),
     ]
     all_ok = True
+    leg_ok_by_label = {}
     segments = []
     for label, key, expected, phone in legs:
         aid = A[key]
@@ -742,10 +743,22 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
                   and all(v is not None for v in (expected_d, listed_d, shown_d, stored_d))
                   and listed_d == shown_d == stored_d == expected_d)
         all_ok = all_ok and leg_ok
+        leg_ok_by_label[label] = leg_ok
         segments.append(f"{label} {key} (expect {expected}): profile {listed} / "
                          f"hold {shown} / stored {stored}")
     rec("3.7", "PASS" if all_ok else "FAIL", "; ".join(segments))
 
+    # 3.7b - switched off, refused. POSITIVE CONTROL FIRST, like 3.6: a
+    # refusal only means "switching off works" if the same member WAS
+    # bookable at her price a moment ago. Without this gate, a member who
+    # never offered the service (a failed setup PUT, a join that seeded
+    # nothing) is refused SERVICE_NOT_FOUND for the wrong reason and 3.7b
+    # passes on a switch that was never on.
+    if not leg_ok_by_label.get("member1"):
+        rec("3.7b", "FAIL",
+            f"POSITIVE CONTROL FAILED: {member1_key} was not bookable at her own price in "
+            f"3.7, so a refusal after switching off would mean nothing. Not run.")
+        return
     st_switch_off, r_switch_off = call(
         "PUT", f"/artists/salon/my-services/{svc_id}", {"offered": False}, tok_m1)
     if st_switch_off >= 400:
@@ -753,7 +766,8 @@ def phase3(T, A, S, ST, SV, C, admin_tok):
             f"3.7b setup: switch off {member1_key}: {st_switch_off} {err(r_switch_off)}")
     st_off, _, _, e_off = quote(A[member1_key], "+96176000474")
     rec("3.7b", "PASS" if e_off == "SERVICE_NOT_FOUND" else "FAIL",
-        f"after {member1_key} switched it off: {st_off} {e_off or 'ACCEPTED'}")
+        f"after {member1_key} switched it off: {st_off} {e_off or 'ACCEPTED'} "
+        f"(control: bookable at her price in 3.7)")
 
 
 def state_ledger():

@@ -32,6 +32,9 @@ type Repository interface {
 	// a mid-write failure would be a genuinely bad state to leave behind.
 	CreateOrder(ctx context.Context, o *Order, items []*OrderItem, applied *AppliedDiscount) error
 	GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*OrderItem, error)
+	// GetOrderByRequestID finds the order a checkout already placed, so a
+	// retry can answer with it. ErrOrderNotFound when there is none.
+	GetOrderByRequestID(ctx context.Context, requestID uuid.UUID) (*Order, []*OrderItem, error)
 	GetOrdersBySalon(ctx context.Context, salonID uuid.UUID, status string) ([]*Order, error)
 
 	// GetEnrichedOrdersBySalon is what the artist-facing order queue
@@ -167,13 +170,19 @@ func (r *pgRepo) CreateOrder(ctx context.Context, o *Order, items []*OrderItem, 
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO orders (id, salon_id, customer_id, status, total_amount, delivery_notes, delivery_lat, delivery_lng,
-		                    discount_amount, discount_code)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                    discount_amount, discount_code, request_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at`,
 		o.ID, o.SalonID, o.CustomerID, OrderStatusPlaced, o.TotalAmount, o.DeliveryNotes, o.DeliveryLat, o.DeliveryLng,
-		o.DiscountAmount, o.DiscountCode,
+		o.DiscountAmount, o.DiscountCode, o.RequestID,
 	).Scan(&o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
+		// A retry that raced the original: the unique key waited for the
+		// first to commit, then refused this one before any stock was taken.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode && pgErr.ConstraintName == "orders_request_id_key" {
+			return ErrDuplicateOrderRequest
+		}
 		return fmt.Errorf("create order: insert order: %w", err)
 	}
 	o.Status = OrderStatusPlaced
@@ -250,6 +259,38 @@ func (r *pgRepo) GetOrderByID(ctx context.Context, id uuid.UUID) (*Order, []*Ord
 	}
 
 	items, err := r.GetOrderItems(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return o, items, nil
+}
+
+// GetOrderByRequestID reads the discount too, unlike GetOrderByID: a retry
+// must answer with exactly what the first attempt would have, and that
+// included the code and the amount it took off.
+func (r *pgRepo) GetOrderByRequestID(ctx context.Context, requestID uuid.UUID) (*Order, []*OrderItem, error) {
+	o := &Order{}
+	err := r.db.QueryRow(ctx, `
+		SELECT id, salon_id, customer_id, status, total_amount, discount_amount, discount_code, request_id,
+		       payment_reference, delivery_notes, delivery_lat, delivery_lng, cancellation_reason,
+		       confirmed_at, shipped_at, delivered_at, cancelled_at, created_at, updated_at
+		FROM orders
+		WHERE request_id = $1
+		AND deleted_at IS NULL`,
+		requestID,
+	).Scan(
+		&o.ID, &o.SalonID, &o.CustomerID, &o.Status, &o.TotalAmount, &o.DiscountAmount, &o.DiscountCode, &o.RequestID,
+		&o.PaymentReference, &o.DeliveryNotes, &o.DeliveryLat, &o.DeliveryLng, &o.CancellationReason,
+		&o.ConfirmedAt, &o.ShippedAt, &o.DeliveredAt, &o.CancelledAt, &o.CreatedAt, &o.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, ErrOrderNotFound
+		}
+		return nil, nil, fmt.Errorf("get order by request id: %w", err)
+	}
+
+	items, err := r.GetOrderItems(ctx, o.ID)
 	if err != nil {
 		return nil, nil, err
 	}

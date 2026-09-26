@@ -49,8 +49,18 @@ type mockRepo struct {
 	enrichedOrders  []*EnrichedOrderResponse
 	enrichedErr     error
 
-	customerID  uuid.UUID
-	customerErr error
+	customerID    uuid.UUID
+	customerErr   error
+	customerCalls int
+
+	// GetOrderByRequestID: the first requestMisses lookups find nothing,
+	// later ones find requestOrder (nil: never found). That is enough to
+	// model both a plain retry and a retry that raced the original.
+	requestOrder   *Order
+	requestItems   []*OrderItem
+	requestMisses  int
+	requestErr     error
+	requestLookups []uuid.UUID
 
 	// captured for assertions
 	createdOrder      *Order
@@ -107,6 +117,17 @@ func (m *mockRepo) GetOrderByID(_ context.Context, _ uuid.UUID) (*Order, []*Orde
 	return m.order, m.orderItems, nil
 }
 
+func (m *mockRepo) GetOrderByRequestID(_ context.Context, requestID uuid.UUID) (*Order, []*OrderItem, error) {
+	m.requestLookups = append(m.requestLookups, requestID)
+	if m.requestErr != nil {
+		return nil, nil, m.requestErr
+	}
+	if m.requestOrder == nil || len(m.requestLookups) <= m.requestMisses {
+		return nil, nil, ErrOrderNotFound
+	}
+	return m.requestOrder, m.requestItems, nil
+}
+
 func (m *mockRepo) GetOrdersBySalon(_ context.Context, _ uuid.UUID, _ string) ([]*Order, error) {
 	return nil, nil
 }
@@ -143,6 +164,7 @@ func (m *mockRepo) GetOrderItemsForOrders(_ context.Context, orderIDs []uuid.UUI
 }
 
 func (m *mockRepo) FindOrCreateCustomerByPhone(_ context.Context, _, _ string) (uuid.UUID, error) {
+	m.customerCalls++
 	if m.customerErr != nil {
 		return uuid.Nil, m.customerErr
 	}

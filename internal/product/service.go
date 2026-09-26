@@ -166,6 +166,22 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		return nil, apperror.BadRequest("INVALID_SALON_ID", "Invalid salon ID")
 	}
 
+	// A retry of a checkout whose reply was lost answers with the order it
+	// already placed. Checked before anything else: the first attempt may
+	// have taken the last unit, and the stock check below would then refuse
+	// the very order that exists.
+	var requestID *uuid.UUID
+	if req.RequestID != nil {
+		id, err := uuid.Parse(*req.RequestID)
+		if err != nil {
+			return nil, apperror.BadRequest("INVALID_REQUEST_ID", "Invalid request ID")
+		}
+		requestID = &id
+		if placed, err := s.placedOrder(ctx, id, salonID); placed != nil || err != nil {
+			return placed, err
+		}
+	}
+
 	items := make([]*OrderItem, 0, len(req.Items))
 	total := decimal.Zero
 
@@ -247,9 +263,22 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		DeliveryNotes:  req.DeliveryNotes,
 		DeliveryLat:    &req.DeliveryLat,
 		DeliveryLng:    &req.DeliveryLng,
+		RequestID:      requestID,
 	}
 
 	if err := s.repo.CreateOrder(ctx, order, items, applied); err != nil {
+		if errors.Is(err, ErrDuplicateOrderRequest) {
+			// The retry raced the original past the lookup above, and the
+			// unique key refused it. The original has committed by now.
+			placed, lookupErr := s.placedOrder(ctx, *requestID, salonID)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if placed == nil {
+				return nil, fmt.Errorf("place order: %w", err)
+			}
+			return placed, nil
+		}
 		if errors.Is(err, ErrDiscountAlreadyRedeemed) {
 			return nil, apperror.Conflict("DISCOUNT_ALREADY_USED",
 				"You've already used that code. Please remove it and try again.")
@@ -259,6 +288,28 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 				"Sorry, one or more items in your order just sold out. Please update your cart and try again.")
 		}
 		return nil, fmt.Errorf("place order: %w", err)
+	}
+	return toOrderResponse(order, items), nil
+}
+
+// placedOrder answers a retry with the order its request_id already placed,
+// or returns nil, nil when there is none yet.
+//
+// The id is the cart's random secret, never shown anywhere, so only the cart
+// that made it can replay it. The same id for another salon is a client bug:
+// placing a second order would break "one id, one order", and answering with
+// the other salon's order would be wrong outright.
+func (s *Service) placedOrder(ctx context.Context, requestID, salonID uuid.UUID) (*OrderResponse, error) {
+	order, items, err := s.repo.GetOrderByRequestID(ctx, requestID)
+	if errors.Is(err, ErrOrderNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("place order: look up request id: %w", err)
+	}
+	if order.SalonID != salonID {
+		return nil, apperror.Conflict("REQUEST_ID_REUSED",
+			"This checkout was already used for another order. Please refresh the page and try again.")
 	}
 	return toOrderResponse(order, items), nil
 }

@@ -57,6 +57,11 @@ var (
 	// discount_redemptions firing: a concurrent checkout committed this
 	// customer's one use of the code first.
 	ErrDiscountAlreadyRedeemed = errors.New("discount already redeemed by this customer")
+
+	// ErrDuplicateOrderRequest is orders_request_id_key firing: an order
+	// with this request_id already exists, so this is a retry of it
+	// (migration 054).
+	ErrDuplicateOrderRequest = errors.New("an order with this request id already exists")
 )
 
 // Order status constants - the state machine from PRD §13.2, as actually
@@ -216,8 +221,12 @@ type Order struct {
 	TotalAmount decimal.Decimal
 	// DiscountAmount and DiscountCode mirror bookings exactly, so both money
 	// paths have the same shape. TotalAmount is what is OWED, after this.
-	DiscountAmount   decimal.Decimal
-	DiscountCode     *string
+	DiscountAmount decimal.Decimal
+	DiscountCode   *string
+	// RequestID is the cart's own id for this checkout, so a retry is the
+	// same order rather than a second one (migration 054). Nil for orders
+	// from clients that send none.
+	RequestID        *uuid.UUID
 	PaymentReference *string
 	DeliveryNotes    *string
 	// DeliveryLat/DeliveryLng are the customer's pin-dropped location, nil
@@ -310,6 +319,10 @@ type CreateOrderRequest struct {
 	// a code may reduce the total all the way to zero - see
 	// internal/pkg/discount's cap, which floors at the deposit.
 	DiscountCode *string `json:"discount_code" validate:"omitempty,max=32"`
+	// RequestID is optional: a random UUID the cart makes when she places
+	// the order and sends again if she retries. A retry answers with the
+	// order already placed instead of placing another (migration 054).
+	RequestID *string `json:"request_id" validate:"omitempty,uuid"`
 }
 
 // ConfirmOrderPaymentRequest is the body for PATCH /artists/orders/:id/confirm-payment.

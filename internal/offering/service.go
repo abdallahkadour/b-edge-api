@@ -18,10 +18,15 @@ import (
 
 // UpdateRequest is the body of both PUT endpoints.
 //
+// Offered is REQUIRED (a pointer so absent and false differ): as a plain bool
+// an omitted key read as false, and false deletes her row and her custom
+// price - so a body meant only to change the deposit switched the service
+// off. Absent or null is a 422 on "offered".
+//
 // Price and DepositAmount are optional.Field: absent keeps her override,
 // null clears it to the salon's value, a string sets it (PP-2).
 type UpdateRequest struct {
-	Offered       bool                   `json:"offered"`
+	Offered       *bool                  `json:"offered" validate:"required"`
 	Price         optional.Field[string] `json:"price"`
 	DepositAmount optional.Field[string] `json:"deposit_amount"`
 }
@@ -133,7 +138,7 @@ func (s *Service) update(ctx context.Context, salonID, artistID, serviceID, acto
 
 	// Switching off deletes the row, INCLUDING her custom price - "no row"
 	// is what "not offered" means (spec §5). Existing bookings are untouched.
-	if !req.Offered {
+	if !*req.Offered {
 		if current.Offered {
 			if err := s.repo.Delete(ctx, artistID, serviceID); err != nil {
 				return nil, err

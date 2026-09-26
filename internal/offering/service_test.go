@@ -51,6 +51,8 @@ func (c *captureAudit) Log(_ context.Context, e audit.Event) error {
 	return nil
 }
 
+func ptr[T any](v T) *T { return &v }
+
 func menuRow(offered bool) *Offering {
 	return &Offering{ServiceID: uuid.New(), Offered: offered,
 		SalonPrice: decimal.RequireFromString("150"), SalonDeposit: decimal.RequireFromString("30"),
@@ -71,7 +73,7 @@ func TestUpdateMine_SetsHerPrice_AndAuditsTheActor(t *testing.T) {
 	user := uuid.New()
 
 	_, err := svc.UpdateMine(context.Background(), uuid.New(), user, repo.current.ServiceID,
-		UpdateRequest{Offered: true, Price: optional.From("200.00")}, "")
+		UpdateRequest{Offered: ptr(true), Price: optional.From("200.00")}, "")
 
 	require.NoError(t, err)
 	require.Len(t, repo.upserts, 1)
@@ -85,7 +87,7 @@ func TestUpdateMine_SetsHerPrice_AndAuditsTheActor(t *testing.T) {
 func TestUpdateMine_NullPrice_ClearsToSalon(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.Null[string]()}, "")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true), Price: optional.Null[string]()}, "")
 	require.NoError(t, err)
 	assert.True(t, repo.upserts[0].PriceSet)
 	assert.Nil(t, repo.upserts[0].Price, "an explicit null must clear, not be ignored")
@@ -97,7 +99,7 @@ func TestUpdateMine_InvalidMoney_400(t *testing.T) {
 	// to 11.00 in the NUMERIC(10,2) column.
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("10.999")}, "")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true), Price: optional.From("10.999")}, "")
 	assert.Equal(t, "INVALID_PRICE", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -105,7 +107,7 @@ func TestUpdateMine_InvalidMoney_400(t *testing.T) {
 func TestUpdateMine_OwnDepositAboveEffectivePrice_422(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true,
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true),
 			Price: optional.From("40.00"), DepositAmount: optional.From("50.00")}, "")
 	assert.Equal(t, "VALIDATION_ERROR", code(t, err))
 	assert.Empty(t, repo.upserts)
@@ -114,7 +116,7 @@ func TestUpdateMine_OwnDepositAboveEffectivePrice_422(t *testing.T) {
 func TestUpdateMine_SwitchOff_Deletes(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: false}, "")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(false)}, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.deletes)
 	assert.Empty(t, repo.upserts)
@@ -123,7 +125,7 @@ func TestUpdateMine_SwitchOff_Deletes(t *testing.T) {
 func TestUpdateMine_ServiceNotInHerSalon_404(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: true, getErr: ErrNotFound}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), UpdateRequest{Offered: true}, "")
+		uuid.New(), UpdateRequest{Offered: ptr(true)}, "")
 	assert.Equal(t, "SERVICE_NOT_FOUND", code(t, err))
 }
 
@@ -139,7 +141,7 @@ func TestUpdateMine_ServiceNotInHerSalon_404(t *testing.T) {
 func TestUpdateMine_ArtistNoLongerInSalon_404(t *testing.T) {
 	repo := &mockRepo{artistID: uuid.New(), inSalon: false, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("200.00")}, "")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true), Price: optional.From("200.00")}, "")
 	assert.Equal(t, "MEMBER_NOT_FOUND", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -147,7 +149,7 @@ func TestUpdateMine_ArtistNoLongerInSalon_404(t *testing.T) {
 func TestUpdateForMember_ArtistOfAnotherSalon_404(t *testing.T) {
 	repo := &mockRepo{inSalon: false, current: menuRow(true)}
 	_, err := NewService(repo, &captureAudit{}).UpdateForMember(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), repo.current.ServiceID, UpdateRequest{Offered: true}, "")
+		uuid.New(), repo.current.ServiceID, UpdateRequest{Offered: ptr(true)}, "")
 	assert.Equal(t, "MEMBER_NOT_FOUND", code(t, err))
 	assert.Empty(t, repo.upserts)
 }
@@ -160,7 +162,7 @@ func TestUpdateForMember_ArtistOfAnotherSalon_404(t *testing.T) {
 func TestUpdateMine_ArtistLookupFails_Is500NotMemberNotFound(t *testing.T) {
 	repo := &mockRepo{artistIDErr: errors.New("connection reset by peer")}
 	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
-		uuid.New(), UpdateRequest{Offered: true}, "")
+		uuid.New(), UpdateRequest{Offered: ptr(true)}, "")
 
 	require.Error(t, err)
 	var appErr *apperror.AppError
@@ -204,7 +206,7 @@ func TestUpdateForMember_AuditsOwnerAsActor_AndMembersArtistID(t *testing.T) {
 	salon, owner, maya := uuid.New(), uuid.New(), uuid.New()
 
 	_, err := NewService(repo, aud).UpdateForMember(context.Background(), salon, owner, maya,
-		repo.current.ServiceID, UpdateRequest{Offered: true, Price: optional.From("120.00")}, "203.0.113.7")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(true), Price: optional.From("120.00")}, "203.0.113.7")
 
 	require.NoError(t, err)
 	require.Len(t, aud.events, 1)
@@ -232,7 +234,7 @@ func TestUpdateMine_SwitchOff_AuditCarriesArtistID(t *testing.T) {
 	user := uuid.New()
 
 	_, err := NewService(repo, aud).UpdateMine(context.Background(), uuid.New(), user,
-		repo.current.ServiceID, UpdateRequest{Offered: false}, "198.51.100.4")
+		repo.current.ServiceID, UpdateRequest{Offered: ptr(false)}, "198.51.100.4")
 
 	require.NoError(t, err)
 	require.Len(t, aud.events, 1)
@@ -248,4 +250,23 @@ func TestUpdateMine_SwitchOff_AuditCarriesArtistID(t *testing.T) {
 	assert.Equal(t, repo.current.ServiceID.String(), newVals["service_id"])
 	assert.Equal(t, true, oldVals["offered"])
 	assert.Equal(t, false, newVals["offered"])
+}
+
+// TestUpdateMine_OfferedAbsent_422 - "offered" is the one field a PUT cannot
+// leave out. As a plain bool its zero value is false, so a body that only
+// meant to change the deposit ({"deposit_amount":"20"}) read as "switch it
+// off" and deleted her row and her custom price. Absent must be refused,
+// not guessed.
+func TestUpdateMine_OfferedAbsent_422(t *testing.T) {
+	repo := &mockRepo{artistID: uuid.New(), inSalon: true, current: menuRow(true)}
+	_, err := NewService(repo, &captureAudit{}).UpdateMine(context.Background(), uuid.New(), uuid.New(),
+		repo.current.ServiceID, UpdateRequest{DepositAmount: optional.From("20.00")}, "")
+
+	var e *apperror.AppError
+	require.ErrorAs(t, err, &e)
+	assert.Equal(t, "VALIDATION_ERROR", e.Code)
+	require.Len(t, e.Details, 1)
+	assert.Equal(t, "offered", e.Details[0].Field)
+	assert.Equal(t, 0, repo.deletes, "a missing switch must never delete her row")
+	assert.Empty(t, repo.upserts)
 }

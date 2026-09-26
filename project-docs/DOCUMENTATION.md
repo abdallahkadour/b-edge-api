@@ -25,11 +25,11 @@
 > **Verified against code 2026-09-26:** **52 migrations**
 > (latest `052_artist_services`), **36 tables**, **20 route-bearing
 > domains** (26 directories under `internal/`, excluding `pkg`), **20 leaf
-> packages**, **162 route registrations** across **134 swagger paths**,
-> **1158 Go tests**, **28 environment variable names** read via `os.Getenv`
-> (test files included). Frontend: **46 Angular routes**, **10 spec files**
-> carrying **53 passing tests** (shared 42, artist-dashboard 8,
-> customer-pwa 3), **47 help topics** (15 customer, 28 artist, 4 admin).
+> packages**, **163 route registrations** across **135 swagger paths**,
+> **1166 Go tests**, **28 environment variable names** read via `os.Getenv`
+> (test files included). Frontend: **46 Angular routes**, **11 spec files**
+> carrying **55 passing tests** (shared 42, artist-dashboard 8,
+> customer-pwa 5), **47 help topics** (15 customer, 28 artist, 4 admin).
 >
 > These numbers are now **generated, not typed**:
 > `./scripts/doc-facts.sh` recomputes them from the repository and

@@ -140,7 +140,9 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 		FROM artists a
 		JOIN users u         ON u.id  = a.user_id
 		JOIN artist_stores ast ON ast.artist_id = a.id
-		JOIN stores s        ON s.id  = ast.store_id
+		-- Only a store of her CURRENT salon: a link left behind by an older
+		-- detach listed a departed member at her old salon's city.
+		JOIN stores s        ON s.id  = ast.store_id AND s.salon_id = a.salon_id
 		%s
 		ORDER BY a.is_verified DESC, a.rating DESC, u.name ASC, s.city ASC
 		LIMIT $%d`, where, limitPos)
@@ -204,6 +206,8 @@ func (r *pgRepo) GetArtistStores(ctx context.Context, artistID uuid.UUID) ([]*St
 		       s.rating, s.review_count
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
+		-- Only a store of her CURRENT salon (see ListArtistCards).
+		JOIN artists a ON a.id = ast.artist_id AND a.salon_id = s.salon_id
 		WHERE ast.artist_id = $1
 		AND s.is_active = TRUE
 		ORDER BY s.city ASC, s.name ASC`,

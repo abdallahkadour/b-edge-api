@@ -225,3 +225,28 @@ func TestGetOfferedServicesByArtist_StrayForeignSalonRow_Excluded(t *testing.T) 
 	require.Len(t, recs, 1, "only her own salon's service may be listed")
 	assert.Equal(t, "Bridal", recs[0].Name)
 }
+
+func TestGetStoresByArtist_LinkToAStoreOutsideHerSalon_Excluded(t *testing.T) {
+	// The booking funnel's store picker. Backstop for DetachArtist, which
+	// now removes the link itself: only a store of her CURRENT salon counts.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	artistID := newArtistFixture(t, pool)
+	var salon, store uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT salon_id FROM artists WHERE id=$1`, artistID).Scan(&salon))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO stores (salon_id,name,city)
+		VALUES ($1,'Main','Byblos') RETURNING id`, salon).Scan(&store))
+	_, err := pool.Exec(ctx, `INSERT INTO artist_stores (artist_id,store_id) VALUES ($1,$2)`, artistID, store)
+	require.NoError(t, err)
+	repo := NewRepository(pool)
+
+	stores, err := repo.GetStoresByArtist(ctx, artistID)
+	require.NoError(t, err)
+	require.Len(t, stores, 1, "positive control: her salon's store is offered")
+
+	_, err = pool.Exec(ctx, `UPDATE artists SET salon_id = NULL WHERE id = $1`, artistID)
+	require.NoError(t, err)
+	stores, err = repo.GetStoresByArtist(ctx, artistID)
+	require.NoError(t, err)
+	assert.Empty(t, stores, "a store of a salon she has left must not be offered for booking")
+}

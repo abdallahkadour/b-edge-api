@@ -315,6 +315,13 @@ func (r *pgRepo) DetachArtist(ctx context.Context, salonID, artistID uuid.UUID) 
 			DELETE FROM artist_services os
 			 USING services s
 			 WHERE os.service_id = s.id AND os.artist_id = $1 AND s.salon_id = $2
+		), gone_stores AS (
+			-- ...and no longer works at its stores. Discover lists an artist
+			-- through this link: left behind, a departed member stayed listed
+			-- at her old salon's city with nothing bookable (2026-09-26).
+			DELETE FROM artist_stores x
+			 USING stores st
+			 WHERE x.store_id = st.id AND x.artist_id = $1 AND st.salon_id = $2
 		)
 		UPDATE artists SET salon_id = NULL, updated_at = now()
 		 WHERE id = $1 AND salon_id = $2`, artistID, salonID)

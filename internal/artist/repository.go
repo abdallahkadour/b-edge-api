@@ -404,6 +404,9 @@ func (r *pgRepo) GetStoresByArtist(ctx context.Context, artistID uuid.UUID) ([]*
 		       s.timezone, s.latitude, s.longitude, s.is_active, s.created_at, s.updated_at
 		FROM stores s
 		JOIN artist_stores ast ON ast.store_id = s.id
+		-- Only a store of her CURRENT salon: this is the booking funnel's
+		-- store picker, and a link a salon she has left must not offer.
+		JOIN artists a ON a.id = ast.artist_id AND a.salon_id = s.salon_id
 		WHERE ast.artist_id = $1
 		AND s.is_active = TRUE
 		ORDER BY s.name ASC`,

@@ -298,3 +298,41 @@ func TestSalonInvitations_AcceptedWithoutAcceptor_IsUnrepresentable(t *testing.T
 		  WHERE id=$1`, inv.ID, f.OwnerID)
 	assert.NoError(t, err, "set together, the transition must succeed")
 }
+
+func TestDetachArtist_RemovesHerStoreLinks_KeepsOthers(t *testing.T) {
+	// Leaving a salon must end her link to its stores, in the same statement
+	// that clears salon_id. The link is what Discover joins on: left behind,
+	// a departed member stayed listed at her old salon's city, with that
+	// salon's store on her profile and nothing bookable (measured live
+	// 2026-09-26). The owner's link to the same store must survive - only
+	// HER links go.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newMemFixture(t, pool)
+
+	var memberUser, member, store uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO users (name, email, password_hash, role)
+		 VALUES ('Maya', $1, 'x', 'artist') RETURNING id`,
+		uuid.NewString()+"@memtest.local").Scan(&memberUser))
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO artists (user_id, salon_id) VALUES ($1,$2) RETURNING id`,
+		memberUser, f.SalonID).Scan(&member))
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO stores (salon_id, name, city) VALUES ($1,'Main','Beirut') RETURNING id`,
+		f.SalonID).Scan(&store))
+	_, err := pool.Exec(ctx,
+		`INSERT INTO artist_stores (artist_id, store_id) VALUES ($1,$3), ($2,$3)`,
+		member, f.Artist, store)
+	require.NoError(t, err)
+
+	require.NoError(t, NewRepository(pool).DetachArtist(ctx, f.SalonID, member))
+
+	var hers, owners int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM artist_stores WHERE artist_id = $1`, member).Scan(&hers))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM artist_stores WHERE artist_id = $1`, f.Artist).Scan(&owners))
+	assert.Equal(t, 0, hers, "a departed member must not stay linked to the salon's stores")
+	assert.Equal(t, 1, owners, "the owner's link to the same store must be untouched")
+}

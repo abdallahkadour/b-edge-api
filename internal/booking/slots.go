@@ -251,10 +251,11 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	// ── Step 3.5: Lazily release stale holds and deposit-lapsed approvals ──
 	//
 	// A held booking nobody ever submitted stays in 'held' forever unless
-	// something moves it past its 10-minute window - there is no background
-	// scheduler running ReleaseExpiredHolds (found live while testing this
-	// endpoint: several holds from days earlier were still permanently
-	// blocking their slots). The same problem exists for 'approved' bookings
+	// something moves it past its 10-minute window. Originally nothing did
+	// (found live while testing this endpoint: several holds from days
+	// earlier were still permanently blocking their slots); since 2026-09-26
+	// the ExpiryWorker also sweeps every minute, and this read-path sweep
+	// stays so the funnel never shows a stale hold between ticks. The same problem exists for 'approved' bookings
 	// whose deposit_deadline lapsed without payment - StatusApproved is in
 	// BlockingStatuses too, so an artist who never got paid and never
 	// manually cancelled leaves that slot permanently unbookable, forever,
@@ -263,10 +264,16 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 	// query already takes: best-effort, since a sweep failure here should
 	// never fail the slots request itself - worst case, a stale row keeps
 	// blocking for one more request, exactly like before this fix.
-	if _, err := s.repo.ReleaseExpiredHolds(ctx); err != nil {
+	//
+	// Through the SERVICE sweeps, not the repository's: only those tell the
+	// waitlist that a slot opened. Calling the repository directly threw the
+	// freed slots away, so nobody waiting was ever told (fixed 2026-09-26).
+	// The ExpiryWorker runs the same sweeps on a clock for everything that
+	// never loads availability first.
+	if _, err := s.ReleaseExpiredHolds(ctx); err != nil {
 		s.log.Warn("get available slots: release expired holds failed, continuing", zap.Error(err))
 	}
-	if _, err := s.repo.ExpireDeadlineBookings(ctx); err != nil {
+	if _, err := s.ExpireDeadlineBookings(ctx); err != nil {
 		s.log.Warn("get available slots: expire deadline bookings failed, continuing", zap.Error(err))
 	}
 

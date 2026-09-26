@@ -230,7 +230,7 @@ func (s *Service) ReleaseGuestHold(ctx context.Context, bookingID uuid.UUID) err
 }
 
 // ReleaseExpiredHolds releases all held bookings whose 10-minute window
-// has passed. Called by the background job every minute.
+// has passed. Called every minute by ExpiryWorker and on every availability read.
 func (s *Service) ReleaseExpiredHolds(ctx context.Context) (int64, error) {
 	freed, err := s.repo.ReleaseExpiredHolds(ctx)
 	if err != nil {
@@ -241,7 +241,7 @@ func (s *Service) ReleaseExpiredHolds(ctx context.Context) (int64, error) {
 }
 
 // ExpireDeadlineBookings expires all approved bookings whose deposit
-// deadline has passed. Called by the background job every minute.
+// deadline has passed. Called every minute by ExpiryWorker and on every availability read.
 func (s *Service) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 	freed, err := s.repo.ExpireDeadlineBookings(ctx)
 	if err != nil {

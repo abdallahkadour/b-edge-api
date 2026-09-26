@@ -245,6 +245,13 @@ func main() {
 	// internal/booking/waitlist_worker.go.
 	superviseWorker(ctx, "waitlist", booking.NewWaitlistWorker(pool, logger), logger)
 
+	// Expires abandoned holds and approvals whose deposit deadline lapsed,
+	// and tells the waitlist each freed slot opened. The availability read
+	// path sweeps too, but only when someone loads slots; until this worker,
+	// the service methods that notify the waitlist were called by nothing.
+	// See internal/booking/expiry_worker.go.
+	superviseWorker(ctx, "expiry", booking.NewExpiryWorker(pool, logger), logger)
+
 	// Reaps expired refresh tokens and OTPs. Before this, nothing did:
 	// refresh_tokens was the largest table in the database and 94% of it was
 	// already dead, every row a credential hash.

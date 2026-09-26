@@ -27,8 +27,8 @@ import (
 // null clears it to the salon's value, a string sets it (PP-2).
 type UpdateRequest struct {
 	Offered       *bool                  `json:"offered" validate:"required"`
-	Price         optional.Field[string] `json:"price"`
-	DepositAmount optional.Field[string] `json:"deposit_amount"`
+	Price         optional.Field[string] `json:"price" swaggertype:"string" example:"200.00"`         // absent keeps, null clears
+	DepositAmount optional.Field[string] `json:"deposit_amount" swaggertype:"string" example:"40.00"` // absent keeps, null clears
 }
 
 type auditLogger interface {

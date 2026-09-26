@@ -43,7 +43,8 @@ func param(c *fiber.Ctx, name string) (uuid.UUID, error) {
 // @Summary  The salon menu with my switches, prices and deposits
 // @Tags     offerings
 // @Security BearerAuth
-// @Success  200 {object} response.Body
+// @Success  200 {object} response.Body{data=[]Offering}
+// @Failure  404 {object} response.ErrorBody "MEMBER_NOT_FOUND - no longer in the token's salon"
 // @Router   /artists/salon/my-services [get]
 func (h *Handler) ListMine(c *fiber.Ctx) error {
 	out, err := h.svc.ListMine(c.UserContext(), *middleware.SalonIDFromContext(c), middleware.UserIDFromContext(c))
@@ -59,10 +60,10 @@ func (h *Handler) ListMine(c *fiber.Ctx) error {
 // @Security BearerAuth
 // @Param    serviceId path string true "Service ID"
 // @Param    body body UpdateRequest true "Switch, price, deposit"
-// @Success  200 {object} response.Body
-// @Failure  400 {object} response.ErrorBody "INVALID_PRICE, INVALID_DEPOSIT_AMOUNT"
-// @Failure  404 {object} response.ErrorBody "SERVICE_NOT_FOUND"
-// @Failure  422 {object} response.ErrorBody "VALIDATION_ERROR - deposit above the price"
+// @Success  200 {object} response.Body{data=Offering}
+// @Failure  400 {object} response.ErrorBody "INVALID_ID, INVALID_PRICE, INVALID_DEPOSIT_AMOUNT"
+// @Failure  404 {object} response.ErrorBody "MEMBER_NOT_FOUND - no longer in the token's salon; SERVICE_NOT_FOUND"
+// @Failure  422 {object} response.ErrorBody "VALIDATION_ERROR - offered missing, or deposit above the price"
 // @Router   /artists/salon/my-services/{serviceId} [put]
 func (h *Handler) UpdateMine(c *fiber.Ctx) error {
 	serviceID, err := param(c, "serviceId")
@@ -86,7 +87,8 @@ func (h *Handler) UpdateMine(c *fiber.Ctx) error {
 // @Tags     offerings
 // @Security BearerAuth
 // @Param    artistId path string true "Member artist ID"
-// @Success  200 {object} response.Body
+// @Success  200 {object} response.Body{data=[]Offering}
+// @Failure  400 {object} response.ErrorBody "INVALID_ID"
 // @Failure  404 {object} response.ErrorBody "MEMBER_NOT_FOUND"
 // @Router   /artists/salon/members/{artistId}/services [get]
 func (h *Handler) ListForMember(c *fiber.Ctx) error {
@@ -108,8 +110,10 @@ func (h *Handler) ListForMember(c *fiber.Ctx) error {
 // @Param    artistId path string true "Member artist ID"
 // @Param    serviceId path string true "Service ID"
 // @Param    body body UpdateRequest true "Switch, price, deposit"
-// @Success  200 {object} response.Body
+// @Success  200 {object} response.Body{data=Offering}
+// @Failure  400 {object} response.ErrorBody "INVALID_ID, INVALID_PRICE, INVALID_DEPOSIT_AMOUNT"
 // @Failure  404 {object} response.ErrorBody "MEMBER_NOT_FOUND, SERVICE_NOT_FOUND"
+// @Failure  422 {object} response.ErrorBody "VALIDATION_ERROR - offered missing, or deposit above the price"
 // @Router   /artists/salon/members/{artistId}/services/{serviceId} [put]
 func (h *Handler) UpdateForMember(c *fiber.Ctx) error {
 	artistID, err := param(c, "artistId")

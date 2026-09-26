@@ -10,8 +10,10 @@
 // how "shown $100, charged $200" happens, and this codebase has already
 // shipped that class three times (subscriptionVisibleCond, calendar_sequence,
 // the cross-salon booking). So the calculation lives here, once, and
-// noleak_test.go fails the build if any other SQL reads services.price or
-// services.deposit_amount.
+// noleak_test.go fails the build on the common shapes of any other SQL
+// reading services.price or services.deposit_amount. It matches one string
+// literal at a time, so SQL split across two literals is not seen - its
+// header lists exactly what it can and cannot catch.
 //
 // # WHY SQL EXPRESSIONS WITHOUT ALIASES
 //

@@ -145,7 +145,18 @@ Two suites are worth knowing before writing tests:
   enumerate.
 
 - **A customer-facing price is read through `internal/pkg/pricing`;
-  `noleak_test.go` fails the build on any other read of `services.price`.**
+  `noleak_test.go` fails the build on the common shapes of any other read of
+  `services.price` — not on every possible one.** It matches one string
+  literal at a time: `services` named after `FROM`/`JOIN` or in a comma join,
+  bare, `public.`-qualified or quoted, together with `price`/`deposit_amount`
+  or a `SELECT *` / `s.*` / `services.*`. **It cannot see SQL whose table and
+  column sit in different literals** — two constants concatenated at the call
+  site (booking's `enrichedSelectCols` + `enrichedFrom` are already built that
+  way: `enrichedFrom` joins `services`, so an `s.price` added to
+  `enrichedSelectCols` would pass), a table name spliced in with
+  `fmt.Sprintf`, or `UPDATE … RETURNING`. Treat it as a tripwire; review still
+  reads the SQL.
+
   The fragment is `COALESCE(os.price, s.price)` (and the matching deposit,
   capped at that price) — one shape, used by every reader: discovery's
   artist-profile service list (`discovery/repository.go:GetArtistServices`),
@@ -157,8 +168,10 @@ Two suites are worth knowing before writing tests:
   (`offering/repository.go`'s `pricing.Detail`). The guard test parses
   `internal/` and carries an explicit allowlist of exactly two entries, both
   the owner's own menu screen (`artist/repository.go:GetServicesBySalon` and
-  `GetServiceByID`, which must show and edit the SALON price) — proven to
-  fire before it was trusted.
+  `GetServiceByID`, which must show and edit the SALON price). Every shape
+  it claims was proven to fire before it was trusted: each was injected into
+  a throwaway file and named by the failing test, and the split-constant
+  probe beside them was not — the limit above, measured.
 
 - **Every money string from a request body goes through `internal/pkg/money`.**
   Never call `decimal.NewFromString` on user input directly. It accepts `"1e3"`

@@ -273,6 +273,13 @@ type Repository interface {
 	// back to their released state. Called by background job every minute.
 	ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error)
 
+	// ReleaseHeldGuestBooking ends ONE guest hold early - she went back to
+	// choose another time. It releases only a booking that is still held AND
+	// still filed under SystemGuestPlaceholderID, i.e. never submitted: the
+	// route is public, and a hold's id stays the booking's id after she
+	// submits. Returns the freed slot, or none when nothing matched.
+	ReleaseHeldGuestBooking(ctx context.Context, bookingID uuid.UUID) ([]FreedSlot, error)
+
 	// ExpireDeadlineBookings expires approved bookings whose deposit_deadline
 	// has passed without payment. Called by background job every minute.
 	ExpireDeadlineBookings(ctx context.Context) ([]FreedSlot, error)
@@ -1564,6 +1571,26 @@ func (r *pgRepo) ReleaseExpiredHolds(ctx context.Context) ([]FreedSlot, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("release expired holds: %w", err)
+	}
+	defer rows.Close()
+	return scanFreedSlots(rows)
+}
+
+func (r *pgRepo) ReleaseHeldGuestBooking(ctx context.Context, bookingID uuid.UUID) ([]FreedSlot, error) {
+	// Same end state as the timer (held -> expired), so everything that
+	// already understands an expired hold keeps working.
+	rows, err := r.db.Query(ctx, `
+		UPDATE bookings
+		SET status = $1, updated_at = NOW()
+		WHERE id = $2
+		AND status = $3
+		AND customer_id = $4
+		AND deleted_at IS NULL
+		RETURNING artist_id, store_id, service_id, start_time`,
+		StatusExpired, bookingID, StatusHeld, SystemGuestPlaceholderID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("release held guest booking: %w", err)
 	}
 	defer rows.Close()
 	return scanFreedSlots(rows)

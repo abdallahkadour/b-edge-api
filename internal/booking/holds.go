@@ -208,6 +208,27 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 	return toResponse(b), nil
 }
 
+// ReleaseGuestHold ends a guest's hold early: she went back from the last
+// funnel screen to choose another time. Without it the abandoned slot stayed
+// blocked for the rest of its 10 minutes while she held a second one.
+//
+// Public and keyed only by the booking id, which is safe because the SQL
+// releases nothing but an UNSUBMITTED hold - the worst a leaked id can do is
+// free that slot a few minutes before the timer would. Everything else
+// (unknown id, already ended, already submitted) is the same 404, so the
+// route cannot be used to learn whether a booking exists.
+func (s *Service) ReleaseGuestHold(ctx context.Context, bookingID uuid.UUID) error {
+	freed, err := s.repo.ReleaseHeldGuestBooking(ctx, bookingID)
+	if err != nil {
+		return fmt.Errorf("release guest hold: %w", err)
+	}
+	if len(freed) == 0 {
+		return errBookingNotFound()
+	}
+	s.cascadeFreedSlots(ctx, freed, "hold_released")
+	return nil
+}
+
 // ReleaseExpiredHolds releases all held bookings whose 10-minute window
 // has passed. Called by the background job every minute.
 func (s *Service) ReleaseExpiredHolds(ctx context.Context) (int64, error) {

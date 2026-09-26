@@ -133,6 +133,9 @@ type mockRepo struct {
 	releaseExpiredHoldsFreed              []FreedSlot
 	releaseExpiredHoldsErr                error
 	releaseExpiredHoldsCalled             bool
+	releaseGuestHoldFreed                 []FreedSlot
+	releaseGuestHoldErr                   error
+	releaseGuestHoldID                    uuid.UUID
 	expireDeadlineBookingsFreed           []FreedSlot
 	expireDeadlineBookingsErr             error
 	expireDeadlineBookingsCalled          bool
@@ -349,6 +352,10 @@ func (m *mockRepo) FindStaleWaitlistGroups(_ context.Context, _ time.Time) ([]Wa
 func (m *mockRepo) ReleaseExpiredHolds(_ context.Context) ([]FreedSlot, error) {
 	m.releaseExpiredHoldsCalled = true
 	return m.releaseExpiredHoldsFreed, m.releaseExpiredHoldsErr
+}
+func (m *mockRepo) ReleaseHeldGuestBooking(_ context.Context, id uuid.UUID) ([]FreedSlot, error) {
+	m.releaseGuestHoldID = id
+	return m.releaseGuestHoldFreed, m.releaseGuestHoldErr
 }
 func (m *mockRepo) ExpireDeadlineBookings(_ context.Context) ([]FreedSlot, error) {
 	m.expireDeadlineBookingsCalled = true

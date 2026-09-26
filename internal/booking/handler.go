@@ -67,6 +67,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// a promo code has no account yet.
 	pub.Post("/:id/discount-preview", handler.PreviewDiscount)
 	pub.Post("/guest/hold", handler.HoldGuestSlot)
+	pub.Delete("/guest/hold/:id", handler.ReleaseGuestHold)
 	pub.Post("/waitlist", handler.JoinWaitlist)
 	pub.Patch("/guest/:id/submit", handler.SubmitGuestBooking)
 
@@ -166,6 +167,26 @@ func (h *Handler) HoldGuestSlot(c *fiber.Ctx) error {
 // @Failure      404 {object} response.ErrorBody "BOOKING_NOT_FOUND"
 // @Failure      409 {object} response.ErrorBody "HOLD_EXPIRED"
 // @Router       /bookings/guest/{id}/submit [patch]
+// ReleaseGuestHold godoc
+// @Summary      Release an unsubmitted guest hold early
+// @Description  The guest went back from the last screen to choose another time. Ends her hold now instead of when its 10 minutes run out, and tells the waitlist the slot opened. Only a hold that was never submitted can be released; anything else is 404.
+// @Tags         bookings
+// @Param        id path string true "Hold (booking) ID from POST /bookings/guest/hold"
+// @Success      204
+// @Failure      400 {object} response.ErrorBody "INVALID_ID"
+// @Failure      404 {object} response.ErrorBody "BOOKING_NOT_FOUND - unknown, already ended, or already submitted"
+// @Router       /bookings/guest/hold/{id} [delete]
+func (h *Handler) ReleaseGuestHold(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+	if err := h.svc.ReleaseGuestHold(c.UserContext(), bookingID); err != nil {
+		return err
+	}
+	return response.NoContent(c)
+}
+
 func (h *Handler) SubmitGuestBooking(c *fiber.Ctx) error {
 	bookingID, err := uuid.Parse(c.Params("id"))
 	if err != nil {

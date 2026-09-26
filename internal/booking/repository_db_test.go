@@ -583,3 +583,70 @@ func TestGetServiceDepositDeadlineHours_InactiveServiceStillAnswers(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, 12, h)
 }
+
+// seedHoldPlaceholder inserts the system user every guest hold is filed
+// under until she submits. Production seeds it outside migrations (see
+// SystemGuestPlaceholderID), so the migrated test template lacks it.
+func seedHoldPlaceholder(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO users (id, name, email, password_hash, role)
+		 VALUES ($1, 'Held Slot Placeholder', 'system_held@bedge.system', 'x', 'customer')
+		 ON CONFLICT (id) DO NOTHING`, SystemGuestPlaceholderID)
+	require.NoError(t, err)
+}
+
+func bookingStatus(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) string {
+	t.Helper()
+	var s string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT status FROM bookings WHERE id = $1`, id).Scan(&s))
+	return s
+}
+
+func TestReleaseHeldGuestBooking_OnlyAnUnsubmittedHold(t *testing.T) {
+	// The route is public and keyed by booking id, and a hold's id stays the
+	// booking's id after she submits. So the guard is in SQL: held AND still
+	// filed under the placeholder. A submitted booking must never be ended
+	// by this, even when named directly.
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := newFixture(t, pool)
+	seedHoldPlaceholder(t, pool)
+	repo := NewRepository(pool)
+	start := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Minute)
+
+	held := f.booking(f.ArtistID, start, StatusHeld)
+	held.CustomerID = SystemGuestPlaceholderID
+	until := time.Now().UTC().Add(10 * time.Minute)
+	held.HeldUntil = &until
+	require.NoError(t, repo.CreateBooking(ctx, held, nil))
+	submitted := f.booking(f.Artist2ID, start, StatusPending)
+	require.NoError(t, repo.CreateBooking(ctx, submitted, nil))
+	// A LOGGED-IN customer's checkout is also a hold (CreateBooking), but
+	// filed under her real id. This public route must not end it.
+	loggedIn := f.booking(f.ArtistID, start.Add(3*time.Hour), StatusHeld)
+	loggedIn.HeldUntil = &until
+	require.NoError(t, repo.CreateBooking(ctx, loggedIn, nil))
+
+	freed, err := repo.ReleaseHeldGuestBooking(ctx, submitted.ID)
+	require.NoError(t, err)
+	assert.Empty(t, freed, "a submitted booking is never released")
+	assert.Equal(t, StatusPending, bookingStatus(t, pool, submitted.ID))
+
+	freed, err = repo.ReleaseHeldGuestBooking(ctx, loggedIn.ID)
+	require.NoError(t, err)
+	assert.Empty(t, freed, "a logged-in customer's hold is not a guest hold")
+	assert.Equal(t, StatusHeld, bookingStatus(t, pool, loggedIn.ID))
+
+	freed, err = repo.ReleaseHeldGuestBooking(ctx, held.ID)
+	require.NoError(t, err)
+	require.Len(t, freed, 1)
+	assert.Equal(t, f.ArtistID, freed[0].ArtistID)
+	assert.True(t, freed[0].StartTime.Equal(start), "the freed slot is the one she held")
+	assert.Equal(t, StatusExpired, bookingStatus(t, pool, held.ID), "same end state as the timer")
+
+	freed, err = repo.ReleaseHeldGuestBooking(ctx, held.ID)
+	require.NoError(t, err)
+	assert.Empty(t, freed, "releasing twice frees nothing the second time")
+}

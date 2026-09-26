@@ -43,8 +43,13 @@ onboarding, product, **promo**, review, **share** — plus `domain/auth`,
 `config`, `middleware`.
 
 **Leaf packages** (`internal/pkg/`): apperror, **bidi**, **clientip**,
-**discount**, hash, **httpcache**, jwt, **money**, **openinghours**,
-**optional**, response, **subscription**, **validation**.
+**devbypass**, **discount**, hash, **httpcache**, jwt, **money**,
+**openinghours**, **optional**, **otp**, **phone**, **pricing**, response,
+**salonrole**, **schedule**, **subscription**, **testdb**, **validation**.
+(List re-verified against `ls internal/pkg` on 2026-09-26: 20 packages.
+`pricing` is the one customer-price fragment; `devbypass` always compiles
+but answers "no" unless the build is tagged `devbypass` and
+`APP_ENV=development`; `testdb` is imported only by `dbtest` tests.)
 
 Bold entries are recent and are not described in any older doc.
 

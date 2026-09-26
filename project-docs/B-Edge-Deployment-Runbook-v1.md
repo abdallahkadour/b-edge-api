@@ -45,13 +45,22 @@ CLIENT_URL APP_ENV
 CLOUDINARY_CLOUD_NAME CLOUDINARY_API_KEY CLOUDINARY_API_SECRET
 ```
 
-Three that are optional and matter in production:
+Optional, but each matters in production:
 
 | Variable | Set it to | Why |
 |---|---|---|
 | `TRUSTED_PROXIES` | Cloudflare's IPv4 + IPv6 ranges, comma-separated | **Without it every visitor shares one rate-limit bucket** — see §3 |
 | `PROXY_HEADER` | leave unset for Cloudflare | Defaults to `CF-Connecting-IP` |
 | `TWILIO_WHATSAPP_FROM` | the verified sender | Blocked on Meta business verification (**D8**) |
+| `TWILIO_SMS_FROM` | an SMS-capable number, if SMS is wanted | Either sender works; with neither, every message fails "no transport configured" |
+| `CUSTOMER_PWA_URL` | the customer app's public origin | Base of review and booking links sent to customers; unset, they point at `localhost:4200` |
+| `API_PUBLIC_URL` | this API's public origin | Base of the calendar link (`/c/:token` is served by the API, not the PWA); unset, it points at `localhost` |
+| `ARTIST_DASHBOARD_URL` | the dashboard's public origin | Base of salon invitation links; unset, they point at `localhost:4300` |
+| `REQUIRE_VERIFIED_PHONE_FOR_INVITE` | `true` once message delivery works | A salon may then invite only artists with a verified number. Off by default because verifying a number means sending it a code |
+
+With `APP_ENV=development`, the server refuses to boot if `API_PUBLIC_URL`,
+`CLIENT_URL` or `ARTIST_DASHBOARD_URL` points at a public host — development
+mode exposes the login bypass and stack traces (`internal/config/env.go`).
 
 `CLIENT_URL` is currently `http://localhost:4200,http://localhost:4300` and
 **must** become the real origins — CORS allows only what is listed.

@@ -34,7 +34,7 @@ HTTP request arrives
   → Handler    — reads request, validates input, writes response
   → Service    — business logic, no HTTP knowledge
   → Repository — SQL queries only, no business logic
-  → PostgreSQL — 17 tables, GIST exclusion constraint
+  → PostgreSQL — GIST exclusion constraint on bookings
 ```
 
 Every domain follows the same four-file pattern:
@@ -155,7 +155,7 @@ Starts PostgreSQL 15 and Jaeger in Docker containers.
 make migrate
 ```
 
-Creates all 17 tables in the database. Safe to run multiple times — only applies new migrations.
+Creates every table in the database. Safe to run multiple times — only applies new migrations.
 
 ### 6. Start the server
 
@@ -246,7 +246,7 @@ Swagger docs available at `http://localhost:3000/swagger` after running `make sw
 
 ## Database
 
-17 tables. Key design decisions:
+The schema lives in `db/migrations/` — 52 migrations and 36 tables on 2026-09-26 (`./scripts/doc-facts.sh` prints the current counts). Key design decisions:
 
 - **GIST exclusion constraint** on `bookings` — prevents double booking at the database level. No application-level race condition possible.
 - **NUMERIC(10,2)** for all money columns — no float arithmetic, no rounding errors.

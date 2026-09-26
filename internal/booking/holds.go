@@ -234,8 +234,9 @@ func (s *Service) ExpireDeadlineBookings(ctx context.Context) (int64, error) {
 
 // customerPWAURL() is the base URL for the guest-facing app, used to build
 // links (currently just the review link) sent to a customer over WhatsApp.
-// Read once at package init rather than per-call, matching the pattern
-// businessLocation uses in the earnings domain. Falls back to localhost
+// Read at CALL time, not package init: a package-level os.Getenv runs before
+// main loads .env and would read empty forever (envinit_test.go guards
+// this). Falls back to localhost
 // harmless in development, and a wrong-but-obvious value in production if
 // CUSTOMER_PWA_URL is ever forgotten, rather than a silent empty string
 // that would produce a broken link with no indication why.

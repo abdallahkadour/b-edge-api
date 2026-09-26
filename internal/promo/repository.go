@@ -42,6 +42,9 @@ type Repository interface {
 	GatherFacts(ctx context.Context, discountID, customerID, salonID uuid.UUID) (Facts, error)
 
 	ListBySalon(ctx context.Context, salonID uuid.UUID) ([]*DiscountResponse, error)
+	// SalonTimezone is the IANA zone a salon's calendar days are in: its
+	// store's timezone.
+	SalonTimezone(ctx context.Context, salonID uuid.UUID) (string, error)
 	Create(ctx context.Context, d *Discount) error
 	Update(ctx context.Context, id, salonID uuid.UUID, req UpdateDiscountRequest) (*Discount, error)
 
@@ -144,6 +147,24 @@ func (r *pgRepo) ListBySalon(ctx context.Context, salonID uuid.UUID) ([]*Discoun
 		out = append(out, toDiscountResponse(d, count))
 	}
 	return out, rows.Err()
+}
+
+// SalonTimezone reads the zone from the salon's store - active first, then
+// oldest, so the answer is stable. Every store today is in one zone per
+// salon. A salon with no store yet gets Asia/Beirut, the same default its
+// first store will get (stores.timezone, migration 010).
+func (r *pgRepo) SalonTimezone(ctx context.Context, salonID uuid.UUID) (string, error) {
+	var tz string
+	err := r.db.QueryRow(ctx, `
+		SELECT COALESCE(
+			(SELECT timezone FROM stores WHERE salon_id = $1
+			 ORDER BY is_active DESC, created_at, id LIMIT 1),
+			'Asia/Beirut')`,
+		salonID).Scan(&tz)
+	if err != nil {
+		return "", fmt.Errorf("salon timezone: %w", err)
+	}
+	return tz, nil
 }
 
 func (r *pgRepo) Create(ctx context.Context, d *Discount) error {

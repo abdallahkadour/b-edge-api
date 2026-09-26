@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/discount"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
 
@@ -139,7 +141,48 @@ func (s *Service) Preview(
 
 // ListBySalon returns every code a salon owns, active first.
 func (s *Service) ListBySalon(ctx context.Context, salonID uuid.UUID) ([]*DiscountResponse, error) {
-	return s.repo.ListBySalon(ctx, salonID)
+	list, err := s.repo.ListBySalon(ctx, salonID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.withLastDays(ctx, salonID, list...); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// withLastDays fills in EndsOn - the last day a code works, on the salon's
+// calendar - looking the salon's timezone up once, and only when some code
+// has an end.
+func (s *Service) withLastDays(ctx context.Context, salonID uuid.UUID, rs ...*DiscountResponse) error {
+	var loc *time.Location
+	for _, r := range rs {
+		if r.EndsAt == nil {
+			continue
+		}
+		if loc == nil {
+			var err error
+			if loc, err = s.salonLocation(ctx, salonID); err != nil {
+				return err
+			}
+		}
+		// ends_at is the exclusive instant the code stops, so the last day
+		// it works is the day of the instant just before.
+		day := r.EndsAt.Add(-time.Nanosecond).In(loc).Format(time.DateOnly)
+		r.EndsOn = &day
+	}
+	return nil
+}
+
+// salonLocation is the timezone a salon's calendar days are in. A failed
+// lookup is an error, not a guess: guessing is how a code ended at the
+// wrong hour in the first place.
+func (s *Service) salonLocation(ctx context.Context, salonID uuid.UUID) (*time.Location, error) {
+	tz, err := s.repo.SalonTimezone(ctx, salonID)
+	if err != nil {
+		return nil, fmt.Errorf("salon timezone: %w", err)
+	}
+	return openinghours.Location(tz), nil
 }
 
 // Create adds a code to a salon.
@@ -157,6 +200,22 @@ func (s *Service) Create(ctx context.Context, salonID uuid.UUID, req CreateDisco
 		return nil, err
 	}
 
+	// "Ends 1 December" means the whole of the 1st on the salon's calendar:
+	// the code stops at the next midnight there (the check is exclusive).
+	endsAt := req.EndsAt
+	if req.EndsOn != nil {
+		day, err := time.Parse(time.DateOnly, *req.EndsOn)
+		if err != nil {
+			return nil, apperror.BadRequest("INVALID_ENDS_ON", "The end date must look like 2026-12-01.")
+		}
+		loc, err := s.salonLocation(ctx, salonID)
+		if err != nil {
+			return nil, err
+		}
+		stop := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, loc)
+		endsAt = &stop
+	}
+
 	d := &Discount{
 		SalonID:        salonID,
 		Code:           strings.ToUpper(strings.TrimSpace(req.Code)),
@@ -164,7 +223,7 @@ func (s *Service) Create(ctx context.Context, salonID uuid.UUID, req CreateDisco
 		Kind:           req.Kind,
 		Value:          value,
 		StartsAt:       req.StartsAt,
-		EndsAt:         req.EndsAt,
+		EndsAt:         endsAt,
 		MaxRedemptions: req.MaxRedemptions,
 		FirstTimeOnly:  req.FirstTimeOnly,
 	}
@@ -182,7 +241,11 @@ func (s *Service) Create(ctx context.Context, salonID uuid.UUID, req CreateDisco
 		return nil, fmt.Errorf("create discount: %w", err)
 	}
 
-	return toDiscountResponse(d, 0), nil
+	res := toDiscountResponse(d, 0)
+	if err := s.withLastDays(ctx, salonID, res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // Update patches a code. Ownership failures are 404, matching the rest of the
@@ -204,7 +267,11 @@ func (s *Service) Update(ctx context.Context, id, salonID uuid.UUID, req UpdateD
 		}
 		return nil, err
 	}
-	return toDiscountResponse(d, 0), nil
+	res := toDiscountResponse(d, 0)
+	if err := s.withLastDays(ctx, salonID, res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // ReleaseForBooking implements D3.5: a customer who did not break the booking

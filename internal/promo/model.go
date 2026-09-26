@@ -89,10 +89,16 @@ type CreateDiscountRequest struct {
 	// API is - see internal/pkg/money. Validated there, not by a struct tag.
 	Value string `json:"value" validate:"required"`
 
-	StartsAt       *time.Time `json:"starts_at"`
-	EndsAt         *time.Time `json:"ends_at"`
-	MaxRedemptions *int       `json:"max_redemptions" validate:"omitempty,min=1,max=1000000"`
-	FirstTimeOnly  bool       `json:"first_time_only"`
+	StartsAt *time.Time `json:"starts_at"`
+	EndsAt   *time.Time `json:"ends_at"`
+	// EndsOn is the last day the code works, as a date on the salon's own
+	// calendar ("2026-12-01"). The server turns it into the instant it stops
+	// - the next midnight in the salon's timezone - because a date input
+	// converted on the artist's device ends at a different hour depending on
+	// where her laptop thinks it is. Send this or ends_at, not both.
+	EndsOn         *string `json:"ends_on" validate:"omitempty,datetime=2006-01-02,excluded_with=EndsAt"`
+	MaxRedemptions *int    `json:"max_redemptions" validate:"omitempty,min=1,max=1000000"`
+	FirstTimeOnly  bool    `json:"first_time_only"`
 }
 
 // UpdateDiscountRequest patches a code. The CODE ITSELF is deliberately not
@@ -119,6 +125,9 @@ type DiscountResponse struct {
 	Value       string     `json:"value"`
 	StartsAt    *time.Time `json:"starts_at,omitempty"`
 	EndsAt      *time.Time `json:"ends_at,omitempty"`
+	// EndsOn is the last day the code works on the salon's calendar - what
+	// to show the artist, so her screen needs no timezone arithmetic.
+	EndsOn *string `json:"ends_on,omitempty"`
 
 	MaxRedemptions *int `json:"max_redemptions,omitempty"`
 	// RedemptionCount counts CONSUMED redemptions only, matching what

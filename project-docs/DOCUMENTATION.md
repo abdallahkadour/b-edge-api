@@ -30,9 +30,9 @@
 > packages**, **157 route registrations** across **135 swagger paths** (corrected
 > 2026-09-26: the counter had included ~30 routes that tests mount on
 > throwaway apps and missed 24 registered with a `base+` prefix),
-> **1211 Go tests**, **28 environment variable names** read via `os.Getenv`
-> (test files included). Frontend: **46 Angular routes**, **12 spec files**
-> carrying **62 passing tests** (shared 42, artist-dashboard 8,
+> **1221 Go tests**, **28 environment variable names** read via `os.Getenv`
+> (test files included). Frontend: **46 Angular routes**, **13 spec files**
+> carrying **66 passing tests** (shared 42, artist-dashboard 12,
 > customer-pwa 12), **47 help topics** (15 customer, 28 artist, 4 admin).
 >
 > These numbers are now **generated, not typed**:

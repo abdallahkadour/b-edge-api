@@ -28,6 +28,10 @@ type mockRepo struct {
 	updated   *Discount
 	updateErr error
 	released  int
+
+	list        []*DiscountResponse
+	timezone    string
+	timezoneErr error
 }
 
 func (m *mockRepo) GetByCode(context.Context, uuid.UUID, string) (*Discount, error) {
@@ -40,7 +44,13 @@ func (m *mockRepo) GatherFacts(context.Context, uuid.UUID, uuid.UUID, uuid.UUID)
 	return m.facts, m.factsErr
 }
 func (m *mockRepo) ListBySalon(context.Context, uuid.UUID) ([]*DiscountResponse, error) {
-	return nil, nil
+	return m.list, nil
+}
+func (m *mockRepo) SalonTimezone(context.Context, uuid.UUID) (string, error) {
+	if m.timezone == "" && m.timezoneErr == nil {
+		return "Asia/Beirut", nil
+	}
+	return m.timezone, m.timezoneErr
 }
 func (m *mockRepo) Create(_ context.Context, d *Discount) error {
 	m.created = d

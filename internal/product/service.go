@@ -36,6 +36,9 @@ type Service struct {
 type DiscountResolver interface {
 	Resolve(ctx context.Context, salonID, customerID uuid.UUID, code string,
 		base, surcharge, deposit decimal.Decimal) (*promo.Result, error)
+	// Preview prices a code without committing to it.
+	Preview(ctx context.Context, salonID, customerID uuid.UUID, code string,
+		base, surcharge, deposit decimal.Decimal) (*promo.PreviewResponse, error)
 }
 
 func NewService(repo Repository) *Service {
@@ -182,53 +185,9 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		}
 	}
 
-	items := make([]*OrderItem, 0, len(req.Items))
-	total := decimal.Zero
-
-	for _, reqItem := range req.Items {
-		productID, err := uuid.Parse(reqItem.ProductID)
-		if err != nil {
-			return nil, apperror.BadRequest("INVALID_PRODUCT_ID", "Invalid product ID")
-		}
-
-		product, err := s.repo.GetProductByID(ctx, productID)
-		if err != nil {
-			if errors.Is(err, ErrProductNotFound) {
-				return nil, apperror.NotFound("PRODUCT_NOT_FOUND", "One or more products in this order were not found")
-			}
-			return nil, fmt.Errorf("place order: get product: %w", err)
-		}
-		if product.SalonID != salonID {
-			// A product from a different salon snuck into this order
-			// treat it the same as "not found" rather than leaking which
-			// salon it actually belongs to.
-			return nil, apperror.NotFound("PRODUCT_NOT_FOUND", "One or more products in this order were not found")
-		}
-		if !product.IsActive {
-			return nil, apperror.BadRequest("PRODUCT_INACTIVE", ErrProductInactive.Error())
-		}
-		// Advisory only - a fast, friendly rejection for the common case.
-		// This read isn't locked, so two concurrent checkouts for the last
-		// unit could both pass it; the atomic decrement inside
-		// repo.CreateOrder below is what actually prevents overselling,
-		// and its rejection is mapped to the same error after the loop.
-		if product.StockQuantity != nil && *product.StockQuantity < reqItem.Quantity {
-			return nil, apperror.Conflict("PRODUCT_OUT_OF_STOCK",
-				fmt.Sprintf("%s is out of stock in the quantity you requested", product.Name))
-		}
-
-		quantity := decimal.NewFromInt(int64(reqItem.Quantity))
-		subtotal := product.Price.Mul(quantity)
-		total = total.Add(subtotal)
-
-		items = append(items, &OrderItem{
-			ID:          uuid.New(),
-			ProductID:   product.ID,
-			ProductName: product.Name,
-			UnitPrice:   product.Price,
-			Quantity:    reqItem.Quantity,
-			Subtotal:    subtotal,
-		})
+	items, total, err := s.priceOrder(ctx, salonID, req.Items)
+	if err != nil {
+		return nil, err
 	}
 
 	// Find-or-create keys on the phone, so it has to be the canonical form or
@@ -290,6 +249,94 @@ func (s *Service) PlaceOrder(ctx context.Context, req CreateOrderRequest) (*Orde
 		return nil, fmt.Errorf("place order: %w", err)
 	}
 	return toOrderResponse(order, items), nil
+}
+
+// priceOrder prices a cart from the CURRENT product rows and checks every
+// line can be sold. Placing an order and previewing a code on it share this,
+// so the preview discounts exactly the amount the order would.
+func (s *Service) priceOrder(ctx context.Context, salonID uuid.UUID, reqItems []OrderItemRequest) ([]*OrderItem, decimal.Decimal, error) {
+	items := make([]*OrderItem, 0, len(reqItems))
+	total := decimal.Zero
+
+	for _, reqItem := range reqItems {
+		productID, err := uuid.Parse(reqItem.ProductID)
+		if err != nil {
+			return nil, decimal.Zero, apperror.BadRequest("INVALID_PRODUCT_ID", "Invalid product ID")
+		}
+
+		product, err := s.repo.GetProductByID(ctx, productID)
+		if err != nil {
+			if errors.Is(err, ErrProductNotFound) {
+				return nil, decimal.Zero, apperror.NotFound("PRODUCT_NOT_FOUND", "One or more products in this order were not found")
+			}
+			return nil, decimal.Zero, fmt.Errorf("price order: get product: %w", err)
+		}
+		if product.SalonID != salonID {
+			// A product from a different salon snuck into this order
+			// treat it the same as "not found" rather than leaking which
+			// salon it actually belongs to.
+			return nil, decimal.Zero, apperror.NotFound("PRODUCT_NOT_FOUND", "One or more products in this order were not found")
+		}
+		if !product.IsActive {
+			return nil, decimal.Zero, apperror.BadRequest("PRODUCT_INACTIVE", ErrProductInactive.Error())
+		}
+		// Advisory only - a fast, friendly rejection for the common case.
+		// This read isn't locked, so two concurrent checkouts for the last
+		// unit could both pass it; the atomic decrement inside
+		// repo.CreateOrder is what actually prevents overselling, and
+		// PlaceOrder maps its rejection to the same error.
+		if product.StockQuantity != nil && *product.StockQuantity < reqItem.Quantity {
+			return nil, decimal.Zero, apperror.Conflict("PRODUCT_OUT_OF_STOCK",
+				fmt.Sprintf("%s is out of stock in the quantity you requested", product.Name))
+		}
+
+		quantity := decimal.NewFromInt(int64(reqItem.Quantity))
+		subtotal := product.Price.Mul(quantity)
+		total = total.Add(subtotal)
+
+		items = append(items, &OrderItem{
+			ID:          uuid.New(),
+			ProductID:   product.ID,
+			ProductName: product.Name,
+			UnitPrice:   product.Price,
+			Quantity:    reqItem.Quantity,
+			Subtotal:    subtotal,
+		})
+	}
+	return items, total, nil
+}
+
+// PreviewOrderDiscount answers "what would this code do to this cart",
+// without committing anything. The cart shows it before she places the
+// order: placing never fails over a refused code (it goes through at full
+// price), so without this a code that did nothing would pass silently.
+//
+// PUBLIC, like placing an order. The customer is not known until she places
+// it, so the per-customer checks (already used, first-time only) cannot run
+// yet and the preview reports the code's face value - exactly as it does for
+// a guest booking. They run for real in PlaceOrder. Taking a phone number
+// here to run them early would let anyone ask whether that number has used
+// the code, or has been a client of this salon.
+func (s *Service) PreviewOrderDiscount(ctx context.Context, req OrderDiscountPreviewRequest) (*promo.PreviewResponse, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, mapValidationError(err)
+	}
+
+	salonID, err := uuid.Parse(req.SalonID)
+	if err != nil {
+		return nil, apperror.BadRequest("INVALID_SALON_ID", "Invalid salon ID")
+	}
+
+	_, total, err := s.priceOrder(ctx, salonID, req.Items)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.discounts == nil {
+		return &promo.PreviewResponse{Code: req.Code, Valid: false, Reason: "That code isn't valid."}, nil
+	}
+	// No surcharge and no deposit: neither exists for a product order.
+	return s.discounts.Preview(ctx, salonID, uuid.Nil, req.Code, total, decimal.Zero, decimal.Zero)
 }
 
 // placedOrder answers a retry with the order its request_id already placed,

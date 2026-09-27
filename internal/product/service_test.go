@@ -931,6 +931,22 @@ type stubResolver struct {
 	t               *testing.T
 	result          *promo.Result
 	mustNotBeCalled bool
+
+	preview         *promo.PreviewResponse
+	previewCalls    int
+	previewCustomer uuid.UUID
+	previewCode     string
+	previewBase     decimal.Decimal
+}
+
+func (s *stubResolver) Preview(_ context.Context, _, customerID uuid.UUID, code string,
+	base, _, _ decimal.Decimal) (*promo.PreviewResponse, error) {
+	if s.mustNotBeCalled {
+		s.t.Fatal("resolver must not be consulted")
+	}
+	s.previewCalls++
+	s.previewCustomer, s.previewCode, s.previewBase = customerID, code, base
+	return s.preview, nil
 }
 
 func (s *stubResolver) Resolve(_ context.Context, _, _ uuid.UUID, _ string,

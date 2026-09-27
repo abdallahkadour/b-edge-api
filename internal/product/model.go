@@ -325,6 +325,15 @@ type CreateOrderRequest struct {
 	RequestID *string `json:"request_id" validate:"omitempty,uuid"`
 }
 
+// OrderDiscountPreviewRequest is the body for POST /orders/discount-preview:
+// the cart as it stands and the code she typed. No name or phone - see
+// Service.PreviewOrderDiscount for why the preview must not know who she is.
+type OrderDiscountPreviewRequest struct {
+	SalonID string             `json:"salon_id" validate:"required,uuid"`
+	Code    string             `json:"code"     validate:"required,max=32"`
+	Items   []OrderItemRequest `json:"items"    validate:"required,min=1,dive"`
+}
+
 // ConfirmOrderPaymentRequest is the body for PATCH /artists/orders/:id/confirm-payment.
 // Reference is optional, mirroring ConfirmDepositReceived's own optional
 // transaction-reference field in the booking domain exactly.

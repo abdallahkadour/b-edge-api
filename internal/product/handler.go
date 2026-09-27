@@ -34,6 +34,10 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	pub := app.Group("/api/v1")
 	pub.Get("/salons/:salon_id/products", handler.ListPublicProducts)
 	pub.Post("/orders", handler.PlaceOrder)
+	// Registered with the public routes, BEFORE the bearer group below: that
+	// group's auth runs for everything under /api/v1/orders it is registered
+	// ahead of.
+	pub.Post("/orders/discount-preview", handler.PreviewOrderDiscount)
 
 	// ── Bearer - either party on an order (customer or artist) ──────────────
 	//
@@ -203,6 +207,30 @@ func (h *Handler) PlaceOrder(c *fiber.Ctx) error {
 		return err
 	}
 	return response.Created(c, order)
+}
+
+// PreviewOrderDiscount godoc
+// @Summary      What a promo code would do to a cart (public, commits nothing)
+// @Description  Prices the cart from current product prices and reports the
+// @Description  code's effect at face value; per-customer rules are checked
+// @Description  when the order is placed.
+// @Tags         orders
+// @Accept       json
+// @Produce      json
+// @Param        body body OrderDiscountPreviewRequest true "Cart and code"
+// @Success      200 {object} response.Body{data=promo.PreviewResponse}
+// @Router       /orders/discount-preview [post]
+func (h *Handler) PreviewOrderDiscount(c *fiber.Ctx) error {
+	var req OrderDiscountPreviewRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+
+	preview, err := h.svc.PreviewOrderDiscount(c.UserContext(), req)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, preview)
 }
 
 // GetOrder godoc

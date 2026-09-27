@@ -581,6 +581,37 @@ func TestCancelOrder_UnrelatedUser_Denied(t *testing.T) {
 	require.Error(t, err, "a stranger must not be able to cancel someone else's order")
 }
 
+func TestCancelOrder_OwningSalon_Allowed(t *testing.T) {
+	// The salon cancels when it cannot fulfil - out of stock after all, or
+	// the customer asked on WhatsApp.
+	salonID := uuid.New()
+	repo := orderInStatus(salonID, OrderStatusPlaced)
+	svc := newTestService(repo)
+
+	_, err := svc.CancelOrder(context.Background(), repo.order.ID,
+		uuid.New(), "artist", &salonID, CancelOrderRequest{})
+
+	require.NoError(t, err, "the salon that owns the order must be able to cancel it")
+	assert.Equal(t, OrderStatusCancelled, repo.lastToStatus)
+}
+
+func TestCancelOrder_OtherSalon_Denied(t *testing.T) {
+	// Being an artist somewhere is not enough: another salon cancelling this
+	// one's orders would be sabotage with no trace on the victim's side. It
+	// answers "not found", like every other ownership failure.
+	repo := orderInStatus(uuid.New(), OrderStatusPlaced)
+	otherSalonID := uuid.New()
+	svc := newTestService(repo)
+
+	_, err := svc.CancelOrder(context.Background(), repo.order.ID,
+		uuid.New(), "artist", &otherSalonID, CancelOrderRequest{})
+
+	var appErr *apperror.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 404, appErr.HTTPStatus)
+	assert.Empty(t, repo.lastToStatus, "nothing was cancelled")
+}
+
 func TestUpdateProduct_OtherSalonsProduct_Denied(t *testing.T) {
 	victimSalonID := uuid.New()
 	p := activeProduct(victimSalonID, "10.00")

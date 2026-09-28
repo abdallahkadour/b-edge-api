@@ -147,6 +147,17 @@ def main():
         joiner_user = sql(f"SELECT id FROM users WHERE email='{JOINER_EMAIL}'")
         joiner_tok, _, _ = login(JOINER_EMAIL, JOINER_PW)
 
+        # Since 2026-09-23 (migration 051, c0b4b6f) a salon may only invite an
+        # artist whose number is VERIFIED; this suite predates that and its
+        # first run after it got the correct 409 PHONE_NOT_VERIFIED. Verified
+        # through the real endpoint with the dev bypass code, as chaos-booking
+        # does - needs the API built with -tags devbypass (make dev).
+        st, r = call("POST", "/artists/me/phone/verify", {"code": "000000"}, joiner_tok)
+        if st >= 400:
+            rec("22.1", "FAIL", f"could not verify the invitee's phone: {st} {err(r)} "
+                                f"(is the API built with -tags devbypass?)")
+            return
+
         # ── invite ─────────────────────────────────────────────────────────
         st, r = call("POST", "/artists/salon/members/invite",
                      {"phone": JOINER_PHONE}, owner_tok)
@@ -261,6 +272,15 @@ def main():
             rec("22.3", "FAIL", "could not approve the joiner; the rest of 22.3 is unrunnable")
             return
         rec("22.3a", "INFO", f"joiner approved via {approved_via}")
+
+        # PP-7 (2026-09-25): a member who joins offers NOTHING until she
+        # switches services on, so without this she has no times at all and
+        # 22.3b skipped ("no availability to narrow") on every run since.
+        # A fresh token: the salon is minted into the token at login.
+        jt, _, _ = login(JOINER_EMAIL, JOINER_PW)
+        st, r = call("GET", "/artists/salon/my-services", None, jt)
+        for o in ((r or {}).get("data") or []):
+            call("PUT", f"/artists/salon/my-services/{o['service_id']}", {"offered": True}, jt)
 
         probe = probe_dates[0]
         dow = int(sql(f"SELECT EXTRACT(DOW FROM DATE '{probe}')"))

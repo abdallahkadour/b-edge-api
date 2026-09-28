@@ -99,6 +99,14 @@ e2e-suite22:
 e2e-suite23:
 	python3 scripts/e2e-suite23.py
 
+## e2e-suite27: leaving a salon, letting a hold go, and the shop's money path
+##
+## E2E 27.1-27.8 and 16.5 (the expiry worker, with nobody reading), plus
+## security FRAUD-18/19/21/22, in one pass. Builds and destroys its own
+## salon and reports the residual row count. Needs -tags devbypass (make dev).
+e2e-suite27:
+	python3 scripts/e2e-suite27.py
+
 ## verify-security-salon: security plan section 3.4d
 ##
 ## The multi-artist salon attack surface: the invitation as a bearer
@@ -153,7 +161,7 @@ verify-delivery:
 	@PHONE=$(PHONE) python3 scripts/verify-delivery.py
 
 # Everything, in one target. Runs what CI should run.
-verify-all: test test-db verify chaos-booking verify-security-salon
+verify-all: test test-db verify chaos-booking verify-security-salon e2e-suite27
 	@echo "  ── all suites complete ──"
 
 # Mutation testing — the real measure of whether tests CONSTRAIN behaviour.

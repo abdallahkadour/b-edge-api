@@ -107,7 +107,7 @@ created = []
 _offset = [0]
 
 
-def make_booking(artist_id, status, hours_ahead, deposit, payer=None):
+def make_booking(artist_id, status, hours_ahead, deposit, payer=None, paid=False):
     """Insert a fixture at or near `hours_ahead`, stepping forward until the
     artist-level GIST exclusion constraint accepts it.
 
@@ -121,7 +121,7 @@ def make_booking(artist_id, status, hours_ahead, deposit, payer=None):
     last = None
     for step in range(0, 60):
         try:
-            return _insert_booking(artist_id, status, hours_ahead + step, deposit, payer)
+            return _insert_booking(artist_id, status, hours_ahead + step, deposit, payer, paid)
         except RuntimeError as e:
             if "exclusion constraint" not in str(e):
                 raise
@@ -129,12 +129,18 @@ def make_booking(artist_id, status, hours_ahead, deposit, payer=None):
     raise RuntimeError(f"no free slot near +{hours_ahead}h after 60 tries: {last}")
 
 
-def _insert_booking(artist_id, status, hours_ahead, deposit, payer=None):
+def _insert_booking(artist_id, status, hours_ahead, deposit, payer=None, paid=False):
     """Insert a booking directly. Built in SQL rather than through the funnel
     because these tests need exact states, exact deposits and exact distances
     from now - constructing them through the API would take a dozen calls and
     still not reach `confirmed` with a chosen start time."""
     payer_sql = f"'{payer}'" if payer else "NULL"
+    # paid=True stamps deposit_paid_at, which only ConfirmDepositReceived
+    # does for real. Since eaeba2d (2026-09-23) THAT is what makes a refund
+    # owed - deposit_amount is only what the service asks for. This fixture
+    # used to model "paid" with the amount alone, and M1/M3 went red on the
+    # first run after the fix: the product was right, the fixture was not.
+    paid_sql = "NOW() - interval '1 day'" if paid else "NULL"
     bid = sql(f"""
         WITH pick AS (
           SELECT salon_id, store_id, artist_id, service_id, customer_id
@@ -142,12 +148,12 @@ def _insert_booking(artist_id, status, hours_ahead, deposit, payer=None):
         INSERT INTO bookings (salon_id, store_id, artist_id, customer_id, service_id,
                               start_time, end_time, blocked_until,
                               original_price, final_price, deposit_amount,
-                              deposit_payer_phone, status)
+                              deposit_payer_phone, deposit_paid_at, status)
         SELECT salon_id, store_id, artist_id, customer_id, service_id,
                NOW() + interval '{hours_ahead} hours',
                NOW() + interval '{hours_ahead} hours' + interval '30 min',
                NOW() + interval '{hours_ahead} hours' + interval '30 min',
-               200, 200, {deposit}, {payer_sql}, '{status}'
+               200, 200, {deposit}, {payer_sql}, {paid_sql}, '{status}'
           FROM pick RETURNING id;""")
     # psql -tA prints the RETURNING row AND the "INSERT 0 1" tag, so the raw
     # output is two lines. Taking the whole thing put a newline inside a URL.
@@ -172,10 +178,18 @@ def main():
 
     try:
         # ── M1: artist cancels WITH a deposit -> money is owed back ──────────
-        b = make_booking(artist_id, "confirmed", 72, 100)
+        b = make_booking(artist_id, "confirmed", 72, 100, paid=True)
         st, r = call("PATCH", f"/bookings/{b}/cancel", {"reason": "UC2"}, token)
         check("M1", "artist cancelling a paid booking owes a refund",
               status_of(b) == "refund_due", f"{st} -> {status_of(b)} (expected refund_due)")
+
+        # ── M1b: a deposit ASKED FOR but never received -> nothing owed ──────
+        # eaeba2d: before it, this put bookings nobody had paid for into the
+        # artist's "Refund due" list.
+        b = make_booking(artist_id, "confirmed", 72, 100, paid=False)
+        st, r = call("PATCH", f"/bookings/{b}/cancel", {"reason": "UC2"}, token)
+        check("M1b", "a deposit that never arrived is not refunded",
+              status_of(b) == "cancelled", f"{st} -> {status_of(b)} (expected cancelled)")
 
         # ── M2: artist cancels with NO deposit -> nothing owed ───────────────
         b = make_booking(artist_id, "confirmed", 72, 0)
@@ -187,7 +201,7 @@ def main():
         # ── M3: the 24-hour rule is the ARTIST's to ignore ───────────────────
         # Same cancel, 2 hours out. The artist is always blameless, so a
         # refund is still owed - the window only ever binds the customer.
-        b = make_booking(artist_id, "approved", 2, 100)
+        b = make_booking(artist_id, "deposit_paid", 2, 100, paid=True)
         call("PATCH", f"/bookings/{b}/cancel", {"reason": "UC2 late"}, token)
         check("M3", "the 24h window does not bind the artist",
               status_of(b) == "refund_due",

@@ -99,10 +99,10 @@ func (s *Service) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID, r
 // cascadeFreedSlots runs the waitlist cascade for every slot an expiry
 // sweep released.
 //
-// The sweeps run lazily on the read path of GetAvailableSlots, so this fires
-// during a read - consistent with the sweeps themselves already mutating
-// there, and it only does anything when rows genuinely changed. An empty
-// slice is the overwhelmingly common case and costs one length check.
+// The sweeps run every minute from ExpiryWorker, and also on the read path of
+// GetAvailableSlots, so this fires from both - it only does anything when rows
+// genuinely changed. An empty slice is the overwhelmingly common case and
+// costs one length check.
 func (s *Service) cascadeFreedSlots(ctx context.Context, freed []FreedSlot, reason string) {
 	for _, f := range freed {
 		s.cascadeWaitlist(ctx, &Booking{

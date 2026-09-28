@@ -106,7 +106,22 @@ CAST = {
     "mallory": ("Mallory S23", f"{TAG}.mallory@test.bedge.com", "+96176230009"),
     "dana":    ("Dana S23",    f"{TAG}.dana@test.bedge.com",    "+96176230011"),
     "elias":   ("Elias S23",   f"{TAG}.elias@test.bedge.com",   "+96176230012"),
+    # 23.7d's invitation is addressed to her. Since 6771b77 an invitation can
+    # only name a registered, verified artist; a bare number is refused
+    # before the case is reached, and the case then reported "refused" for
+    # the wrong reason.
+    "addressee": ("Addressee S23", f"{TAG}.addressee@test.bedge.com", "+96176230077"),
 }
+
+
+def verify_phone(email):
+    """Since 2026-09-23 (migration 051) a salon may only invite an artist
+    whose number is verified. Proved through the real endpoint with the dev
+    bypass code, as chaos-booking.py does; needs -tags devbypass (make dev)."""
+    st, r = call("POST", "/artists/me/phone/verify", {"code": "000000"}, login(email))
+    if st >= 400:
+        raise RuntimeError(f"verify phone {email}: {st} {err(r)} - is the API built "
+                           f"with -tags devbypass?")
 
 
 def onboard(email, salon_name, handle):
@@ -173,6 +188,7 @@ def approve(artist_id, admin_tok):
 
 def join_salon(owner_tok, joiner_email, joiner_phone, handle, admin_tok):
     """The real invite -> accept -> approve path."""
+    verify_phone(joiner_email)
     st, r = call("POST", "/artists/salon/members/invite", {"phone": joiner_phone}, owner_tok)
     if st != 201:
         raise RuntimeError(f"invite {joiner_phone}: {st} {err(r)} {r}")
@@ -183,6 +199,17 @@ def join_salon(owner_tok, joiner_email, joiner_phone, handle, admin_tok):
                  {"handle": handle, "category": "makeup"}, jt)
     if st != 201:
         raise RuntimeError(f"accept for {joiner_email}: {st} {err(r)} {r}")
+    # PP-7 (2026-09-25): a member who joins offers NOTHING until she switches
+    # services on. This suite predates it; afterwards every joiner had zero
+    # bookable times, so 23.3b read "carine=0" and 23.7e's positive control
+    # was refused SERVICE_NOT_FOUND. Switched on through the real endpoint,
+    # as chaos-booking.py's join() does.
+    jt = login(joiner_email)
+    st, r = call("GET", "/artists/salon/my-services", None, jt)
+    for o in ((r or {}).get("data") or []):
+        st2, r2 = call("PUT", f"/artists/salon/my-services/{o['service_id']}", {"offered": True}, jt)
+        if st2 >= 400:
+            raise RuntimeError(f"switch on {o['service_id']} for {joiner_email}: {st2} {err(r2)}")
     aid = sql(f"""SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id
                    WHERE u.email='{joiner_email}'""")
     approve(aid, admin_tok)
@@ -456,8 +483,11 @@ def main():
             rec("23.7c", "FAIL", "ANOTHER SALON'S PAYMENT REFERENCE WAS CHANGED FROM A BODY FIELD")
 
         # d. redeeming an invitation issued to someone else
+        verify_phone(CAST["addressee"][1])
         st, r = call("POST", "/artists/salon/members/invite",
                      {"phone": "+96176230077"}, amal_tok)
+        if st != 201:
+            raise RuntimeError(f"23.7d setup: invite to the addressee {st} {err(r)}")
         stolen = (r.get("data") or {}).get("link", "").rsplit("/", 1)[-1]
         st2, r2 = call("POST", f"/invitations/{stolen}/accept",
                        {"handle": f"{TAG}-thief", "category": "makeup"}, m_tok)
@@ -502,6 +532,12 @@ def main():
             rec("23.7e", "PASS",
                 f"admin review gates the money path: pending and rejected are refused, "
                 f"active is held ({outcomes})")
+        elif outcomes["active"] != "HELD":
+            # Not a breach: the control failed, so the refusals above prove
+            # nothing about approval. Say which.
+            rec("23.7e", "FAIL",
+                f"positive control: an APPROVED artist could not be held either, so the "
+                f"refusals do not isolate approval status: {outcomes}")
         else:
             rec("23.7e", "FAIL",
                 f"an artist an admin has not approved can take a deposit: {outcomes}")

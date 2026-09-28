@@ -111,6 +111,20 @@ def approve(aid, admin_tok):
         sql(f"UPDATE artists SET status='active' WHERE id='{aid}'")
 
 
+def verify_phone(email):
+    """Prove the artist's number through the REAL endpoint, with the dev
+    bypass code - the same path chaos-booking.py uses.
+
+    Since 2026-09-23 (6771b77, c0b4b6f) a salon may only invite a REGISTERED
+    artist whose number is VERIFIED. This suite predates both rules and
+    invited bare numbers; its first run after them got the correct 409
+    PHONE_NOT_VERIFIED and every invitation case below failed on setup."""
+    st, r = call("POST", "/artists/me/phone/verify", {"code": "000000"}, login(email))
+    if st >= 400:
+        raise RuntimeError(f"verify phone {email}: {st} {err(r)} - is the API built "
+                           f"with -tags devbypass and APP_ENV=development?")
+
+
 def invite(owner_tok, phone):
     st, r = call("POST", "/artists/salon/members/invite", {"phone": phone}, owner_tok)
     d = r.get("data") or {}
@@ -124,7 +138,15 @@ def main():
         "member":  (f"{TAG} Member",  f"{TAG}.member@test.bedge.com",  "+96176340002"),
         "outsider":(f"{TAG} Outside", f"{TAG}.outsider@test.bedge.com","+96176340003"),
         "thief":   (f"{TAG} Thief",   f"{TAG}.thief@test.bedge.com",   "+96176340004"),
+        # Invitation targets. Each must now be a real, verified artist, or
+        # the invite is refused before the case under test is reached.
+        "equiv":   (f"{TAG} Equiv",   f"{TAG}.equiv@test.bedge.com",   "+96176340099"),
+        "addressee": (f"{TAG} Addressee", f"{TAG}.addressee@test.bedge.com", "+96176340077"),
+        "leak":    (f"{TAG} Leak",    f"{TAG}.leak@test.bedge.com",    "+96176340055"),
+        "ceiling": (f"{TAG} Ceiling", f"{TAG}.ceiling@test.bedge.com", "+96176340111"),
     }.items()}
+    for who in ("member", "thief", "equiv", "addressee", "leak", "ceiling"):
+        verify_phone(f"{TAG}.{who}@test.bedge.com")
 
     salon = store = service = owner_a = None
     try:
@@ -303,8 +325,18 @@ def main():
                 break
         sql(f"""DELETE FROM salon_invitations WHERE salon_id='{salon}'
                  AND phone LIKE '+9617634%' AND status='pending'""")
-        if refused:
-            rec("SPAM-08", "PASS", f"refused after {made} invitations ({refused})")
+        # Since 6771b77 an invitation can only reach a registered, verified
+        # artist, so flooding ARBITRARY numbers is closed at the first one.
+        # Any other refusal - or a refusal after some went out - is a
+        # different defence and must not be counted as this one. (Until
+        # 2026-09-28 this accepted any refusal, so it passed on setup errors.)
+        if refused and made == 0 and "ARTIST_NOT_REGISTERED" in refused:
+            rec("SPAM-08", "PASS",
+                f"the first invitation to an unregistered number is refused ({refused}): "
+                f"invitations reach only registered, verified artists. The per-salon daily "
+                f"cap is the second defence and is not reached by this run")
+        elif refused:
+            rec("SPAM-08", "FAIL", f"refused for an unexpected reason after {made}: {refused}")
         else:
             rec("SPAM-08", "FAIL",
                 f"{made} invitations to {made} distinct numbers, no limit hit. Each "
@@ -381,9 +413,14 @@ def main():
                 f"and was allowed to invite another. Nothing consults "
                 f"plans.included_seats - the tier table is decorative and the "
                 f"multi-artist feature is free at every price point")
-        elif st >= 400 and before_inv == after_inv:
+        elif st == 409 and err(r) == "PLAN_LIMIT_REACHED" and before_inv == after_inv:
+            # The invitee is a registered, verified artist, so the ceiling is
+            # the only thing left that can refuse. Until 2026-09-28 this
+            # accepted ANY refusal and passed on ARTIST_NOT_REGISTERED.
             rec("FRAUD-14", "PASS",
                 f"refused at the ceiling ({st} {err(r)}) and no invitation row written")
+        elif st >= 400:
+            rec("FRAUD-14", "FAIL", f"refused, but not by the ceiling: {st} {err(r)}")
         else:
             rec("FRAUD-14", "INFO",
                 f"salon has {members} of {ceiling} - below the ceiling, so this run "

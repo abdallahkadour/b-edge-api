@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/shopspring/decimal"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
@@ -1797,10 +1796,4 @@ func (r *pgRepo) CreateGuestUser(ctx context.Context, name string, phone string)
 		return uuid.Nil, fmt.Errorf("create guest user: %w", err)
 	}
 	return id, nil
-}
-
-// toDecimal is a helper to convert a float64 from PostgreSQL NUMERIC to decimal.Decimal.
-// Used when pgx scans NUMERIC columns that are not directly supported by shopspring.
-func toDecimal(f float64) decimal.Decimal {
-	return decimal.NewFromFloat(f)
 }

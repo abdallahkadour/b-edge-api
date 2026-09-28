@@ -53,12 +53,8 @@ func between(t *testing.T, s, start, end string) string {
 	return rest[:j]
 }
 
-var (
-	// A bare column name in the SELECT list: lowercase, no dot prefix.
-	columnRe = regexp.MustCompile(`(?m)^\s*([a-z_]+(?:\s*,\s*[a-z_]+)*)\s*,?\s*$`)
-	// A scan target: &b.FieldName
-	scanTargetRe = regexp.MustCompile(`&b\.([A-Za-z]+)`)
-)
+// A scan target: &b.FieldName
+var scanTargetRe = regexp.MustCompile(`&b\.([A-Za-z]+)`)
 
 func selectColumns(t *testing.T, src string) []string {
 	t.Helper()

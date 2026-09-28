@@ -451,6 +451,8 @@ func TestPreview_EmptyToken_Refused(t *testing.T) {
 
 func TestAccept_ValidToken_CreatesArtistInTheInvitingSalon(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	repo.artistErr = ErrNotFound // the acceptor is not yet an artist
 	salonID := uuid.New()
 	raw := seedInvitation(repo, salonID, StatusPending, time.Now().Add(time.Hour))
@@ -458,7 +460,7 @@ func TestAccept_ValidToken_CreatesArtistInTheInvitingSalon(t *testing.T) {
 	ob := &mockOnboarding{artistID: uuid.New()}
 	svc, _, _ := newTestService(repo, ob)
 
-	got, err := svc.Accept(context.Background(), raw, uuid.New(),
+	got, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "new-artist", Category: "makeup"}, "")
 
 	require.NoError(t, err)
@@ -470,15 +472,17 @@ func TestAccept_ValidToken_CreatesArtistInTheInvitingSalon(t *testing.T) {
 
 func TestAccept_TokenCannotBeUsedTwice(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	repo.artistErr = ErrNotFound
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, _, _ := newTestService(repo, &mockOnboarding{artistID: uuid.New()})
 
-	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+	_, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "a", Category: "makeup"}, "")
 	require.NoError(t, err)
 
-	_, err = svc.Accept(context.Background(), raw, uuid.New(),
+	_, err = svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "b", Category: "makeup"}, "")
 	assert.Equal(t, "INVITATION_NOT_FOUND", code(t, err))
 }
@@ -487,12 +491,14 @@ func TestAccept_TokenCannotBeUsedTwice(t *testing.T) {
 // redeemed, so Invite's check cannot be trusted at Accept time.
 func TestAccept_AcceptorJoinedAnotherSalonMeanwhile_Refused(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	other := uuid.New()
 	repo.artistSalon = &other
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, _, _ := newTestService(repo, &mockOnboarding{})
 
-	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+	_, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "a", Category: "makeup"}, "")
 
 	assert.Equal(t, "ALREADY_IN_SALON", code(t, err))
@@ -500,11 +506,13 @@ func TestAccept_AcceptorJoinedAnotherSalonMeanwhile_Refused(t *testing.T) {
 
 func TestAccept_HandleTaken_SurfacesAsHandleTaken(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	repo.artistErr = ErrNotFound
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, _, _ := newTestService(repo, &mockOnboarding{err: onboarding.ErrHandleTaken})
 
-	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+	_, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "rania", Category: "makeup"}, "")
 
 	assert.Equal(t, "HANDLE_TAKEN", code(t, err))
@@ -512,11 +520,13 @@ func TestAccept_HandleTaken_SurfacesAsHandleTaken(t *testing.T) {
 
 func TestAccept_SalonDeletedMeanwhile_LooksLikeAnInvalidLink(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	repo.artistErr = ErrNotFound
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, _, _ := newTestService(repo, &mockOnboarding{err: onboarding.ErrSalonNotFound})
 
-	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+	_, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "a", Category: "makeup"}, "")
 
 	assert.Equal(t, "INVITATION_NOT_FOUND", code(t, err))
@@ -795,11 +805,13 @@ func TestInvite_DuplicateIsReportedBeforeTheLimit(t *testing.T) {
 
 func TestAccept_RedactsTheQueuedToken(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	repo.artistErr = ErrNotFound
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, notif, _ := newTestService(repo, &mockOnboarding{artistID: uuid.New()})
 
-	_, err := svc.Accept(context.Background(), raw, uuid.New(),
+	_, err := svc.Accept(context.Background(), raw, invitee,
 		onboarding.ArtistProfile{Handle: "a", Category: "makeup"}, "")
 
 	require.NoError(t, err)
@@ -809,10 +821,12 @@ func TestAccept_RedactsTheQueuedToken(t *testing.T) {
 
 func TestDecline_RedactsTheQueuedToken(t *testing.T) {
 	repo := newMockRepo()
+	invitee := uuid.New() // since 2026-09-29 only the invitee may redeem
+	repo.contactUser = &invitee
 	raw := seedInvitation(repo, uuid.New(), StatusPending, time.Now().Add(time.Hour))
 	svc, notif, _ := newTestService(repo, &mockOnboarding{})
 
-	require.NoError(t, svc.Decline(context.Background(), raw))
+	require.NoError(t, svc.Decline(context.Background(), raw, invitee))
 	assert.Len(t, notif.redacted, 1)
 }
 

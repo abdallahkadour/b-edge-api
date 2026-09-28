@@ -235,6 +235,15 @@ func errAtArtistCeiling(planCode string, ceiling int) *apperror.AppError {
 			planCode, plural(ceiling, "%d artist", "%d artists")))
 }
 
+// errNotYourInvitation is a 403, not the usual 404: it describes the CALLER,
+// and the invitation's existence is not a secret from her - the public
+// preview already shows the salon to anyone holding the link. It never says
+// who the invitation is for.
+func errNotYourInvitation() *apperror.AppError {
+	return apperror.Forbidden("INVITATION_NOT_FOR_YOU",
+		"This invitation was sent to someone else. Sign in with the account it was sent to")
+}
+
 func errInvalidContact() *apperror.AppError {
 	return apperror.BadRequest("INVALID_CONTACT",
 		"Enter a valid mobile number or email address")

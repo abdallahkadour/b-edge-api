@@ -411,6 +411,11 @@ func (s *Service) Accept(ctx context.Context, rawToken string, userID uuid.UUID,
 	if err != nil {
 		return uuid.Nil, err
 	}
+	// Decided first, so a member holding someone else's link learns only
+	// that it is not hers - not whether she is in this salon.
+	if err := s.assertInvitee(ctx, inv, userID); err != nil {
+		return uuid.Nil, err
+	}
 
 	// The acceptor may have joined a salon between the invitation being
 	// sent and redeemed. Re-checked here rather than trusted from Invite.
@@ -451,15 +456,41 @@ func (s *Service) Accept(ctx context.Context, rawToken string, userID uuid.UUID,
 	return artistID, nil
 }
 
-func (s *Service) Decline(ctx context.Context, rawToken string) error {
+// Decline is the invitee saying no. Like Accept it needs her account: it
+// used to be public, so anyone holding a forwarded link could burn an
+// invitation on her behalf (FRAUD-11).
+func (s *Service) Decline(ctx context.Context, rawToken string, userID uuid.UUID) error {
 	inv, err := s.loadRedeemable(ctx, rawToken)
 	if err != nil {
+		return err
+	}
+	if err := s.assertInvitee(ctx, inv, userID); err != nil {
 		return err
 	}
 	if err := s.repo.SetInvitationStatus(ctx, inv.ID, StatusDeclined, nil); err != nil {
 		return err
 	}
 	s.redactDeliveredInvitation(ctx, inv.ID)
+	return nil
+}
+
+// assertInvitee refuses anyone but the person the invitation was sent to
+// (founder's decision, 2026-09-29, AUTH-16). The link used to be the whole
+// credential: a forwarded message or a shared screen was enough to join a
+// salon as someone else, and the owner saw only that "someone" had joined.
+//
+// Resolved by the invitation's contact now, not at send time: since Invite
+// only accepts a registered, verified artist, that contact names exactly one
+// account. If it names nobody any more - she changed number, closed her
+// account - nobody can redeem it, which is right.
+func (s *Service) assertInvitee(ctx context.Context, inv *Invitation, userID uuid.UUID) error {
+	invitee, err := s.repo.UserIDByContact(ctx, inv.Phone, inv.Email)
+	if err != nil {
+		return err
+	}
+	if invitee == nil || *invitee != userID {
+		return errNotYourInvitation()
+	}
 	return nil
 }
 

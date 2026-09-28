@@ -195,16 +195,21 @@ def main():
             rec("FRAUD-12", "FAIL", f"{blocked}; live invitations={live}")
 
         # ── FRAUD-11 public decline ────────────────────────────────────────
+        # Decided 2026-09-29: declining needs the INVITEE's account. Until
+        # then an anonymous caller holding the link could burn it (UNDECIDED).
+        before = sql(f"SELECT status FROM salon_invitations WHERE id='{inv1}'")
         st, r = call("POST", f"/invitations/{tok1}/decline")   # NO auth
+        st_o, r_o = call("POST", f"/invitations/{tok1}/decline", None,
+                         login(f"{TAG}.outsider@test.bedge.com"))   # someone else's account
         after = sql(f"SELECT status FROM salon_invitations WHERE id='{inv1}'")
-        if st < 400 and after == "declined":
-            rec("FRAUD-11", "UNDECIDED",
-                "an UNAUTHENTICATED caller holding the link killed the invitation "
-                f"({st}, now '{after}'). Reading the link is harmless, burning it is "
-                "not, and both need only the same thing. Accept requires an account; "
-                "decline should too. Product decision.")
+        if st == 401 and st_o == 403 and err(r_o) == "INVITATION_NOT_FOR_YOU" and before == after == "pending":
+            rec("FRAUD-11", "PASS",
+                f"no login -> {st}; another account -> {st_o} {err(r_o)}; the invitation "
+                f"is still '{after}' for the person it was sent to")
         else:
-            rec("FRAUD-11", "PASS", f"unauthenticated decline refused ({st} {err(r)})")
+            rec("FRAUD-11", "FAIL",
+                f"no login -> {st} {err(r)}; another account -> {st_o} {err(r_o)}; "
+                f"status {before} -> {after}")
 
         # ── AUTH-16 redeem an invitation issued to someone else ────────────
         st, r, tok2, inv2 = invite(owner_tok, "+96176340077")
@@ -214,16 +219,27 @@ def main():
         thief_a = sql(f"""SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id
                            WHERE u.email='{TAG}.thief@test.bedge.com'""")
         joined = bool(thief_a) and sql(f"SELECT salon_id FROM artists WHERE id='{thief_a}'") == salon
+        # Decided 2026-09-29: an invitation is for the person it was sent to.
         if joined:
-            st3, r3 = call("GET", "/artists/salon/members", None, owner_tok)
-            seen = any(m["artist_id"] == thief_a for m in (r3.get("data") or []))
-            rec("AUTH-16", "UNDECIDED",
-                f"an invitation addressed to +96176340077 was redeemed by an unrelated "
-                f"account. The token is the credential, so this may be intended - but "
-                f"it is a phishing primitive. Owner CAN see who joined: {seen}. "
-                f"Product decision.")
-        else:
+            rec("AUTH-16", "FAIL",
+                "an invitation addressed to +96176340077 was redeemed by an unrelated account")
+        elif st2 == 403 and err(r2) == "INVITATION_NOT_FOR_YOU":
             rec("AUTH-16", "PASS", f"acceptance is bound to the invited contact ({st2} {err(r2)})")
+        else:
+            rec("AUTH-16", "FAIL", f"refused, but not by the invitee rule: {st2} {err(r2)}")
+
+        # AUTH-14 and AUTH-17 below need a member to remove. They used to get
+        # one from the stolen redemption above; it is refused now, so the
+        # thief joins the honest way - an invitation to her own number.
+        if not joined:
+            st5, r5, tok5, _ = invite(owner_tok, "+96176340004")
+            st6, r6 = call("POST", f"/invitations/{tok5}/accept",
+                           {"handle": f"{TAG}-thief", "category": "makeup"}, thief_tok)
+            thief_a = sql(f"""SELECT a.id FROM artists a JOIN users u ON u.id=a.user_id
+                               WHERE u.email='{TAG}.thief@test.bedge.com'""")
+            joined = bool(thief_a) and sql(f"SELECT salon_id FROM artists WHERE id='{thief_a}'") == salon
+            if not joined:
+                print(f"  could not seat the member for AUTH-14/17: invite {st5} {err(r5)}, accept {st6} {err(r6)}")
 
         # ── AUTH-14 the access token outlives removal ──────────────────────
         if joined:

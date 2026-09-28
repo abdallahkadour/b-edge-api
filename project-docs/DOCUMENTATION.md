@@ -26,16 +26,16 @@
 > **thin** — 33 tests across 41 routes — which is a fair criticism and a
 > different one from "it does not run".
 >
-> **Verified against code 2026-09-28:** **54 migrations**
+> **Verified against code 2026-09-29:** **54 migrations**
 > (latest `054_order_request_id`), **36 tables**, **20 route-bearing
 > domains** (26 directories under `internal/`, excluding `pkg`), **20 leaf
 > packages**, **158 route registrations** across **136 swagger paths** (corrected
 > 2026-09-26: the counter had included ~30 routes that tests mount on
 > throwaway apps and missed 24 registered with a `base+` prefix),
-> **1236 Go tests**, **28 environment variable names** read via `os.Getenv`
-> (test files included). Frontend: **46 Angular routes**, **17 spec files**
-> carrying **86 passing tests** (shared 49, artist-dashboard 14,
-> customer-pwa 23), **47 help topics** (15 customer, 28 artist, 4 admin).
+> **1243 Go tests**, **28 environment variable names** read via `os.Getenv`
+> (test files included). Frontend: **46 Angular routes**, **18 spec files**
+> carrying **90 passing tests** (shared 49, artist-dashboard 18,
+> customer-pwa 23), **49 help topics** (15 customer, 30 artist, 4 admin).
 >
 > These numbers are now **generated, not typed**:
 > `./scripts/doc-facts.sh` recomputes them from the repository and

@@ -491,15 +491,16 @@ def main():
         stolen = (r.get("data") or {}).get("link", "").rsplit("/", 1)[-1]
         st2, r2 = call("POST", f"/invitations/{stolen}/accept",
                        {"handle": f"{TAG}-thief", "category": "makeup"}, m_tok)
-        visible = False
-        if st2 < 400:
-            st3, r3 = call("GET", "/artists/salon/members", None, amal_tok)
-            visible = any(m["artist_id"] == mallory for m in (r3.get("data") or []))
-        rec("23.7d", "INFO",
-            f"an invitation issued to another number was redeemed by a different account: "
-            f"{'accepted' if st2 < 400 else 'refused ' + str(err(r2))}. The token is the "
-            f"credential, so this is by design - but the owner must see who joined "
-            f"(visible in roster: {visible if st2 < 400 else 'n/a'}). Decide deliberately.")
+        # Decided 2026-09-29: an invitation is for the person it was sent to,
+        # and that is checked before anything else - so Mallory, already a
+        # member here, learns only that it is not hers (not "already a member").
+        if st2 == 403 and err(r2) == "INVITATION_NOT_FOR_YOU":
+            rec("23.7d", "PASS",
+                f"an invitation issued to another number cannot be redeemed by a different "
+                f"account ({st2} {err(r2)})")
+        else:
+            rec("23.7d", "FAIL",
+                f"another account redeeming someone else's invitation: {st2} {err(r2)}")
         call("DELETE", f"/artists/salon/invitations/{(r.get('data') or {}).get('invitation',{}).get('id','')}",
              None, amal_tok)
 

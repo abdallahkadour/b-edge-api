@@ -68,10 +68,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, inviteB
 	// Anyone holding a link can call the preview. It returns the salon name
 	// and the inviter's name and nothing else; see InvitationPreview.
 	app.Get("/api/v1/invitations/:token", h.PreviewInvitation)
-	app.Post("/api/v1/invitations/:token/decline", h.DeclineInvitation)
 
-	// Accepting requires an account - the artist row is created for the
-	// authenticated caller.
+	// Accepting and declining both need the INVITEE's account: the artist row
+	// is created for the authenticated caller, and neither action may be
+	// taken by whoever else holds the link (AUTH-16, FRAUD-11).
+	app.Post("/api/v1/invitations/:token/decline", auth, h.DeclineInvitation)
 	app.Post("/api/v1/invitations/:token/accept", auth, h.AcceptInvitation)
 }
 
@@ -305,13 +306,14 @@ func (h *Handler) AcceptInvitation(c *fiber.Ctx) error {
 
 // DeclineInvitation godoc
 //
-//	@Summary	Decline an invitation (public)
+//	@Summary	Decline an invitation (the invitee only)
+//	@Security	BearerAuth
 //	@Tags		membership
 //	@Param		token	path	string	true	"Invitation token"
 //	@Success	204
 //	@Router		/invitations/{token}/decline [post]
 func (h *Handler) DeclineInvitation(c *fiber.Ctx) error {
-	if err := h.svc.Decline(c.UserContext(), c.Params("token")); err != nil {
+	if err := h.svc.Decline(c.UserContext(), c.Params("token"), middleware.UserIDFromContext(c)); err != nil {
 		return err
 	}
 	return response.NoContent(c)

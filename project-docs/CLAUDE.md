@@ -135,14 +135,16 @@ Two suites are worth knowing before writing tests:
   The design doc is `B-Edge-Booking-State-Machine-Matrix-v1.md` (in
   `b-edge-web/project-docs/`).
 - **`E2E-TEST-PLAN.md`** (also in `b-edge-web/project-docs/`) — 27 suites plus
-  an adversarial pass. Suites 1–16 are manual journeys, each executed at least
-  once; 11 and 14.8 **cannot be automated** (they need a link pasted into
-  WhatsApp and an `.ics` imported on a real phone), and Suite 10 has nothing to
-  tag while no roster artist has portfolio photos. **Suites 17–27 are
-  executable** — `make verify`, `make e2e-suite22/23/27`, `make chaos-booking`,
-  the security targets, and three Playwright scripts in `b-edge-web/scripts/`.
-  The last full run is `B-Edge-Test-Execution-2026-09-28.md`: it found five
-  harnesses testing rules that had changed under them. **Run the suites spaced
+  an adversarial pass. **Every suite is executable.** Suites 1–16 (written as
+  manual journeys) since 2026-09-29: `make e2e-journeys` (behaviour) and
+  `node scripts/e2e-journeys-ui.mjs` in b-edge-web (screens); each builds its
+  own salon and tags its own photos. Only 11.7 and 14.8 **cannot be
+  automated** (a link pasted into WhatsApp, an `.ics` imported on a real
+  phone). Suites 17–27: `make verify`, `make e2e-suite22/23/27`,
+  `make chaos-booking`, the security targets, and three Playwright scripts in
+  `b-edge-web/scripts/`. The last runs are `B-Edge-Test-Execution-2026-09-29.md`
+  (Suites 1–16) and `-2026-09-28.md` (the rest; it found five harnesses
+  testing rules that had changed under them). **Run the suites spaced
   out, or re-run a failure alone:** back to back from one machine they exceed
   the API's own 600-requests-per-5-minutes limit and fail in ways that look
   like defects.

@@ -430,8 +430,14 @@ concealing another.
 
 **Update 2026-09-29: FRAUD-11 and AUTH-16 are decided (D26 in the decision
 register) and now PASS** — only the invitee may accept or decline, and
-declining needs a login. AUTH-14 is still open. The note below is as written
-on 2026-09-22.
+declining needs a login. **AUTH-14 is still open, and worse than the note
+below says: writes DO get through.** Measured 2026-09-29: after removal her
+old token listed the salon's orders (customer names, phones, pins) **and
+marked an order shipped (200, the order became `shipped`)** — ship and
+deliver are open to every member and trust the salon in the token. The note
+below checked five endpoints and none of those two. See
+`B-Edge-Test-Execution-2026-09-29.md` §3. The note below is as written on
+2026-09-22.
 
 **Three results are UNDECIDED, and must not be read as passes.** Each measured
 a real behaviour that needs a decision rather than a fix:

@@ -111,6 +111,21 @@ e2e-suite23:
 e2e-suite27:
 	python3 scripts/e2e-suite27.py $(ARGS)
 
+## e2e-journeys: E2E suites 2-16, the behaviour half
+##
+## The journeys that were written for a person clicking through, driven
+## through the real API instead: stores and hours, the whole booking life,
+## the shop, clients, earnings, billing, open/closed, portfolio tags, share
+## previews, the bulk shift, the notification centre, calendar links, the
+## service buffer and the waitlist (including a live 5-minute stall sweep).
+## The screen half is b-edge-web: node scripts/e2e-journeys-ui.mjs. Builds
+## its own salon, waits out the general rate limit rather than failing on
+## it, and reports the residual row count. Needs -tags devbypass (make dev).
+##
+##   make e2e-journeys ARGS="3 14"    # just some suites
+e2e-journeys:
+	python3 scripts/e2e-journeys.py $(ARGS)
+
 ## verify-security-salon: security plan section 3.4d
 ##
 ## The multi-artist salon attack surface: the invitation as a bearer

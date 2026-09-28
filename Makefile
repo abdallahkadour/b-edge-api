@@ -104,8 +104,12 @@ e2e-suite23:
 ## E2E 27.1-27.8 and 16.5 (the expiry worker, with nobody reading), plus
 ## security FRAUD-18/19/21/22, in one pass. Builds and destroys its own
 ## salon and reports the residual row count. Needs -tags devbypass (make dev).
+##
+##   make e2e-suite27 ARGS=--fraud20   # also prove the promo-code attempt
+##                                     # limit - spends this machine's code
+##                                     # budget for 10 minutes
 e2e-suite27:
-	python3 scripts/e2e-suite27.py
+	python3 scripts/e2e-suite27.py $(ARGS)
 
 ## verify-security-salon: security plan section 3.4d
 ##

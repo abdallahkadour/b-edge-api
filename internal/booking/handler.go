@@ -47,7 +47,11 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //	GET    /api/v1/bookings/:id        - get booking by ID
 //	PATCH  /api/v1/bookings/:id/submit - submit a held booking
 //	... (artist-only lifecycle routes)
-func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
+//
+// codeAttempts is the promo-code attempt limiter, shared with the cart's
+// preview so both draw on one budget (security plan FRAUD-20); see
+// middleware.NewPromoCodeAttempts.
+func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAttempts fiber.Handler) {
 	repo := NewRepository(pool)
 	// billing.NewRepository is used here purely as a SubscriptionStatusReader
 	// (see that interface's doc comment) - this domain's own Repository
@@ -66,7 +70,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	pub.Get("/slots", handler.GetAvailableSlots)
 	// Public for the same reason the guest hold routes are: a customer typing
 	// a promo code has no account yet.
-	pub.Post("/:id/discount-preview", handler.PreviewDiscount)
+	pub.Post("/:id/discount-preview", codeAttempts, handler.PreviewDiscount)
 	pub.Post("/guest/hold", handler.HoldGuestSlot)
 	pub.Delete("/guest/hold/:id", handler.ReleaseGuestHold)
 	pub.Post("/waitlist", handler.JoinWaitlist)

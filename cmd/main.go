@@ -163,7 +163,10 @@ func main() {
 
 	auth.RegisterRoutes(app, pool, logger)
 	customerauth.RegisterRoutes(app, pool, logger)
-	booking.RegisterRoutes(app, pool, logger)
+	// ONE limiter for both promo previews, so alternating between the cart
+	// and the booking preview does not double a guesser's budget (FRAUD-20).
+	codeAttempts := middleware.NewPromoCodeAttempts()
+	booking.RegisterRoutes(app, pool, logger, codeAttempts)
 	artist.RegisterRoutes(app, pool, logger)
 	// promo has no logger of its own - nothing in it is worth a log line that
 	// the request logger does not already carry.
@@ -187,7 +190,7 @@ func main() {
 	// fetched link is the only route to a calendar entry at all.
 	calendar.RegisterRoutes(app, pool, logger)
 	earnings.RegisterRoutes(app, pool, logger)
-	product.RegisterRoutes(app, pool, logger)
+	product.RegisterRoutes(app, pool, logger, codeAttempts)
 	media.RegisterRoutes(app, pool, logger)
 	onboarding.RegisterRoutes(app, pool, logger)
 	admin.RegisterRoutes(app, pool, logger)

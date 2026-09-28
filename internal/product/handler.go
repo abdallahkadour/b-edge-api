@@ -20,7 +20,10 @@ type Handler struct {
 }
 
 // RegisterRoutes attaches product-store routes to the Fiber app.
-func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
+// codeAttempts is the promo-code attempt limiter, shared with the booking
+// preview so both draw on one budget (security plan FRAUD-20); see
+// middleware.NewPromoCodeAttempts.
+func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAttempts fiber.Handler) {
 	repo := NewRepository(pool)
 	// promo.NewService satisfies DiscountResolver structurally - wired at the
 	// composition root so neither domain imports the other's service.
@@ -37,7 +40,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// Registered with the public routes, BEFORE the bearer group below: that
 	// group's auth runs for everything under /api/v1/orders it is registered
 	// ahead of.
-	pub.Post("/orders/discount-preview", handler.PreviewOrderDiscount)
+	pub.Post("/orders/discount-preview", codeAttempts, handler.PreviewOrderDiscount)
 
 	// ── Bearer - either party on an order (customer or artist) ──────────────
 	//

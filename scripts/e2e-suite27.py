@@ -16,6 +16,10 @@ the same fixes opened:
         reading availability - the expiry worker, not the lazy sweep
   FRAUD-21  a forged client-address header does not lift the hold limit
   FRAUD-22  a hold that is not an unfinished guest hold cannot be released
+  FRAUD-20  (opt-in, --fraud20) the promo previews stop answering after 20
+            codes per address in 10 minutes, across BOTH previews. Opt-in
+            because it spends this machine's code budget for 10 minutes: a
+            second run inside that window would see 27.7 refused.
 
 Every check states its positive control first: a "not listed" or "not
 freed" measured on a state that never had the thing in it is not a pass.
@@ -27,6 +31,7 @@ chaos-booking.py rather than copied, so the joining flow stays one
 implementation. Requires the API built with -tags devbypass (make dev).
 
   python3 scripts/e2e-suite27.py
+  python3 scripts/e2e-suite27.py --fraud20     # also measure FRAUD-20, last
 """
 import concurrent.futures as cf
 import importlib.util
@@ -47,6 +52,7 @@ c.TAG = "s27"           # every row this run creates carries it, for cleanup
 
 API = c.API
 RESULTS = []
+FRAUD20_ARGS = []   # (salon, product) for the opt-in FRAUD-20 run, set by main
 PHONE = "+9617636{:04d}"  # cleanup() clears customer_otps under +9617636%
 
 
@@ -354,10 +360,41 @@ def main():
     q = mine[0] if mine else {}
     ok = (st == 201 and placed.get("discount_code") == "S27SAVE" and q.get("discount_code") == "S27SAVE"
           and str(q.get("discount_amount")) in ("10", "10.00") and str(q.get("total_amount")) in ("30", "30.00"))
+    FRAUD20_ARGS.extend([salon, p2])
     rec("27.6", "PASS" if ok else "FAIL",
         f"placed: total {placed.get('total_amount')} code {placed.get('discount_code')}; "
         f"artist queue: items {[i.get('subtotal') for i in q.get('items', [])]}, "
         f"discount {q.get('discount_amount')} {q.get('discount_code')}, total {q.get('total_amount')}")
+
+
+def fraud20(salon, product):
+    """Guess codes through both previews, alternating, until refused.
+
+    Before middleware.NewPromoCodeAttempts this answered 482 guesses in
+    0.3 s. The budget is per address per 10-minute window and 27.7 has
+    already spent some of it, so the count here is at most 20, not exactly.
+    """
+    import secrets
+    answered, refusal = 0, None
+    for i in range(40):
+        code = "G" + secrets.token_hex(3).upper()
+        if i % 2 == 0:
+            st, r = call("POST", "/orders/discount-preview",
+                         {"salon_id": salon, "code": code, "items": [{"product_id": product, "quantity": 1}]})
+        else:
+            st, r = call("POST", f"/bookings/{uuid.uuid4()}/discount-preview", {"code": code})
+        if st == 429:
+            refusal = (i, err(r))
+            break
+        answered += 1
+    other, _ = call("POST", "/orders/discount-preview" if refusal and refusal[0] % 2 else
+                    f"/bookings/{uuid.uuid4()}/discount-preview", {"code": "X"})
+    rest, _ = call("GET", "/discovery/artists?q=zzzz")
+    ok = (refusal is not None and refusal[1] == "TOO_MANY_CODE_ATTEMPTS" and answered <= 20
+          and other == 429 and rest == 200)
+    rec("FRAUD-20", "PASS" if ok else "FAIL",
+        f"{answered} guesses answered across both previews, then {refusal}; the other preview "
+        f"-> {other}; the rest of the API -> {rest}")
 
 
 def teardown():
@@ -398,6 +435,8 @@ if __name__ == "__main__":
     print("\n  E2E suite 27 + 16.5 + FRAUD-21/22\n")
     try:
         main()
+        if "--fraud20" in sys.argv and FRAUD20_ARGS:
+            fraud20(*FRAUD20_ARGS)
     except Exception as e:  # a harness failure is reported, never hidden
         rec("harness", "FAIL", f"{type(e).__name__}: {e}")
     finally:

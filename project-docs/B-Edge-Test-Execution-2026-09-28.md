@@ -58,6 +58,14 @@ behaviour. What the run did find:
 **184 live checks pass, 0 fail.** Every run that created data tore it down;
 every residual count was 0.
 
+**Addendum, later the same day — FRAUD-20 fixed.** 20 promo previews per
+address per 10 minutes, shared by both preview routes, refused with 429
+`TOO_MANY_CODE_ATTEMPTS`. Re-measured: 14 answered (6 already spent in the
+window), then refused on both routes, the rest of the API unaffected — 120
+guesses an hour, down from ≈ 5,800. The app now shows that reason under the
+code field, and its "too quickly" banner is kept for the general limit only
+(it had also been shown, wrongly, for the 2-hold limit). See §1.
+
 ---
 
 ## 1. The security finding — FRAUD-20, promo codes can be guessed
@@ -79,8 +87,8 @@ position 300 among random six-character guesses:
 
 **Recommendation:** a separate, tight per-address limit on the two preview
 routes (e.g. 20 per 10 minutes), leaving the general limit alone; and codes
-long enough that 5,800 an hour is hopeless. Not fixed in this run — it is a
-product decision about how codes are handed out.
+long enough that 5,800 an hour is hopeless. **Done the same day** — see the
+addendum above and FRAUD-20 in the security plan.
 
 SPAM-06 (21 September) is not contradicted: it asks whether a nonexistent
 code and a real-but-unusable one look alike — they do — and cannot see this.

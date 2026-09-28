@@ -127,7 +127,7 @@ Open `.env` and set your values. The required variables are:
 | `DB_PASSWORD` | Database password | `postgres` |
 | `JWT_SECRET` | Access token secret (min 32 chars) | `your-64-char-hex-string` |
 | `JWT_REFRESH_SECRET` | Refresh token secret (min 32 chars, different from JWT_SECRET) | `your-other-64-char-hex-string` |
-| `CLIENT_URL` | Allowed CORS origin | `http://localhost:4200` |
+| `CLIENT_URL` | Allowed CORS origins, comma-separated — list both apps in development | `http://localhost:4200,http://localhost:4300` |
 | `PORT` | Server port | `3000` |
 | `APP_ENV` | Environment (`development` or `production`) | `development` |
 
@@ -182,7 +182,7 @@ Expected response:
 | `make swagger` | Generate Swagger docs from code annotations |
 | `make docker-up` | Start PostgreSQL and Jaeger containers |
 | `make docker-down` | Stop and remove containers |
-| `make lint` | Run golangci-lint |
+| `make lint` | Run golangci-lint (not bundled: `brew install golangci-lint`) |
 | `make docs-check` | Fail if the documentation contradicts the code |
 | `make docs-facts` | Print the counted facts the docs make claims about |
 
@@ -240,7 +240,7 @@ Swagger docs available at `http://localhost:3000/swagger` after running `make sw
 
 ## Database
 
-The schema lives in `db/migrations/` — 52 migrations and 36 tables on 2026-09-26 (`./scripts/doc-facts.sh` prints the current counts). Key design decisions:
+The schema lives in `db/migrations/` — 54 migrations and 36 tables on 2026-09-28 (`./scripts/doc-facts.sh` prints the current counts). Key design decisions:
 
 - **GIST exclusion constraint** on `bookings` — prevents double booking at the database level. No application-level race condition possible.
 - **NUMERIC(10,2)** for all money columns — no float arithmetic, no rounding errors.

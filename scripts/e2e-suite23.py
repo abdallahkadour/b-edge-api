@@ -557,12 +557,16 @@ def main():
             s_, r_ = call(m_, p_, b_, captured)
             still[label] = s_
         money_held = pay_ref(salon) == honest_money
-        if still["redirect the money"] >= 400 and money_held:
-            rec("23.7f", "INFO",
-                f"a removed member's access token still reaches: "
-                f"{ {k: v for k, v in still.items() if v < 400} or 'nothing'} for up to 15 "
-                f"minutes (RevokeAllForUser revokes refresh tokens only). It does NOT reach "
-                f"the money. Tracked as AUTH-14.")
+        reached = {k: v for k, v in still.items() if v < 400}
+        # Since 2026-10-08 (D28) RequireAuth re-reads the account, so the old
+        # token reaches nothing; until then this was INFO with three reads.
+        if still["redirect the money"] >= 400 and money_held and not reached:
+            rec("23.7f", "PASS",
+                f"a removed member's old access token reaches nothing of the salon: {still}")
+        elif still["redirect the money"] >= 400 and money_held:
+            rec("23.7f", "FAIL",
+                f"a removed member's access token still reaches {reached} - a regression of D28 "
+                f"(it does not reach the money)")
         else:
             rec("23.7f", "FAIL",
                 f"a REMOVED member could still redirect the money: {still}; "

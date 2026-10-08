@@ -31,7 +31,11 @@ on 28–29 September.
 
 ---
 
-## 1. Security defects found — not fixed, each needs a decision
+> **Addendum, later the same day — all three security defects FIXED** (the
+> founder approved). §8 has what changed and the full regression run that
+> followed: the main fix changes what every signed-in request does.
+
+## 1. Security defects found — fixed later the same day (§8)
 
 ### AUTH-22 — a frozen or suspended account keeps itself signed in
 
@@ -202,3 +206,69 @@ Twilio failure through the running worker — the behaviour is now covered by
 DATA-05 (no SMS sender is provisioned) · phone-verification step 5 (needs an
 unverified roster account) · 4.1's real image upload (it would go to
 Cloudinary) · performance against the PRD's targets (nothing is deployed).
+
+---
+
+## 8. Addendum — the three fixed, and everything re-run
+
+**AUTH-14b and AUTH-22 — every signed-in request re-reads the account
+(decision D28).** `RequireAuth` still verifies the token, then asks
+`middleware.Standing`, installed by `domain/auth.RegisterRoutes`, what the
+account is now: the salon and salon role handlers see come from the database
+(the same load and `salonrole.Resolve` derivation as login), a suspended
+account is refused with 403 `ACCOUNT_SUSPENDED`, a deleted one with 401, and
+an unreadable account fails closed (500). One indexed lookup per request.
+Chosen over shortening the token, which narrows the window without closing
+it, and over per-route checks, which is how five routes came to leak while
+nine did not. It also closes AUTH-15 (a transferred owner's old token now
+carries member rights at once). `Refresh` additionally refuses a suspended
+account.
+
+**A frozen account keeps its session (decision D27).** The case had
+expected otherwise; the product's freeze screen says "You can undo this
+right here, but once you sign out while frozen, you won't be able to log
+back in yourself", and unfreezing is a signed-in call. Login still refuses a
+frozen account.
+
+**AUTH-20 — an invitation's two contacts must be one account.** Given both
+a phone and an email, `Invite` resolves each separately and refuses with
+409 `CONTACTS_DISAGREE` unless they name the same account (a contact nobody
+holds is refused too, or a later registration would reopen the ambiguity).
+
+**Web.** Both apps' error interceptors now end the session on 403
+`ACCOUNT_SUSPENDED` as on 401 (`endsTheSession`), so a suspended artist is
+sent to sign-in instead of a dashboard where every call fails; any other 403
+still leaves her signed in.
+
+**Tests added, each watched failing first:** 6 middleware
+(`standing_test.go`: removed member, transferred owner, suspended, deleted,
+unreadable, nothing installed), 10 auth (`standing_test.go`: the standing
+for owner/member/none/suspended/frozen/gone/error, refresh suspended and
+frozen, and that `RegisterRoutes` installs the check), 3 membership
+(`contacts_test.go`) + 1 database (`ContactOwners`), 6 web
+(`auth-error.interceptor.spec.ts`). Swagger regenerated (`/auth/refresh`
+documents its 403).
+
+### The regression run after the fixes
+
+D28 changes what every signed-in request does, so everything was run again
+on the fixed build, suites spaced for the rate limit.
+
+| Suite | After the fixes | Change from the first run |
+|---|---|---|
+| Go — unit · database tier | **1,174 · 1,260 pass**, vet clean | +21 · +22 tests: the fixes' 20 (19 unit, 1 database) and §6's two mutation-gap tests |
+| Web — unit (shared · customer-pwa · artist-dashboard) | **55 · 23 · 18 pass** | +6 (the interceptor spec) |
+| UC-1 · UC-2 · UC-6 · UC-7 | 20 · 11 (+1 skip) · 7 · 7 pass | none — UC-7 swaps a salon's owner, so it exercises the new role derivation |
+| Chaos booking | 25 pass, 2 informational | none |
+| Security batch 1 · batch 2 | 7 · 6 pass (+1 informational) | none |
+| Security salon | **15 pass, 0 undecided** (1 informational, 1 skip) | AUTH-14 **UNDECIDED → PASS**: the old token reaches nothing, writes included |
+| E2E 22 · 23 · 27 | 14 · **19** · 15 pass | 23.7f **INFO → PASS**; 0 left to decide |
+| **E2E 28 + §3.4f** | **28 pass, 0 fail**, 1 gap (28.10) | 8 failures → 0 |
+| E2E 2–16 journeys | 93 pass, 4 skip | none |
+| UI — phone · per-artist services · 22.6 · Suites 1–16 screens | 6 (+1 skip) · 23 · 14 · 28 pass | none — and run spaced, the two scripts that failed back to back pass first time |
+| **UI — Suite 28** | **4 pass** | +28.8: an owner suspended while signed in is on `/login` after one click (the interceptor change, watched failing in its unit spec; this browser case was not run against the old build) |
+
+Two harnesses had to learn the decision rather than the code changing
+under them: `verify-security-salon` and `e2e-suite23` reported a removed
+member's old token as UNDECIDED / INFO whatever it reached. They now pass
+only when it reaches nothing, and fail on any read as a regression of D28.

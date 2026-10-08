@@ -428,41 +428,27 @@ lives 7 days and rotates, so if that holds, a deleted or frozen account can
 stay signed in indefinitely. All cases are executed by `make e2e-suite28`
 with E2E Suite 28.
 
-**EXECUTED 2026-10-08 — 4 pass, 3 fail, 0 undecided** (three identical
-runs, residual 0; FRAUD-23 run once, opt-in). Not fixed in this run; each
-needs a decision noted below.
+**EXECUTED 2026-10-08 — first 4 pass, 3 fail; then all three FIXED the
+same day, and all 7 pass** (residual 0 every run; FRAUD-23 opt-in).
 
-- **AUTH-22 — FAIL, the most serious.** Login refuses a frozen and a
-  suspended account, but **refresh does not**: both got a new working
-  session, and the suspended one renewed three more times in a row.
-  Suspension therefore only stops someone who signs out. Fix: `Refresh`
-  refuses a non-active `users.status`, and changing status revokes refresh
-  tokens. **Decision needed for self-freeze only:** unfreezing is an
-  authenticated call, so if refresh refuses a frozen account, a user who
-  froze herself can only come back through support.
-- **AUTH-14b — FAIL, 5 of 14.** A removed member's old token reads the
-  salon's orders, service menu and team, and **ships and delivers orders**,
-  while a fresh login is refused. The other 9 member actions are refused
-  because their services re-read membership or ownership. The fix (re-check
-  membership on salon-scoped routes) now has an exact list: the order
-  queue, ship, deliver, the services list and the members list.
-- **AUTH-20 — FAIL.** An invitation addressed to the phone of artist A and
-  the email of artist B is sent; B is refused and A joins, chosen by row
-  order. Fix: refuse at invite when the two contacts resolve to different
-  accounts.
-- **AUTH-21 — PASS** (refresh 401 after deleting the account), **AUTH-23 —
-  PASS** (refresh 401 after logout), **INJ-09 — PASS** (18 hostile tokens →
-  404, 422 or 431, never 5xx), **FRAUD-23 — PASS** (with the code budget
-  spent, forging all three address headers still gets 429
-  `TOO_MANY_CODE_ATTEMPTS`). The old access token living out its 15 minutes
-  after delete or logout is recorded as informational, not a pass.
+| ID | Before the fix | After |
+|---|---|---|
+| **AUTH-14b** | 5 of 14 member actions got through with a removed member's old token — reading the salon's orders, menu and team, and **shipping and delivering orders** — while a fresh login was refused | **0 of 14.** `RequireAuth` re-reads the account on every request (decision **D28**): the salon and salon role handlers see come from the database, not the token. Also closes AUTH-14 and AUTH-15 (a transferred owner's token now carries member rights at once) |
+| **AUTH-22** | login refused a frozen and a suspended account, but **refresh issued both a new session**; the suspended one renewed indefinitely | **Suspended:** refresh 403 `ACCOUNT_SUSPENDED`, and the access token it already had is refused on its next request (403) — not 15 minutes later. **Frozen:** keeps its session by design (decision **D27**): freezing is self-service and its screen says "you can undo this right here"; login still refuses it. The case expected "refused" for frozen too — that expectation was wrong, not the code |
+| **AUTH-20** | an invitation to the phone of artist A and the email of artist B was sent; A joined, chosen by row order | **409 `CONTACTS_DISAGREE`** at invite when the two contacts are not one account (including one nobody holds yet). The Team screen sends only a phone, so this closes the API, not a screen |
+| **AUTH-21** | pass (refresh 401 after deleting the account); the old access token lived out its 15 minutes | pass, and the old access token is now refused at once (401) |
+| **AUTH-23 · INJ-09 · FRAUD-23** | pass | pass |
+
+The web apps end the session on 403 `ACCOUNT_SUSPENDED` as they do on 401
+(`endsTheSession`, both interceptors), so a suspended account is sent to the
+sign-in screen instead of a dashboard where every call fails.
 
 | ID | Case | Why it matters | Expected |
 |---|---|---|---|
 | **AUTH-14b** | **Every member write through a removed member's token.** Remove a member, then with her captured access token: ship, deliver, switch her services and price, set her hours, tag media, leave, and read orders and clients. | AUTH-14 tried two routes. Ship and deliver are open to every member and trust the salon in the token; the rest may or may not re-read membership. The fix (re-check membership on salon-scoped routes) needs the full list to be scoped. | Each refused. Known FAIL for ship (2026-09-29); this measures the rest. |
 | **AUTH-20** | **An invitation that names two people.** Invite with the phone of artist A and the email of artist B. | `InviteeByContact` and `UserIDByContact` both take the first user matching phone **or** email, `LIMIT 1`, no `ORDER BY`. Validation runs on whichever row the invite lookup returns; acceptance is granted to whichever the accept lookup returns. Nothing guarantees they are the same person. | Refused at invite. |
 | **AUTH-21** | **A deleted account keeps its session.** Sign in, delete the account (`DELETE /auth/delete-account`), then refresh. | Deleting is the user's way to end their relationship with the platform. If refresh still issues tokens, "deleted" is a 7-day-renewable session with the account's full access. | Refresh refused; the account's tokens revoked. |
-| **AUTH-22** | **A frozen or suspended account keeps its session.** Freeze (self-service), then refresh; set `users.status='suspended'` as an operator would, then refresh. | Login refuses both (`ACCOUNT_FROZEN`, `ACCOUNT_SUSPENDED`). If refresh does not, suspension only stops people who sign out. | Both refused. |
+| **AUTH-22** | **A frozen or suspended account keeps its session.** Freeze (self-service), then refresh; set `users.status='suspended'` as an operator would, then refresh. | Login refuses both (`ACCOUNT_FROZEN`, `ACCOUNT_SUSPENDED`). If refresh does not, suspension only stops people who sign out. | Suspended: refused at refresh and on every request. Frozen: keeps its session (D27 — written 'both refused' at first; the product's freeze screen promises otherwise). |
 | **AUTH-23** | **Logout ends the refresh token.** Log out, then refresh with the old refresh token; then use the old access token. | B5 in the threat matrix. The refresh must be dead; the access token living out its 15 minutes is by design. | Refresh 401; access token informational. |
 | **FRAUD-23** | **Forging the address to reset the code limiter.** Spend the 20-code budget (FRAUD-20), then send a 21st with `CF-Connecting-IP`, `X-Forwarded-For` and `X-Real-IP` forged. | FRAUD-21 proved the hold limiter ignores forged headers. The code limiter is a separate instance; it must read the address the same way. | Still 429 `TOO_MANY_CODE_ATTEMPTS`. |
 | **INJ-09** | **Hostile invitation tokens.** Preview, accept and decline with a 10,000-character token, `../../`, `%00`, Arabic text and an emoji. | The token is hashed and looked up; nothing should ever reach SQL unhashed or produce a 500. | 4xx every time, never 500. |
@@ -482,8 +468,9 @@ concealing another.
 
 **Update 2026-09-29: FRAUD-11 and AUTH-16 are decided (D26 in the decision
 register) and now PASS** — only the invitee may accept or decline, and
-declining needs a login. **AUTH-14 is still open, and worse than the note
-below says: writes DO get through.** Measured 2026-09-29: after removal her
+declining needs a login. **AUTH-14 was then measured as worse than the note
+below says — writes DO get through — and was FIXED on 2026-10-08 (decision
+D28, §3.4f AUTH-14b).** Measured 2026-09-29: after removal her
 old token listed the salon's orders (customer names, phones, pins) **and
 marked an order shipped (200, the order became `shipped`)** — ship and
 deliver are open to every member and trust the salon in the token. The note

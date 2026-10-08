@@ -258,15 +258,20 @@ def main():
                 still[label] = s_
             reachable = [k for k, v in still.items() if v < 400]
             writes = [k for k in reachable if k.startswith(("REDIRECT", "edit"))]
+            # Decided 2026-10-08 (D28): every signed-in request re-reads the
+            # account, so a removed member's old token reaches NOTHING of the
+            # salon - reads included. Until then this was UNDECIDED on the
+            # reads, and the reads list was never empty.
             if writes:
                 rec("AUTH-14", "FAIL",
                     f"a REMOVED member's token can still WRITE: {writes}")
+            elif reachable:
+                rec("AUTH-14", "FAIL",
+                    f"a removed member's access token still READS {reachable} - since D28 "
+                    f"RequireAuth re-reads the account, so this is a regression")
             else:
-                rec("AUTH-14", "UNDECIDED",
-                    f"a removed member's access token still READS {reachable} for up to "
-                    f"15 minutes - RevokeAllForUser revokes refresh tokens only, and the "
-                    f"access token is self-contained. No writes get through. Decide "
-                    f"whether 15 minutes of salon reads after removal is acceptable.")
+                rec("AUTH-14", "PASS",
+                    f"a removed member's old access token reaches nothing: {still}")
 
             # ── AUTH-17 rejoin after removal ───────────────────────────────
             st, r, tok3, inv3 = invite(owner_tok, "+96176340004")

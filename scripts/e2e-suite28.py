@@ -358,10 +358,12 @@ def sessions():
         sr, cr, new_acc, _ = refresh(ck)
         sl, rl, _ = raw("POST", "/auth/login", {"email": d, "password": c.PW})
         so, ro = call("GET", "/notifications", None, acc)
-        ok = sd < 400 and sr == 401 and not new_acc and sl == 401
+        # Since 2026-10-08 RequireAuth re-reads the account, so the access
+        # token issued before the deletion stops at once too.
+        ok = sd < 400 and sr == 401 and not new_acc and sl == 401 and so == 401
         rec("AUTH-21", "PASS" if ok else "FAIL",
             f"delete-account {sd} {err(rd)}; refresh afterwards {sr} {cr}; login {sl} {err(rl)}; "
-            f"[informational] the old access token: {so} (it lives out its 15 minutes)")
+            f"the access token from before the deletion: {so} {err(ro)}")
 
     # AUTH-22 frozen (self-service) and suspended (operator)
     f = artist("f", 5107)
@@ -370,30 +372,38 @@ def sessions():
     sl, rl, _ = raw("POST", "/auth/login", {"email": f, "password": c.PW})
     sr, cr, new_acc, ck2 = refresh(ck)
     use = call("GET", "/notifications", None, new_acc)[0] if new_acc else None
+    # Decision D27 (2026-10-08): freezing is self-service and its screen
+    # says "you can undo this right here", so the session she froze from
+    # keeps working - it is the only way back. Login must still refuse.
     control = sl == 403 and err(rl) == "ACCOUNT_FROZEN"
     if not control:
-        rec("AUTH-22", "FAIL", f"positive control: a frozen account's login was not refused ({sl} {err(rl)})")
+        rec("AUTH-22", "FAIL", f"a frozen account's login was not refused ({sl} {err(rl)})")
     else:
-        rec("AUTH-22", "PASS" if sr == 401 else "FAIL",
-            f"frozen ({sf}); login refused {sl} ACCOUNT_FROZEN; refresh {sr} {cr or ''}"
-            + (f" -> a NEW session, which reads the inbox: {use}" if new_acc else ""))
+        unfrozen = call("PATCH", "/auth/unfreeze-account", {}, new_acc)[0] if new_acc else None
+        ok = sr == 200 and use == 200 and unfrozen is not None and unfrozen < 400
+        rec("AUTH-22", "PASS" if ok else "FAIL",
+            f"frozen ({sf}): login refused {sl} ACCOUNT_FROZEN, but the session she has keeps working "
+            f"(D27): refresh {sr}, inbox {use}, unfreeze from it {unfrozen}")
 
     s = artist("s", 5108)
     acc, ck, st, code = login_full(s)
+    before = call("GET", "/notifications", None, acc)[0]
     c.sql(f"UPDATE users SET status='suspended' WHERE email='{s}'")
     sl, rl, _ = raw("POST", "/auth/login", {"email": s, "password": c.PW})
+    sa, ra = call("GET", "/notifications", None, acc)
     sr, cr, new_acc, ck2 = refresh(ck)
     rounds = 0
     while new_acc and ck2 and rounds < 3:     # does it renew indefinitely?
         sr2, _, new_acc, ck2 = refresh(ck2)
         rounds += 1 if sr2 == 200 else 0
-    control = sl == 403 and err(rl) == "ACCOUNT_SUSPENDED"
+    control = sl == 403 and err(rl) == "ACCOUNT_SUSPENDED" and before == 200
     if not control:
-        rec("AUTH-22", "FAIL", f"positive control: a suspended account's login was not refused ({sl} {err(rl)})")
+        rec("AUTH-22", "FAIL", f"positive control: before {before}, login {sl} {err(rl)}")
     else:
-        rec("AUTH-22", "PASS" if sr == 401 else "FAIL",
-            f"suspended by an operator; login refused {sl} ACCOUNT_SUSPENDED; refresh {sr} {cr or ''}"
-            + (f"; renewed {rounds} more times in a row" if sr == 200 else ""))
+        ok = sr >= 400 and not new_acc and sa == 403 and err(ra) == "ACCOUNT_SUSPENDED"
+        rec("AUTH-22", "PASS" if ok else "FAIL",
+            f"suspended by an operator: login refused {sl}; the session she had: access token {before} -> {sa} "
+            f"{err(ra)}, refresh {sr} {cr or ''}" + (f"; renewed {rounds} more times in a row" if sr == 200 else ""))
 
     # AUTH-23 logout
     l_ = artist("l", 5109)

@@ -1120,6 +1120,47 @@ func TestCancelBooking_TriggersWaitlistCheck(t *testing.T) {
 	assert.Equal(t, startTime.Day(), repo.notifyNextWaitlistDate.Day())
 }
 
+// TestCancelBooking_WaitlistDay_IsTheStoresDay_OnAUTCServer - E2E 28.11.
+//
+// A waitlist entry asks for a DAY on the salon's calendar. The cascade used
+// to take that day from the booking's start instant in whatever zone the
+// instant carried - and pgx hands timestamptz back in the PROCESS's zone.
+// On the founder's machine (Beirut) that happened to be right; on a server
+// in UTC, a slot freed at 01:30 Beirut on the 13th (22:30 UTC on the 12th)
+// told the queue for the 12th, and the person waiting for the 13th was
+// never told. Measured live 2026-10-08 on Beirut time (correct day), and
+// this test - which hands the cascade a UTC instant, as a UTC server would -
+// was watched failing (got the 12th) before the fix.
+func TestCancelBooking_WaitlistDay_IsTheStoresDay_OnAUTCServer(t *testing.T) {
+	beirut, err := time.LoadLocation("Asia/Beirut")
+	require.NoError(t, err)
+	day := time.Now().In(beirut).AddDate(0, 0, 5)
+	startLocal := time.Date(day.Year(), day.Month(), day.Day(), 1, 30, 0, 0, beirut)
+
+	booking := &Booking{
+		ID:         uuid.New(),
+		CustomerID: uuid.New(),
+		ArtistID:   uuid.New(),
+		StoreID:    uuid.New(),
+		ServiceID:  uuid.New(),
+		StartTime:  startLocal.UTC(), // what pgx returns on a server in UTC
+		Status:     StatusConfirmed,
+	}
+	repo := &mockRepo{
+		getBookingByIDBooking:       booking,
+		getArtistIDByUserIDArtistID: booking.ArtistID,
+		getStoreStore:               &Store{ID: booking.StoreID, Timezone: "Asia/Beirut"},
+	}
+	svc := newTestService(repo)
+
+	_, err = svc.CancelBooking(context.Background(), booking.ID, booking.ArtistID, RoleArtist, CancelBookingRequest{})
+
+	require.NoError(t, err)
+	require.True(t, repo.notifyNextWaitlistCalled)
+	assert.Equal(t, startLocal.Format("2006-01-02"), repo.notifyNextWaitlistDate.Format("2006-01-02"),
+		"the queue told must be the salon's day of the freed slot, not the UTC day")
+}
+
 // TestCancelBooking_WaitlistCheckFails_StillSucceeds - a waitlist-check
 // failure must never fail the cancellation that already succeeded, same
 // best-effort principle as every notification tonight.

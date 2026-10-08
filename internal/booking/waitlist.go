@@ -138,9 +138,21 @@ func (s *Service) cascadeWaitlist(ctx context.Context, b *Booking, reason string
 		return
 	}
 	// The waitlist is keyed to a DATE, not an instant - someone waiting for
-	// "a slot on the 14th" does not care which hour opened up.
-	date := time.Date(b.StartTime.Year(), b.StartTime.Month(), b.StartTime.Day(),
-		0, 0, 0, 0, time.UTC)
+	// "a slot on the 14th" does not care which hour opened up. And it is the
+	// 14th on the SALON's calendar: the instant's own zone is whatever the
+	// process runs in (pgx returns timestamptz in time.Local), so on a server
+	// in UTC a slot freed at 01:30 Beirut used to tell yesterday's queue
+	// (E2E 28.11). If the store cannot be read, the instant's own zone is
+	// the old behaviour, kept rather than skipping the cascade.
+	loc := b.StartTime.Location()
+	if store, err := s.repo.GetStore(ctx, b.StoreID); err == nil && store != nil {
+		loc = storeLocation(store)
+	} else if err != nil {
+		s.log.Warn("waitlist cascade: store not readable, using the instant's own zone for the day",
+			zap.Error(err), zap.String("store_id", b.StoreID.String()))
+	}
+	local := b.StartTime.In(loc)
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 
 	if err := s.repo.NotifyNextWaitlistEntry(ctx, b.ArtistID, b.StoreID, b.ServiceID, date); err != nil {
 		s.log.Error("failed to notify next waitlist entry - the freeing operation still succeeded",

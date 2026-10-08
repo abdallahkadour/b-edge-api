@@ -1,0 +1,11 @@
+# Allowlist, not a denylist. The build context is everything sent to the
+# Docker daemon; listing what to EXCLUDE means a new secret-bearing file
+# (another .env, a database dump in backups/) is included until someone
+# remembers to add it here. Listing what to INCLUDE fails the other way:
+# a forgotten source directory breaks the build loudly instead.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!db/migrations/

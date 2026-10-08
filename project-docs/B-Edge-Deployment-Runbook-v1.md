@@ -3,9 +3,27 @@
 **v1, 2026-09-06.** How this goes to production, and how it comes back after a
 disaster.
 
-> **Nothing is deployed yet.** There is no Dockerfile, no CI, no host. This
-> document covers the parts that are built and verified, and names the parts
-> that need a decision or a purchase.
+> **Nothing is deployed yet — but it is now deployable.** *(Updated
+> 2026-10-09.)* There is a production `Dockerfile` and CI in both repos; what
+> is missing is a host. This document covers the parts that are built and
+> verified, and names the parts that need a decision or a purchase.
+>
+> **The image** (`b-edge-api/Dockerfile`, `make image`): a static binary
+> built **without** `-tags devbypass` on distroless/static, running as
+> nonroot, with `/app/migrate` beside it and the migrations it reads. Swagger
+> docs are generated inside the build at the version `go.mod` pins. Verified
+> 2026-10-09 against a throwaway database: migrate to 054, Discover 200,
+> `/swagger` 200, and the dev code `000000` refused even with
+> `APP_ENV=development` — the bypass is not in the binary. Run it with the
+> environment only (`--env-file`); `.dockerignore` is an allowlist, so no
+> `.env` or dump can enter the build context.
+>
+> **CI** (`.github/workflows/ci.yml` in each repo, alongside `docs-check`):
+> the API job generates Swagger, vets, and runs the unit, database and
+> dev-bypass tiers against a Postgres 15 service, builds the untagged binary,
+> and builds the image; the web job builds the shared library, runs all three
+> unit suites and builds both apps. The live suites (`make verify`, `e2e-*`,
+> chaos, the browser scripts) need a seeded stack and stay local.
 
 ---
 
@@ -224,6 +242,6 @@ cached and will refuse a closed store.
 |---|---|
 | Domain purchase | you — also unblocks Meta verification |
 | Host + Cloudflare account | you |
-| Dockerfile / CI | choice of host |
+| ~~Dockerfile / CI~~ | **Done 2026-10-09** — see the note at the top. Pushing the image to a registry and deploying it waits on the host |
 | `TWILIO_WHATSAPP_FROM` | Meta business verification (**D8**) |
 | WAF managed rules | Cloudflare Pro, worth it at launch not before |

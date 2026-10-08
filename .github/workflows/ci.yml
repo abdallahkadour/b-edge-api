@@ -1,0 +1,77 @@
+# Runs every Go test tier and builds the production image, on every push to
+# main and every pull request.
+#
+# Until 2026-10-09 the only CI job was docs-check: a commit that broke the
+# build, a test, or the image reached main unnoticed unless someone ran the
+# suites by hand. The live suites (make verify, e2e-*, chaos) still need a
+# running stack with seeded data and stay local; this is everything that
+# needs only the code and a database.
+#
+# Verified before it was committed by running exactly these steps in a fresh
+# git worktree: no .env, no generated docs/, file modes as git records them.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # Matches the bedge-postgres container the suites run against locally.
+      # internal/pkg/testdb migrates a template once and clones it per
+      # package, so one server serves the whole dbtest tier.
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # docs/ is gitignored, and cmd/main.go imports it to serve /swagger,
+      # so nothing that builds main compiles without generating it first.
+      # The version is the one go.mod pins.
+      - name: Generate the Swagger package
+        run: go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/main.go -o docs
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./... -count=1
+
+      - name: Database tests
+        run: go test -tags dbtest ./... -count=1
+
+      # The two packages whose tests exist only with the dev bypass compiled
+      # in. The production build below is untagged, so the bypass is absent.
+      - name: Dev-bypass tests
+        run: go test -tags devbypass ./internal/customerauth/ ./internal/pkg/devbypass/ -count=1
+
+      - name: Production build (no dev bypass)
+        run: CGO_ENABLED=0 go build -o /tmp/b-edge ./cmd/main.go
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production image
+        run: docker build -t b-edge-api:ci .

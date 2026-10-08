@@ -37,6 +37,8 @@ Lebanon." Solo founder build.
 | Go tests | **1279**, all passing |
 | Frontend routes | 15 customer · 32 artist-dashboard |
 | Branches | both repos work on `main`; feature branches are merged and deleted |
+| CI | `.github/workflows/ci.yml` in both repos (since 2026-10-09): Go vet + unit + database + dev-bypass tiers + the production image; web shared build + all unit tests + both app builds. The live suites stay local |
+| Deployable | `Dockerfile` (`make image`): untagged static binary, distroless, nonroot, with `/app/migrate`. No host yet |
 
 Counts come from `scripts/doc-facts.sh`, which `make docs-check` compares
 against `project-docs/doc-facts.baseline`.

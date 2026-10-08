@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 e2e-suite27 e2e-suite28 e2e-journeys verify-security-salon chaos-booking verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build image docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 e2e-suite27 e2e-suite28 e2e-journeys verify-security-salon chaos-booking verify verify-security
 
 run:
 	go run cmd/main.go
@@ -25,6 +25,10 @@ swagger:
 # contain the fixed OTP code. See internal/pkg/devbypass.
 build:
 	go build -o bin/b-edge cmd/main.go
+
+# The production image. No -tags devbypass, like `build`; see Dockerfile.
+image:
+	docker build -t b-edge-api .
 
 docker-up:
 	docker-compose up -d

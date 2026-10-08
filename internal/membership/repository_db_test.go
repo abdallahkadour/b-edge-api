@@ -336,3 +336,35 @@ func TestDetachArtist_RemovesHerStoreLinks_KeepsOthers(t *testing.T) {
 	assert.Equal(t, 0, hers, "a departed member must not stay linked to the salon's stores")
 	assert.Equal(t, 1, owners, "the owner's link to the same store must be untouched")
 }
+
+// ── AUTH-20: a phone and an email resolved separately ─────────────────────
+
+func TestContactOwners_ResolvesEachContactOnItsOwn(t *testing.T) {
+	pool := testdb.New(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+
+	var a, b uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO users (name, email, password_hash, role, phone)
+		VALUES ('A','a@contacts.local','x','artist','+96170000101') RETURNING id`).Scan(&a))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO users (name, email, password_hash, role, phone)
+		VALUES ('B','B@Contacts.local','x','artist','+96170000102') RETURNING id`).Scan(&b))
+	str := func(s string) *string { return &s }
+
+	byPhone, byEmail, err := repo.ContactOwners(ctx, str("+96170000101"), str("b@contacts.local"))
+	require.NoError(t, err)
+	require.NotNil(t, byPhone)
+	require.NotNil(t, byEmail)
+	assert.Equal(t, a, *byPhone)
+	assert.Equal(t, b, *byEmail, "the email matches case-insensitively, as everywhere else")
+
+	byPhone, byEmail, err = repo.ContactOwners(ctx, str("+96170000101"), str("nobody@contacts.local"))
+	require.NoError(t, err)
+	assert.Equal(t, a, *byPhone)
+	assert.Nil(t, byEmail)
+
+	byPhone, byEmail, err = repo.ContactOwners(ctx, nil, str("a@contacts.local"))
+	require.NoError(t, err)
+	assert.Nil(t, byPhone, "an absent contact matches nobody, not everybody")
+	assert.Equal(t, a, *byEmail)
+}

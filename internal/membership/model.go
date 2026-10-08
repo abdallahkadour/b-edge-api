@@ -244,6 +244,12 @@ func errNotYourInvitation() *apperror.AppError {
 		"This invitation was sent to someone else. Sign in with the account it was sent to")
 }
 
+func errContactsDisagree() *apperror.AppError {
+	return apperror.Conflict("CONTACTS_DISAGREE",
+		"That phone number and that email do not belong to the same B-Edge account. "+
+			"Invite with one of them.")
+}
+
 func errInvalidContact() *apperror.AppError {
 	return apperror.BadRequest("INVALID_CONTACT",
 		"Enter a valid mobile number or email address")

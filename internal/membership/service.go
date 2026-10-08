@@ -154,6 +154,24 @@ func (s *Service) Invite(ctx context.Context, salonID, actorID uuid.UUID,
 		return nil, err
 	}
 
+	//    Given BOTH a phone and an email, they must name the same account
+	//    (security AUTH-20). The lookups below and the one at accept each
+	//    take the first user matching either contact, so with two different
+	//    holders the invitation went to whichever row came first - measured
+	//    2026-10-08: the email's owner was refused and the phone's owner
+	//    joined. A contact nobody holds yet is refused too, or the next person
+	//    to register it would make the invitation ambiguous again.
+	if ph != nil && em != nil {
+		byPhone, byEmail, err := s.repo.ContactOwners(ctx, ph, em)
+		if err != nil {
+			return nil, err
+		}
+		if (byPhone != nil || byEmail != nil) &&
+			(byPhone == nil || byEmail == nil || *byPhone != *byEmail) {
+			return nil, errContactsDisagree()
+		}
+	}
+
 	// 2. WHO IS BEING INVITED. Since migration 051 a salon may only invite
 	//    somebody who already exists as a beauty professional on B-Edge.
 	//

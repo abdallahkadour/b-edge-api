@@ -42,6 +42,8 @@ type mockRepo struct {
 	transferCalled bool
 	liveCount      int
 	dayCount       int
+	byPhone        *uuid.UUID
+	byEmail        *uuid.UUID
 	daySince       time.Time
 	ceiling        int
 	ceilingPlan    string
@@ -176,6 +178,10 @@ func (m *mockRepo) UserIDByContact(_ context.Context, _, _ *string) (*uuid.UUID,
 // every pre-existing test in this file is about something else.
 //
 // Tests that care about the invitee set m.invitee or m.inviteeErr explicitly.
+func (m *mockRepo) ContactOwners(_ context.Context, _, _ *string) (*uuid.UUID, *uuid.UUID, error) {
+	return m.byPhone, m.byEmail, nil
+}
+
 func (m *mockRepo) InviteeByContact(_ context.Context, _, _ *string) (*Invitee, error) {
 	if m.inviteeErr != nil {
 		return nil, m.inviteeErr

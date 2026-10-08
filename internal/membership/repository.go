@@ -48,6 +48,11 @@ type Repository interface {
 
 	UserIDByContact(ctx context.Context, phone, email *string) (*uuid.UUID, error)
 
+	// ContactOwners resolves a phone and an email SEPARATELY, so Invite can
+	// tell when they belong to two different accounts (security AUTH-20).
+	// Either result is nil when nobody holds that contact.
+	ContactOwners(ctx context.Context, phone, email *string) (byPhone, byEmail *uuid.UUID, err error)
+
 	// InviteeByContact resolves a contact to the registered user behind it,
 	// with their artist row and verification state. ErrNotFound means nobody
 	// is registered under that contact - which since migration 051 is itself
@@ -421,6 +426,23 @@ func (r *pgRepo) InviteeByContact(ctx context.Context, phone, email *string) (*I
 		return nil, fmt.Errorf("invitee by contact: %w", err)
 	}
 	return &iv, nil
+}
+
+// ContactOwners looks the phone and the email up separately - the point is
+// to see them disagree, which the either-or lookups below cannot. LIMIT 1
+// inside each is defensive: phone is unique among live users
+// (users_phone_unique), email only as typed (users_email_key), so two rows
+// differing in case could both match the lower() comparison.
+func (r *pgRepo) ContactOwners(ctx context.Context, phone, email *string) (*uuid.UUID, *uuid.UUID, error) {
+	var byPhone, byEmail *uuid.UUID
+	err := r.db.QueryRow(ctx, `
+		SELECT (SELECT id FROM users WHERE deleted_at IS NULL AND $1::text IS NOT NULL AND phone = $1 LIMIT 1),
+		       (SELECT id FROM users WHERE deleted_at IS NULL AND $2::text IS NOT NULL AND lower(email) = lower($2) LIMIT 1)`,
+		phone, email).Scan(&byPhone, &byEmail)
+	if err != nil {
+		return nil, nil, fmt.Errorf("contact owners: %w", err)
+	}
+	return byPhone, byEmail, nil
 }
 
 func (r *pgRepo) UserIDByContact(ctx context.Context, phone, email *string) (*uuid.UUID, error) {

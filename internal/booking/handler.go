@@ -104,6 +104,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 	b.Get("/artist/:artist_id/waitlist", middleware.RequireRole("artist", "admin"), handler.GetWaitlistByArtist)
 	b.Get("/customer/me", handler.GetBookingsByCustomer)
 	b.Patch("/:id/reschedule", handler.RescheduleBooking)
+	b.Get("/:id/reschedule-slots", handler.RescheduleSlots)
 }
 
 // GetAvailableSlots godoc
@@ -866,4 +867,32 @@ func (h *Handler) RescheduleBooking(c *fiber.Ctx) error {
 		return err
 	}
 	return response.OK(c, out)
+}
+
+// RescheduleSlots godoc
+// @Summary      Times a customer may move her booking to, on one day
+// @Description  Exactly the times PATCH /bookings/{id}/reschedule will accept: the
+// @Description  artist's availability with this booking itself left out, so a time
+// @Description  overlapping the current appointment is offered. Only the booking's
+// @Description  own customer; anyone else gets 404, as for a missing booking.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        id   path  string true "Booking UUID"
+// @Param        date query string true "Day, YYYY-MM-DD"
+// @Success      200 {object} response.Body{data=[]TimeSlot}
+// @Failure      404 {object} response.ErrorBody
+// @Failure      409 {object} response.ErrorBody "NOT_MOVABLE or RESCHEDULE_LIMIT"
+// @Router       /bookings/{id}/reschedule-slots [get]
+func (h *Handler) RescheduleSlots(c *fiber.Ctx) error {
+	bookingID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return errBookingNotFound()
+	}
+	slots, err := h.svc.RescheduleSlots(c.UserContext(), bookingID,
+		middleware.UserIDFromContext(c), c.Query("date"))
+	if err != nil {
+		return err
+	}
+	return response.OK(c, slots)
 }

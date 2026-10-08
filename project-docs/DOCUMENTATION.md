@@ -29,13 +29,13 @@
 > **Verified against code 2026-10-08:** **54 migrations**
 > (latest `054_order_request_id`), **36 tables**, **20 route-bearing
 > domains** (26 directories under `internal/`, excluding `pkg`), **20 leaf
-> packages**, **158 route registrations** across **136 swagger paths** (corrected
+> packages**, **159 route registrations** across **137 swagger paths** (corrected
 > 2026-09-26: the counter had included ~30 routes that tests mount on
 > throwaway apps and missed 24 registered with a `base+` prefix),
-> **1272 Go tests**, **28 environment variable names** read via `os.Getenv`
-> (test files included). Frontend: **46 Angular routes**, **19 spec files**
-> carrying **96 passing tests** (shared 55, artist-dashboard 18,
-> customer-pwa 23), **49 help topics** (15 customer, 30 artist, 4 admin).
+> **1279 Go tests**, **28 environment variable names** read via `os.Getenv`
+> (test files included). Frontend: **47 Angular routes**, **21 spec files**
+> carrying **107 passing tests** (shared 55, artist-dashboard 18,
+> customer-pwa 34), **50 help topics** (16 customer, 30 artist, 4 admin).
 >
 > These numbers are now **generated, not typed**:
 > `./scripts/doc-facts.sh` recomputes them from the repository and
@@ -68,6 +68,15 @@
 > *Previous: verified against code 2026-09-05 — 33 migrations, 29 tables,
 > 17 domains, 115 route registrations (102 paths in swagger), 645 Go tests,
 > frontend 8 tests.*
+
+## What shipped Oct 9, 2026 — the five unblocked features
+
+Built one by one after the 2026-10-08 status review listed what needed no
+founder decision and no procurement.
+
+| Area | What changed | Where to read |
+|---|---|---|
+| **Customers can move a booking** | **Change time** on the booking (customer app) opens the funnel's time picker in a "move" mode; at most two moves, price and deposit unchanged, the artist told. Its times come from the new `GET /bookings/:id/reschedule-slots`, which leaves the booking itself out of the artist's occupancy — the public slots list hid every time overlapping it. The booking now says whether it can move (`can_reschedule`, `reschedules_left`). Closes E2E 28.10, the "no screen" gap. | E2E plan 28.10 · `internal/booking/reschedule.go` · `move-booking.page.ts` · customer help "Change the time of a booking" |
 
 ## What shipped Sep 19, 2026 — afternoon (Rania's first session)
 

@@ -418,8 +418,8 @@ type GetAvailableSlotsRequest struct {
 	//
 	// Unexported deliberately: BodyParser and the query binder cannot reach it,
 	// so no caller can ask for availability "as if booking X did not exist".
-	// Set only by RescheduleBooking, which has already proved the caller owns
-	// that booking.
+	// Set only by RescheduleBooking and RescheduleSlots, after
+	// movableBookingFor has proved the caller owns that booking.
 	excludeBookingID *uuid.UUID
 }
 
@@ -606,6 +606,12 @@ type EnrichedBookingResponse struct {
 	// the plain BookingResponse the guest funnel returns - at guest-submit
 	// time the booking is still pending and no token exists yet.
 	CalendarToken *string `json:"calendar_token,omitempty"`
+	// CanReschedule and ReschedulesLeft drive the customer's "Change time"
+	// action. Derived here, from the same rules RescheduleBooking enforces
+	// (isMovableStatus, maxReschedules, a start still in the future), so the
+	// screen never offers a move the server would refuse.
+	CanReschedule   bool `json:"can_reschedule"`
+	ReschedulesLeft int  `json:"reschedules_left"`
 	// Meta
 	Channel            string    `json:"channel"`
 	SpecialRequests    *string   `json:"special_requests,omitempty"`
@@ -615,7 +621,13 @@ type EnrichedBookingResponse struct {
 
 // toEnrichedResponse converts an EnrichedBooking row to its client representation.
 func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
+	left := maxReschedules - e.RescheduleCount
+	if left < 0 {
+		left = 0
+	}
 	return &EnrichedBookingResponse{
+		CanReschedule:        isMovableStatus(e.Status) && left > 0 && e.StartTime.After(time.Now()),
+		ReschedulesLeft:      left,
 		ID:                   e.ID,
 		SalonID:              e.SalonID,
 		StoreID:              e.StoreID,

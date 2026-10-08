@@ -13,7 +13,8 @@ Go tests.
   28.8      AUTH-22   a frozen or suspended account cannot keep itself signed in
   AUTH-23   logout ends the refresh token
   28.9      the API refuses what the onboarding form explains
-  28.10     a customer's reschedule has no screen (a gap, reported as GAP)
+  28.10     a customer moves her booking: the times offered are the times the
+            move accepts (her own appointment excluded), once, twice, then no more
   INJ-09    hostile invitation tokens never produce a 500
   FRAUD-23  (opt-in, --fraud23) forged address headers do not reset the
             promo-code limiter. Opt-in for the same reason as suite 27's
@@ -438,17 +439,58 @@ def onboarding_rules():
         rec("28.9", "FAIL", "one of the bad submissions onboarded her")
 
 
-# ── 28.10 reschedule has no screen ───────────────────────────────────────
+# ── 28.10 moving a booking (API half; the screens are e2e-suite28-ui.mjs) ──
 
-def reschedule_screen():
-    web = os.path.join(HERE, "..", "..", "b-edge-web", "projects")
-    p = subprocess.run(["grep", "-rli", "--include=*.ts", "--include=*.html", "reschedule", web],
-                       capture_output=True, text=True)
-    files = [l for l in p.stdout.splitlines() if l and ".spec." not in l]
-    if files:
-        rec("28.10", "PASS", f"a screen calls reschedule: {files[:3]}")
-    else:
-        rec("28.10", "GAP", "PATCH /bookings/:id/reschedule works (E2E 14.4) but no screen in either app calls it")
+def reschedule_flow(owner, salon, store, service):
+    """Until 2026-10-09 no screen could move a booking. The screen now asks
+    GET /bookings/:id/reschedule-slots, which must offer exactly what the move
+    accepts - including a time that overlaps her own appointment, which the
+    public slots endpoint hides because it counts the booking as busy."""
+    from datetime import datetime, timedelta as td
+
+    def customer(n):
+        st, r = call("POST", "/customer-auth/verify-otp", {"phone": GUEST.format(n), "code": "000000"})
+        return data(r).get("access_token"), c.sql(f"SELECT id FROM users WHERE phone='{GUEST.format(n)}'")
+
+    tok, cust = customer(40)
+    other_tok, _ = customer(41)
+    day, before = free_day(owner, store, service)
+    if not tok or not day or len(before) < 3:
+        rec("28.10", "FAIL", f"setup: customer token {bool(tok)}, day {day}, {len(before)} times")
+        return
+    t0 = before[1]
+    at0 = datetime.fromisoformat(t0.replace("Z", "+00:00"))
+    minutes = int(c.sql(f"SELECT duration_min FROM services WHERE id='{service}'"))
+    buffer_ = int(c.sql(f"SELECT COALESCE(buffer_min,0) FROM services WHERE id='{service}'"))
+    end = at0 + td(minutes=minutes)
+    b = c.sql(f"""INSERT INTO bookings (salon_id, store_id, artist_id, customer_id, service_id, start_time, end_time,
+                 blocked_until, original_price, final_price, deposit_amount, status, special_requests)
+                 VALUES ('{salon}','{store}','{owner}','{cust}','{service}','{at0.isoformat()}','{end.isoformat()}',
+                 '{(end + td(minutes=buffer_)).isoformat()}',150,150,30,'confirmed','s28 move') RETURNING id""")
+    overlapping = [t for t in before if at0 < datetime.fromisoformat(t.replace("Z", "+00:00")) < end]
+    target = overlapping[0] if overlapping else t0
+
+    st_p, r_p = call("GET", f"/bookings/slots?artist_id={owner}&store_id={store}&service_id={service}&date={day}")
+    public = [x["start_time"] for x in (r_p.get("data") or [])] if isinstance(r_p.get("data"), list) else []
+    st_r, r_r = call("GET", f"/bookings/{b}/reschedule-slots?date={day}", None, tok)
+    own = [x["start_time"] for x in (r_r.get("data") or [])] if isinstance(r_r.get("data"), list) else []
+    st_x, r_x = call("GET", f"/bookings/{b}/reschedule-slots?date={day}", None, other_tok)
+    if target in public:
+        rec("28.10", "FAIL", f"positive control: the public list offers {target}, which overlaps her booking")
+        return
+    rec("28.10 times", "PASS" if st_r == 200 and target in own and st_x == 404 else "FAIL",
+        f"public list hides {target[11:16]}Z (overlaps her booking); her reschedule-slots {st_r} offers it: "
+        f"{target in own}; another customer {st_x} {err(r_x)}")
+
+    st_m, r_m = call("PATCH", f"/bookings/{b}/reschedule", {"start_time": target}, tok)
+    st_g, r_g = call("GET", f"/bookings/{b}", None, tok)
+    g = data(r_g)
+    moved = datetime.fromisoformat((g.get("start_time") or "1970-01-01T00:00:00Z").replace("Z", "+00:00")) == \
+        datetime.fromisoformat(target.replace("Z", "+00:00"))
+    rec("28.10 move", "PASS" if st_m == 200 and moved and g.get("can_reschedule") is True
+        and g.get("reschedules_left") == 1 else "FAIL",
+        f"move -> {st_m} {err(r_m)}; now at the new time: {moved}; can_reschedule {g.get('can_reschedule')}, "
+        f"reschedules_left {g.get('reschedules_left')}")
 
 
 # ── INJ-09 hostile invitation tokens ─────────────────────────────────────
@@ -514,7 +556,7 @@ def main():
     sessions()
     print()
     onboarding_rules()
-    reschedule_screen()
+    reschedule_flow(owner, salon, store, service)
     hostile_tokens(owner_tok)
     if "--fraud23" in sys.argv:
         pid = c.sql(f"SELECT id FROM products WHERE salon_id='{salon}' LIMIT 1")

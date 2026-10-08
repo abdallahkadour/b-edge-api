@@ -61,27 +61,9 @@ func (s *Service) RescheduleBooking(ctx context.Context, bookingID, requesterUse
 	}
 	newStart = newStart.UTC()
 
-	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	b, err := s.movableBookingFor(ctx, bookingID, requesterUserID)
 	if err != nil {
-		if errors.Is(err, ErrBookingNotFound) {
-			return nil, errBookingNotFound()
-		}
-		return nil, fmt.Errorf("reschedule: get booking: %w", err)
-	}
-
-	// A booking belonging to someone else is reported exactly as a missing
-	// one. Anything else lets a caller confirm a booking id is real.
-	if b.CustomerID != requesterUserID {
-		return nil, errBookingNotFound()
-	}
-
-	if !isMovableStatus(b.Status) {
-		return nil, apperror.Conflict("NOT_MOVABLE",
-			"This booking can no longer be moved")
-	}
-	if b.RescheduleCount >= maxReschedules {
-		return nil, apperror.Conflict("RESCHEDULE_LIMIT",
-			"This booking has already been moved twice. Please cancel and book again.")
+		return nil, err
 	}
 	if !newStart.After(time.Now().UTC()) {
 		return nil, apperror.BadRequest("START_IN_PAST", "Choose a time in the future")
@@ -147,6 +129,58 @@ func (s *Service) RescheduleBooking(ctx context.Context, bookingID, requesterUse
 // Narrower than BlockingStatuses: a HELD booking is an unconfirmed guest hold
 // that expires on its own, and moving one would extend a reservation nobody
 // has committed to.
+// movableBookingFor loads a booking its customer may still move, or says why
+// not. Shared by RescheduleBooking and RescheduleSlots so the times a customer
+// is shown and the move she makes are judged by the same rules.
+func (s *Service) movableBookingFor(ctx context.Context, bookingID, requesterUserID uuid.UUID) (*Booking, error) {
+	b, err := s.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		if errors.Is(err, ErrBookingNotFound) {
+			return nil, errBookingNotFound()
+		}
+		return nil, fmt.Errorf("reschedule: get booking: %w", err)
+	}
+
+	// A booking belonging to someone else is reported exactly as a missing
+	// one. Anything else lets a caller confirm a booking id is real.
+	if b.CustomerID != requesterUserID {
+		return nil, errBookingNotFound()
+	}
+
+	if !isMovableStatus(b.Status) {
+		return nil, apperror.Conflict("NOT_MOVABLE",
+			"This booking can no longer be moved")
+	}
+	if b.RescheduleCount >= maxReschedules {
+		return nil, apperror.Conflict("RESCHEDULE_LIMIT",
+			"This booking has already been moved twice. Please cancel and book again.")
+	}
+	return b, nil
+}
+
+// RescheduleSlots lists the times a customer may move her booking to on one
+// day - exactly the times RescheduleBooking will accept.
+//
+// The public slots endpoint cannot answer this: it counts the booking being
+// moved as occupied, so every time overlapping her own appointment (moving it
+// half an hour later, say) is hidden although the move would be allowed.
+// This asks the generator with that booking excluded, after the same checks
+// the move makes, which is why the exclusion can stay unreachable from the
+// public endpoint.
+func (s *Service) RescheduleSlots(ctx context.Context, bookingID, requesterUserID uuid.UUID, date string) ([]*TimeSlot, error) {
+	b, err := s.movableBookingFor(ctx, bookingID, requesterUserID)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAvailableSlots(ctx, GetAvailableSlotsRequest{
+		ArtistID:         b.ArtistID.String(),
+		StoreID:          b.StoreID.String(),
+		ServiceID:        b.ServiceID.String(),
+		Date:             date,
+		excludeBookingID: &b.ID,
+	})
+}
+
 func isMovableStatus(status string) bool {
 	switch status {
 	case StatusPending, StatusApproved, StatusDepositPaid, StatusConfirmed:

@@ -2,6 +2,8 @@
 package middleware
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -31,18 +33,33 @@ func RequireAuth() fiber.Handler {
 			return apperror.Unauthorized("TOKEN_INVALID", "Authentication failed")
 		}
 
-		c.Locals("user_id", claims.UserID)
-		c.Locals("salon_id", claims.SalonID)
-		c.Locals("role", claims.Role)
-
 		// A token minted before salon_role existed decodes with the zero
 		// value, which is salonrole.None and holds no capabilities. Coerce
 		// anything unrecognised to the same, so a malformed claim cannot
 		// index the matrix as a role nobody defined.
-		sr := claims.SalonRole
+		salonID, sr := claims.SalonID, claims.SalonRole
 		if !salonrole.Valid(sr) {
 			sr = salonrole.None
 		}
+
+		// The token says who is calling; the database says what they are
+		// now. See Standing for the two security cases this closes.
+		if currentStanding != nil {
+			st, err := currentStanding(c.UserContext(), claims.UserID)
+			switch {
+			case errors.Is(err, ErrAccountGone):
+				return apperror.Unauthorized("TOKEN_INVALID", "Authentication failed")
+			case err != nil:
+				return fmt.Errorf("require auth: current standing: %w", err)
+			case st.Suspended:
+				return apperror.Forbidden("ACCOUNT_SUSPENDED", "Your account has been suspended")
+			}
+			salonID, sr = st.SalonID, st.SalonRole
+		}
+
+		c.Locals("user_id", claims.UserID)
+		c.Locals("salon_id", salonID)
+		c.Locals("role", claims.Role)
 		c.Locals("salon_role", sr)
 
 		return c.Next()

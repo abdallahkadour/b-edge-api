@@ -66,6 +66,12 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	svc := NewService(repo, auditRepo)
 	handler := NewHandler(svc, log)
 
+	// Every RequireAuth in the app re-reads the caller's account from here on
+	// (security AUTH-14b, AUTH-22). Installed by the package that owns the
+	// account and the salon-role derivation; TestRegisterRoutes_InstallsTheStandingCheck
+	// fails if this line goes.
+	middleware.UseCurrentStanding(svc.CurrentStanding)
+
 	auth := app.Group("/api/v1/auth")
 
 	// Public routes - no token required
@@ -142,10 +148,12 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 
 // Refresh godoc
 // @Summary      Refresh access token using refresh token cookie
+// @Description  A suspended account gets 403 ACCOUNT_SUSPENDED and no new session. A frozen one keeps its session (decision D27).
 // @Tags         auth
 // @Produce      json
 // @Success      200  {object} response.Body{data=LoginResult}
 // @Failure      401  {object} response.ErrorBody
+// @Failure      403  {object} response.ErrorBody "ACCOUNT_SUSPENDED"
 // @Router       /auth/refresh [post]
 func (h *Handler) Refresh(c *fiber.Ctx) error {
 	// Read refresh token from httpOnly cookie

@@ -26,7 +26,10 @@ const (
 	// StatusActive is the default status for newly registered users.
 	StatusActive = "active"
 
-	// StatusFrozen is set by an admin to temporarily block a user from booking.
+	// StatusFrozen is set by the user herself (PATCH /auth/freeze-account):
+	// login refuses it, but the session she froze from keeps working so she
+	// can unfreeze - decision D27. (This comment used to say "set by an
+	// admin"; no admin route sets it.)
 	StatusFrozen = "frozen"
 
 	// StatusSuspended is set by an admin for policy violations.

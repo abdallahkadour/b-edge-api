@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/audit"
+	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/hash"
 	internaljwt "github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
@@ -288,6 +289,18 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*LoginRe
 		return nil, fmt.Errorf("refresh: get user: %w", err)
 	}
 
+	// Step 5b: a suspended account gets no new session (security AUTH-22).
+	// Login always refused it; refresh did not, so a session that existed
+	// before the suspension renewed itself indefinitely - measured
+	// 2026-10-08. The used token was revoked in step 4, so this ends it.
+	//
+	// A FROZEN account is let through on purpose (decision D27): freezing
+	// is self-service and its screen promises "you can undo this right
+	// here", which only works while the session lives.
+	if user.Status == StatusSuspended {
+		return nil, apperror.Forbidden("ACCOUNT_SUSPENDED", "Your account has been suspended")
+	}
+
 	// Step 6: Issue new token pair
 	tokens, err := s.generateAndStoreTokens(ctx, user)
 	if err != nil {
@@ -298,6 +311,27 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*LoginRe
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
 		User:         toUserInfo(user),
+	}, nil
+}
+
+// CurrentStanding is the per-request account check middleware.RequireAuth
+// runs (installed by RegisterRoutes). It answers from the database row - the
+// same load and the same role derivation as token issue, so the role a
+// handler sees on request N is exactly the role a fresh login would get.
+// See middleware.Standing for why it exists (security AUTH-14b, AUTH-22).
+func (s *Service) CurrentStanding(ctx context.Context, userID uuid.UUID) (*middleware.Standing, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			// GetUserByID excludes deleted accounts.
+			return nil, middleware.ErrAccountGone
+		}
+		return nil, fmt.Errorf("current standing: %w", err)
+	}
+	return &middleware.Standing{
+		Suspended: user.Status == StatusSuspended,
+		SalonID:   user.SalonID,
+		SalonRole: resolveSalonRole(user),
 	}, nil
 }
 

@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 verify-security-salon chaos-booking verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 e2e-suite27 e2e-suite28 e2e-journeys verify-security-salon chaos-booking verify verify-security
 
 run:
 	go run cmd/main.go
@@ -110,6 +110,21 @@ e2e-suite23:
 ##                                     # budget for 10 minutes
 e2e-suite27:
 	python3 scripts/e2e-suite27.py $(ARGS)
+
+## e2e-suite28: who an invitation is for, and when a login should stop working
+##
+## E2E 28.2-28.10 and security 3.4f (AUTH-14b, AUTH-20 to AUTH-23, INJ-09)
+## against a running stack. 28.6 tries every member write twice - with the
+## removed member's old token and with a fresh login - so a stale-token pass
+## is told apart from a route that never checks the salon. The join page
+## (28.1-28.3) is b-edge-web: node scripts/e2e-suite28-ui.mjs. Builds and
+## destroys its own salon. Needs -tags devbypass (make dev).
+##
+##   make e2e-suite28 ARGS=--fraud23   # also prove forged address headers do
+##                                     # not reset the code limiter - spends
+##                                     # this machine's code budget for 10 min
+e2e-suite28:
+	python3 scripts/e2e-suite28.py $(ARGS)
 
 ## e2e-journeys: E2E suites 2-16, the behaviour half
 ##

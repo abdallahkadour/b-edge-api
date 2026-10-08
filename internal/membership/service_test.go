@@ -42,6 +42,7 @@ type mockRepo struct {
 	transferCalled bool
 	liveCount      int
 	dayCount       int
+	daySince       time.Time
 	ceiling        int
 	ceilingPlan    string
 }
@@ -105,7 +106,8 @@ func (m *mockRepo) CountLiveInvitations(_ context.Context, _ uuid.UUID) (int, er
 	return m.liveCount, nil
 }
 
-func (m *mockRepo) CountInvitationsSince(_ context.Context, _ uuid.UUID, _ time.Time) (int, error) {
+func (m *mockRepo) CountInvitationsSince(_ context.Context, _ uuid.UUID, since time.Time) (int, error) {
+	m.daySince = since
 	return m.dayCount, nil
 }
 
@@ -627,6 +629,23 @@ func TestLeave_Member_Detached(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{m.ArtistID}, repo.detached)
 }
 
+// TestLeave_Member_LosesHerRefreshTokens - leaving must end her ability to
+// renew a login that still names the salon, exactly as removal does
+// (security AUTH-14). Mutation testing on 2026-10-08 found nothing asserted
+// it: `if s.tokens != nil` negated in Leave survived.
+func TestLeave_Member_LosesHerRefreshTokens(t *testing.T) {
+	repo := newMockRepo()
+	salonID := uuid.New()
+	m := memberFixture(false, 0, "active")
+	repo.members[m.ArtistID] = m
+	repo.artistID, repo.artistSalon = m.ArtistID, &salonID
+	repo.activeCount = 2
+	svc, _, tk := newTestService(repo, &mockOnboarding{})
+
+	require.NoError(t, svc.Leave(context.Background(), salonID, m.UserID, ""))
+	assert.Equal(t, []uuid.UUID{m.UserID}, tk.revoked)
+}
+
 func TestLeave_Owner_MustTransferFirst(t *testing.T) {
 	repo := newMockRepo()
 	salonID := uuid.New()
@@ -751,6 +770,23 @@ func TestInvite_TooManyLiveInvitations_Refused(t *testing.T) {
 
 	assert.Equal(t, "INVITATION_LIMIT", code(t, err))
 	assert.Nil(t, repo.created, "nothing may be written once the cap is reached")
+}
+
+// TestInvite_DailyCap_CountsTheLast24Hours - "today" is a rolling 24 hours
+// back from now, not since midnight and not some other span. Mutation
+// testing on 2026-10-08 found the window unconstrained: the mock ignored
+// the argument, so `now.Add(+24h)` or `now.Add(-24)` (nanoseconds) survived.
+func TestInvite_DailyCap_CountsTheLast24Hours(t *testing.T) {
+	repo := newMockRepo()
+	repo.dayCount = MaxInvitationsPerDay
+	svc, _, _ := newTestService(repo, &mockOnboarding{})
+	fixed := time.Date(2026, 10, 8, 21, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixed }
+
+	_, _ = svc.Invite(context.Background(), uuid.New(), uuid.New(), InviteRequest{Phone: "70555123"}, "")
+
+	assert.True(t, repo.daySince.Equal(fixed.Add(-24*time.Hour)),
+		"the daily cap must count from exactly 24 hours ago, got %s", repo.daySince)
 }
 
 func TestInvite_TooManyInvitationsToday_Refused(t *testing.T) {

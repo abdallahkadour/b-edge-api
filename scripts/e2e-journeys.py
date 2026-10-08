@@ -935,7 +935,7 @@ def suite13(w):
     items = feed_items(feed)
     rec("13.4", "PASS" if s_or == 404 and s_oa == 404 and still == "t" and not any(x.get("id") == mine for x in (items or [])) else "FAIL",
         f"another artist reads -> {s_or} {err(r_or)}, archives -> {s_oa}; her read-all left mine unread: {still == 't'}")
-    rec("13.5", "SKIP", "needs a forced Twilio failure through the running worker; no automated test covers it either - a gap")
+    rec("13.5", "SKIP", "needs a forced Twilio failure through the running worker; covered instead by the Go database test for E2E 28.12 (internal/notification/worker_db_test.go)")
 
     # 13.6 long titles are refused by the column, not truncated
     ok, e = sql_try(BUNDLE_SQL.format(u=u, t="x" * 201, g="NULL"))

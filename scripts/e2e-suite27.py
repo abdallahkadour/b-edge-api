@@ -62,7 +62,26 @@ def rec(tid, verdict, detail):
 
 
 def call(method, path, body=None, token=None, headers=None):
-    """chaos.call, plus arbitrary headers (FRAUD-21 forges one)."""
+    """chaos.call, plus arbitrary headers (FRAUD-21 forges one), and it waits
+    out the GENERAL rate limit instead of reporting it.
+
+    Run straight after the other suites (2026-10-08), the API's own
+    600-requests-per-5-minutes budget for localhost was already spent: the
+    slot list came back as a 429, was read as "no open times", and the run
+    died with an IndexError two cases in. Only RATE_LIMIT_EXCEEDED is waited
+    out; TOO_MANY_HOLDS and TOO_MANY_CODE_ATTEMPTS are answers this suite
+    asserts on."""
+    for _ in range(12):
+        st, r = _call_once(method, path, body, token, headers)
+        if st == 429 and err(r) == "RATE_LIMIT_EXCEEDED":
+            print("    (request limit reached - waiting 30s for the window)")
+            time.sleep(30)
+            continue
+        return st, r
+    return st, r
+
+
+def _call_once(method, path, body=None, token=None, headers=None):
     h = {"Content-Type": "application/json"}
     if token:
         h["Authorization"] = "Bearer " + token
@@ -83,6 +102,9 @@ def call(method, path, body=None, token=None, headers=None):
 
 def err(r):
     return ((r or {}).get("error") or {}).get("code")
+
+
+c.call = lambda method, path, body=None, token=None: call(method, path, body, token)
 
 
 def slots(artist, store, service, day):

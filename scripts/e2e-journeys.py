@@ -254,8 +254,12 @@ def suite3(w):
             sql(f"INSERT INTO artist_stores (artist_id, store_id) VALUES ('{w.artist}','{w.store_b}')")
         # strictly after `day`: next_weekday(5) and next_weekday(6) can both
         # land on the same Monday, and the earlier booking there collided
+        # and Monday-Thursday only: the product's weekend is Friday-Sunday
+        # (Lebanon; booking/slots.go), when the buffer is 90 minutes, not 150.
+        # Skipping only Sat/Sun failed this case on 2026-10-10, when the day
+        # landed on a Friday and the product correctly used 90.
         bday = date.fromisoformat(day) + timedelta(days=1)
-        while bday.weekday() >= 5:
+        while bday.weekday() >= 4:
             bday += timedelta(days=1)
         cust = sql("SELECT id FROM users WHERE role='customer' AND deleted_at IS NULL ORDER BY created_at LIMIT 1")
         offset = "+03:00" if 4 <= bday.month <= 10 else "+02:00"
@@ -1056,11 +1060,23 @@ def suite14(w):
         f"{'\\u202e' in page}/{'%E2%80%AE' in page.upper()}/{'\\u202e' in ics3}")
     rec("14.8", "SKIP", "importing into Apple Calendar, Google Calendar and Outlook - manual by definition")
 
-    # 14.9 fifty concurrent fetches are byte-identical
+    # 14.9 fifty concurrent fetches describe the same event. Identical apart
+    # from DTSTAMP: the file carries METHOD, so RFC 5545 makes DTSTAMP the time
+    # this copy was generated - request time is right. "Byte-identical" held
+    # only while all fifty landed in one wall-clock second; on 2026-10-10 they
+    # straddled one and the check failed a correct product.
     import concurrent.futures as cf
+    import re as _re
+    t0 = datetime.now(timezone.utc)
     with cf.ThreadPoolExecutor(50) as ex:
         bodies = list(ex.map(lambda _: raw_get(f"/c/{tok}.ics")[2], range(50)))
-    rec("14.9", "PASS" if len(set(bodies)) == 1 else "FAIL", f"50 concurrent fetches -> {len(set(bodies))} distinct bodies")
+    t1 = datetime.now(timezone.utc)
+    events = {_re.sub(r"DTSTAMP:\S+", "DTSTAMP:-", b_) for b_ in bodies}
+    stamps = [datetime.strptime(m, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+              for b_ in bodies for m in _re.findall(r"DTSTAMP:(\S+)", b_)]
+    fresh = len(stamps) == 50 and all(t0 - timedelta(seconds=1) <= st_ <= t1 + timedelta(seconds=1) for st_ in stamps)
+    rec("14.9", "PASS" if len(events) == 1 and fresh else "FAIL",
+        f"50 concurrent fetches -> {len(events)} distinct event(s) once DTSTAMP is set aside; every DTSTAMP is the fetch time: {fresh}")
     sql(f"UPDATE stores SET name='j2-owner branch' WHERE id='{w.store}'")
     sql(f"UPDATE services SET name='j2 Bridal' WHERE id='{w.service}'")
 

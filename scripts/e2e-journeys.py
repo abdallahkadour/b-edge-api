@@ -272,6 +272,18 @@ def suite3(w):
         rec("3.5", "PASS" if not inside and outside else "FAIL",
             f"store A booked until {end_a}Z (store B linked by the harness: {linked == '0'}); store B offers "
             f"{len(inside)} times inside the 150-min travel window, {len(outside)} after it")
+        # 3.5b - not offered is not enough: a hold sent straight to the API
+        # inside the window must be refused too (audit 2026-10-10: it was
+        # 201 until the hold asked the slot list and the transaction
+        # re-checked travel under a per-artist lock).
+        inside_t = (end_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        st_in, r_in = call("POST", "/bookings/guest/hold", {"artist_id": w.artist, "store_id": w.store_b,
+                                                            "service_id": w.service, "start_time": inside_t})
+        held = data(r_in).get("booking_id")
+        if held:
+            sql(f"DELETE FROM bookings WHERE id='{held}'")
+        rec("3.5b", "PASS" if st_in == 409 and err(r_in) == "SLOT_UNAVAILABLE" else "FAIL",
+            f"a hold at store B {inside_t} (30 min after store A) -> {st_in} {err(r_in)}")
         sql(f"DELETE FROM bookings WHERE id='{ba}'")
 
     # 3.6 complete -> review request with a token -> review -> shown, rating moves
@@ -948,6 +960,7 @@ def suite13(w):
     # 13.7 cascade: deleting a user removes her notifications
     tmp = sql("INSERT INTO users (name,email,password_hash,role) VALUES ('j2 Tmp','j2.tmp@test.bedge.com','x','artist') RETURNING id")
     sql(BUNDLE_SQL.format(u=tmp, t="j2 orphan?", g="NULL"))
+    sql(f"DELETE FROM audit_events WHERE actor_id='{tmp}'")  # the activity log names her (2026-10-10)
     sql(f"DELETE FROM users WHERE id='{tmp}'")
     orphans = sql(f"SELECT count(*) FROM user_notifications WHERE user_id='{tmp}'")
     rec("13.7 cascade", "PASS" if orphans == "0" else "FAIL", f"rows left after deleting the user: {orphans}")
@@ -1244,7 +1257,9 @@ def teardown():
         except RuntimeError as e:
             print(f"  cleanup: {e}")
     c.cleanup()
-    for q in [f"DELETE FROM refresh_tokens WHERE user_id IN ({cust})", f"DELETE FROM users WHERE id IN ({cust})"]:
+    for q in [f"DELETE FROM refresh_tokens WHERE user_id IN ({cust})",
+              f"DELETE FROM audit_events WHERE actor_id IN ({cust})",  # the activity log names them (2026-10-10)
+              f"DELETE FROM users WHERE id IN ({cust})"]:
         try:
             sql(q)
         except RuntimeError as e:

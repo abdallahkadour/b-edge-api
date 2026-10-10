@@ -88,6 +88,11 @@ const depositGraceWindow = 2 * time.Hour
 // defaultPageSize is the number of bookings returned per page.
 const defaultPageSize = 20
 
+// dayReadPad widens the store's day when reading the artist's bookings, so
+// travel from a booking just outside the day still reaches into it. Twelve
+// hours is more than any road between two branches.
+const dayReadPad = 12 * time.Hour
+
 // weekdays are Mon-Thu. Fri-Sun are weekends for travel buffer purposes.
 // In Lebanon, the weekend is Friday-Sunday.
 var weekdays = map[time.Weekday]bool{
@@ -283,7 +288,16 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	// ── Step 4: Build blocked ranges from existing bookings ───────────────
 
-	existingBookings, err := s.repo.GetArtistBookingsForDate(ctx, artistID, date)
+	// The STORE's day, widened either side by more than any travel time, so a
+	// booking at another store late the night before or early the next
+	// morning still casts its travel into today. Read by UTC date until
+	// 2026-10-10, which missed the first two or three hours of Beirut's day
+	// (audit T5). Bookings outside the day that cast nothing into it are
+	// harmless: the loop below only ever asks about today's times.
+	windowFrom := localDate.Add(-dayReadPad)
+	windowTo := localDate.AddDate(0, 0, 1).Add(dayReadPad)
+
+	existingBookings, err := s.repo.GetArtistBookingsBetween(ctx, artistID, windowFrom, windowTo)
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: get bookings: %w", err)
 	}
@@ -319,29 +333,25 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 
 	// ── Step 5: Travel buffer for cross-store bookings ────────────────────
 
-	crossStoreBookings, err := s.repo.GetArtistCrossStoreBookings(ctx, artistID, storeID, date)
+	crossStoreBookings, err := s.repo.GetArtistCrossStoreBookingsBetween(ctx, artistID, storeID, windowFrom, windowTo)
 	if err != nil {
 		return nil, fmt.Errorf("get available slots: get cross store bookings: %w", err)
 	}
 
-	isWeekend := !weekdays[date.Weekday()]
-
+	// travelMinutes is the one rule, the same whichever store is being
+	// booked (audit T4); resolved once per other store.
+	travel := map[uuid.UUID]int{}
 	for _, csb := range crossStoreBookings {
-		bufferMins := store.WeekdayBufferMin
-		if isWeekend {
-			bufferMins = store.WeekendBufferMin
-		}
-
-		// Try to get artist-specific buffer override
-		buf, err := s.repo.GetArtistStoreBuffer(ctx, artistID, csb.StoreID, storeID)
-		if err != nil {
-			return nil, fmt.Errorf("get available slots: get buffer: %w", err)
-		}
-		if buf != nil {
-			bufferMins = buf.WeekdayBufferMin
-			if isWeekend {
-				bufferMins = buf.WeekendBufferMin
+		bufferMins, ok := travel[csb.StoreID]
+		if !ok {
+			other, err := s.repo.GetStoreTravel(ctx, csb.StoreID)
+			if err != nil {
+				return nil, fmt.Errorf("get available slots: other store: %w", err)
 			}
+			if bufferMins, err = s.travelMinutes(ctx, artistID, store, other, localDate); err != nil {
+				return nil, fmt.Errorf("get available slots: %w", err)
+			}
+			travel[csb.StoreID] = bufferMins
 		}
 
 		// Travel time either side: out to the other store, and back.
@@ -351,7 +361,15 @@ func (s *Service) GetAvailableSlots(ctx context.Context, req GetAvailableSlotsRe
 		// complication that has to fit without special-casing. A zero
 		// buffer produces zero-length intervals, which Add drops, so no
 		// caller needs to guard the common case.
-		for _, tv := range TravelIntervals(csb.StartTime, csb.EndTime,
+		//
+		// She leaves after her cleanup there, not when the client gets up
+		// (audit T6). blocked_until is never before end_time in the table;
+		// the max() only guards a value that was never set.
+		leaves := csb.EndTime
+		if csb.BlockedUntil.After(leaves) {
+			leaves = csb.BlockedUntil
+		}
+		for _, tv := range TravelIntervals(csb.StartTime, leaves,
 			time.Duration(bufferMins)*time.Minute) {
 			occupied.Add(tv)
 		}

@@ -377,3 +377,34 @@ func TestValidateScheduleDate_ExactBoundary_Accepted(t *testing.T) {
 	assert.NoError(t, validateScheduleDate(now.AddDate(-scheduleDateWindowYears, 0, 0), now))
 	assert.Error(t, validateScheduleDate(now.AddDate(scheduleDateWindowYears, 0, 1), now))
 }
+
+// Travel is measured from after her cleanup, on both sides (audit T6,
+// 2026-10-10). Before, the gap ran from the client getting up, so a day
+// shift could leave her the full 150 minutes on paper and 120 in reality.
+func TestEvaluateShift_TravelCountsTheOtherBookingsCleanup(t *testing.T) {
+	storeA, storeB := uuid.New(), uuid.New()
+	in := baseInput(t, storeA, 30, bk(t, storeA, 14, 0, 60, StatusConfirmed)) // → 14:30
+	other := bk(t, storeB, 11, 0, 60, StatusConfirmed)                        // 11:00-12:00
+	other.BlockedUntil = other.EndTime.Add(30 * time.Minute)                  // cleanup until 12:30
+	in.CrossStore = []*EnrichedBooking{other}
+	in.BufferFor = func(uuid.UUID) int { return 150 }
+
+	got := evaluateShift(in)
+
+	require.NotEmpty(t, got.Blockers, "12:30 + 150 minutes is 15:00; 14:30 leaves her 120")
+	assert.Equal(t, BlockerTravelBuffer, got.Blockers[0].Reason)
+}
+
+func TestEvaluateShift_TravelCountsTheShiftedBookingsOwnCleanup(t *testing.T) {
+	storeA, storeB := uuid.New(), uuid.New()
+	moved := bk(t, storeA, 9, 0, 60, StatusConfirmed) // → 09:30-10:30, cleanup to 11:00
+	moved.BlockedUntil = moved.EndTime.Add(30 * time.Minute)
+	in := baseInput(t, storeA, 30, moved)
+	in.CrossStore = []*EnrichedBooking{bk(t, storeB, 13, 15, 60, StatusConfirmed)}
+	in.BufferFor = func(uuid.UUID) int { return 150 }
+
+	got := evaluateShift(in)
+
+	require.NotEmpty(t, got.Blockers, "she leaves at 11:00 and arrives 13:30; the 13:15 client would wait")
+	assert.Equal(t, BlockerTravelBuffer, got.Blockers[0].Reason)
+}

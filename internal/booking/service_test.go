@@ -119,6 +119,19 @@ type mockRepo struct {
 	attachGuestAndSubmitErr       error
 	getEnrichedBookingByIDBooking *EnrichedBooking
 
+	// Travel between stores (audit 2026-10-10): stores by id, overrides by
+	// direction, and the stores the artist works at.
+	storesByID     map[uuid.UUID]*Store
+	buffersByPair  map[[2]uuid.UUID]*ArtistStoreBuffer
+	artistStoreIDs []uuid.UUID
+	// Stores GetStore treats as closed for business (is_active = false).
+	inactiveStoreIDs map[uuid.UUID]bool
+	// The windows the slot code asked the day's bookings for.
+	dayWindowFrom, dayWindowTo     time.Time
+	lastRescheduleTravel           map[uuid.UUID]int
+	shiftTravel                    map[uuid.UUID]int
+	crossWindowFrom, crossWindowTo time.Time
+
 	// The owner's salon-wide lists.
 	salonListSalon                        uuid.UUID
 	salonListArtist                       *uuid.UUID
@@ -193,8 +206,23 @@ type mockRepo struct {
 	notifyNextWaitlistErr       error
 }
 
-func (m *mockRepo) GetStore(_ context.Context, _ uuid.UUID) (*Store, error) {
+func (m *mockRepo) GetStore(_ context.Context, id uuid.UUID) (*Store, error) {
+	if m.inactiveStoreIDs[id] {
+		return nil, ErrStoreNotFound // the real query only returns active stores
+	}
+	if st, ok := m.storesByID[id]; ok {
+		return st, nil
+	}
 	return m.getStoreStore, m.getStoreErr
+}
+func (m *mockRepo) GetStoreTravel(_ context.Context, id uuid.UUID) (*Store, error) {
+	if st, ok := m.storesByID[id]; ok {
+		return st, nil
+	}
+	if m.getStoreStore != nil {
+		return m.getStoreStore, nil
+	}
+	return defaultStore(), nil
 }
 func (m *mockRepo) GetBusinessHours(_ context.Context, _ uuid.UUID, _ int) (*BusinessHours, error) {
 	return m.getBusinessHoursBH, m.getBusinessHoursErr
@@ -228,14 +256,22 @@ func (m *mockRepo) GetServiceDepositDeadlineHours(_ context.Context, _ uuid.UUID
 	}
 	return m.getServiceSvc.DepositDeadlineHours, m.getServiceErr
 }
-func (m *mockRepo) GetArtistBookingsForDate(_ context.Context, _ uuid.UUID, _ time.Time) ([]*Booking, error) {
+func (m *mockRepo) GetArtistBookingsBetween(_ context.Context, _ uuid.UUID, from, to time.Time) ([]*Booking, error) {
+	m.dayWindowFrom, m.dayWindowTo = from, to
 	return m.getArtistBookingsBookings, m.getArtistBookingsErr
 }
-func (m *mockRepo) GetArtistCrossStoreBookings(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ time.Time) ([]*Booking, error) {
+func (m *mockRepo) GetArtistCrossStoreBookingsBetween(_ context.Context, _ uuid.UUID, _ uuid.UUID, from, to time.Time) ([]*Booking, error) {
+	m.crossWindowFrom, m.crossWindowTo = from, to
 	return m.getCrossStoreBookings, m.getCrossStoreErr
 }
-func (m *mockRepo) GetArtistStoreBuffer(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) (*ArtistStoreBuffer, error) {
+func (m *mockRepo) GetArtistStoreBuffer(_ context.Context, _ uuid.UUID, from uuid.UUID, to uuid.UUID) (*ArtistStoreBuffer, error) {
+	if m.buffersByPair != nil {
+		return m.buffersByPair[[2]uuid.UUID{from, to}], nil
+	}
 	return m.getArtistStoreBufferBuf, m.getArtistStoreBufferErr
+}
+func (m *mockRepo) ArtistStoreIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return m.artistStoreIDs, nil
 }
 func (m *mockRepo) CreateGuestUser(_ context.Context, _ string, _ string) (uuid.UUID, error) {
 	return uuid.New(), nil
@@ -280,7 +316,8 @@ func (m *mockRepo) GetArtistUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, e
 	return m.artistUserID, m.artistUserIDErr
 }
 
-func (m *mockRepo) RescheduleBooking(_ context.Context, _ uuid.UUID, start, end, blocked time.Time, _ int) (int64, error) {
+func (m *mockRepo) RescheduleBooking(_ context.Context, _ uuid.UUID, start, end, blocked time.Time, _ int, travel map[uuid.UUID]int) (int64, error) {
+	m.lastRescheduleTravel = travel
 	m.rescheduleCalls++
 	m.lastRescheduleStart = start
 	m.lastRescheduleEnd = end
@@ -391,7 +428,8 @@ func (m *mockRepo) NotifyNextWaitlistEntry(_ context.Context, artistID, storeID,
 func (m *mockRepo) MarkNoShow(_ context.Context, _ uuid.UUID) error {
 	return m.markNoShowErr
 }
-func (m *mockRepo) ShiftBookings(_ context.Context, ids []uuid.UUID, minutes int) error {
+func (m *mockRepo) ShiftBookings(_ context.Context, ids []uuid.UUID, minutes int, travel map[uuid.UUID]int) error {
+	m.shiftTravel = travel
 	m.shiftedIDs = ids
 	m.shiftedMinutes = minutes
 	return m.shiftBookingsErr
@@ -1877,8 +1915,11 @@ func TestHoldGuestSlot_Success(t *testing.T) {
 		getServiceSvc: defaultService(),
 		// Required since validateBookingParties: this test used to hold a
 		// slot with NO store, a booking that cannot exist.
-		getStoreStore:    defaultStore(),
-		createBookingErr: nil,
+		getStoreStore: defaultStore(),
+		// And since 2026-10-10 an open day: a hold is only written for a
+		// time the slot list offers (assertOffered).
+		getBusinessHoursBH: defaultBusinessHours(),
+		createBookingErr:   nil,
 	}
 	svc := newTestService(repo)
 
@@ -1886,7 +1927,7 @@ func TestHoldGuestSlot_Success(t *testing.T) {
 		ArtistID:  uuid.New().String(),
 		StoreID:   uuid.New().String(),
 		ServiceID: uuid.New().String(),
-		StartTime: time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339),
+		StartTime: beirutTime(2027, 3, 1, 10, 0).UTC().Format(time.RFC3339),
 	}
 
 	res, err := svc.HoldGuestSlot(context.Background(), req)
@@ -2024,6 +2065,10 @@ func TestHoldGuestSlot_EarlyBird_SurchargeApplied(t *testing.T) {
 	repo := &mockRepo{
 		getServiceSvc: defaultService(), // price 150.00
 		getStoreStore: defaultStore(),   // cutoff 09:00:00, fee 10.00
+		// Open from 07:00, so a 07:45 early-bird slot is one a client can
+		// actually be offered. This test used to hold 07:45 at a store that
+		// opens at 09:00 - a time no client could ever pick.
+		getBusinessHoursBH: &BusinessHours{OpenTime: "07:00:00", CloseTime: "18:00:00", IsOpen: true},
 	}
 	svc := newTestService(repo)
 
@@ -2054,8 +2099,9 @@ func TestHoldGuestSlot_EarlyBird_SurchargeApplied(t *testing.T) {
 
 func TestHoldGuestSlot_NotEarlyBird_NoSurcharge(t *testing.T) {
 	repo := &mockRepo{
-		getServiceSvc: defaultService(), // price 150.00
-		getStoreStore: defaultStore(),   // cutoff 09:00:00, fee 10.00
+		getServiceSvc:      defaultService(), // price 150.00
+		getStoreStore:      defaultStore(),   // cutoff 09:00:00, fee 10.00
+		getBusinessHoursBH: defaultBusinessHours(),
 	}
 	svc := newTestService(repo)
 

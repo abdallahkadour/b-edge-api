@@ -285,6 +285,15 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		return nil, err
 	}
 
+	// The same two checks as the guest hold - see HoldGuestSlot.
+	if err := s.assertOffered(ctx, artistID, storeID, serviceID, startTime.UTC(), store); err != nil {
+		return nil, err
+	}
+	travel, err := s.travelFromStore(ctx, artistID, store, startTime)
+	if err != nil {
+		return nil, fmt.Errorf("create booking: %w", err)
+	}
+
 	// Same early-bird surcharge logic as HoldGuestSlot - see isEarlyBirdSlot.
 	finalPrice := service.Price
 	if isEarlyBirdSlot(store, startTime.UTC()) {
@@ -331,6 +340,7 @@ func (s *Service) CreateBooking(ctx context.Context, req CreateBookingRequest, c
 		DepositAmount:   service.DepositAmount,
 		Channel:         req.Channel,
 		SpecialRequests: req.SpecialRequests,
+		travel:          travel,
 	}
 
 	if err := s.repo.CreateBooking(ctx, b, applied); err != nil {

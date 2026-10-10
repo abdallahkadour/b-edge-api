@@ -65,7 +65,7 @@ func TestReleaseGuestHold_DatabaseError_IsNotA404(t *testing.T) {
 
 func TestHoldGuestSlot_NetworkAlreadyHoldsTheLimit_429(t *testing.T) {
 	repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore(),
-		createGuestHoldErr: ErrTooManyHolds}
+		getBusinessHoursBH: defaultBusinessHours(), createGuestHoldErr: ErrTooManyHolds}
 	req := holdReq()
 	req.ClientIP = "203.0.113.7"
 
@@ -82,7 +82,7 @@ func TestHoldGuestSlot_LimitsByAKeyedHashOfTheAddress(t *testing.T) {
 	// a keyed hash - a plain hash of an IPv4 address is reversible by trying
 	// all four billion.
 	hold := func(ip string) *mockRepo {
-		repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore()}
+		repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore(), getBusinessHoursBH: defaultBusinessHours()}
 		req := holdReq()
 		req.ClientIP = ip
 		_, err := newTestService(repo).HoldGuestSlot(context.Background(), req)

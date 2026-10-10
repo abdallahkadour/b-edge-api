@@ -254,7 +254,7 @@ func TestRescheduleBooking_IncrementsCalendarSequence(t *testing.T) {
 
 	newStart := start.Add(3 * time.Hour)
 	rows, err := repo.RescheduleBooking(ctx, b.ID, newStart,
-		newStart.Add(60*time.Minute), newStart.Add(60*time.Minute), 10)
+		newStart.Add(60*time.Minute), newStart.Add(60*time.Minute), 10, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows, "the reschedule must actually have moved the row")
 
@@ -283,7 +283,7 @@ func TestShiftBookings_IncrementsCalendarSequence(t *testing.T) {
 
 	before := calendarSequence(t, pool, b.ID)
 
-	require.NoError(t, repo.ShiftBookings(ctx, []uuid.UUID{b.ID}, 15))
+	require.NoError(t, repo.ShiftBookings(ctx, []uuid.UUID{b.ID}, 15, nil))
 
 	assert.Greater(t, calendarSequence(t, pool, b.ID), before,
 		"the cascading day shift moves start_time and must bump the sequence too")

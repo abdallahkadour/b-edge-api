@@ -129,7 +129,9 @@ func evaluateShift(in shiftInput) *ShiftPreviewResponse {
 				continue
 			}
 			need := time.Duration(in.BufferFor(other.StoreID)) * time.Minute
-			if gap, ok := gapBetween(newStart, newEnd, other.StartTime, other.EndTime); ok && gap < need {
+			// From after her cleanup on either side, not from when the client
+			// gets up (audit T6) - the same edges the slot list measures.
+			if gap, ok := gapBetween(newStart, occupiedUntil(b).Add(delta), other.StartTime, occupiedUntil(other)); ok && gap < need {
 				id := b.ID
 				resp.Blockers = append(resp.Blockers, ShiftBlocker{
 					Reason: BlockerTravelBuffer, BookingID: &id,
@@ -270,7 +272,20 @@ func (s *Service) ShiftDay(ctx context.Context, userID uuid.UUID, req ShiftPrevi
 		ids = append(ids, m.BookingID)
 	}
 
-	if err := s.repo.ShiftBookings(ctx, ids, plan.ShiftMinutes); err != nil {
+	// The road to her other stores, re-checked inside the transaction with
+	// the whole day moved, under the per-artist lock (lockArtist).
+	travel := map[uuid.UUID]int{}
+	if storeID, err := uuid.Parse(req.StoreID); err == nil && len(plan.Movable) > 0 {
+		store, err := s.repo.GetStoreTravel(ctx, storeID)
+		if err != nil {
+			return nil, fmt.Errorf("shift day: store: %w", err)
+		}
+		if travel, err = s.travelFromStore(ctx, artistID, store, plan.Movable[0].NewStart); err != nil {
+			return nil, fmt.Errorf("shift day: %w", err)
+		}
+	}
+
+	if err := s.repo.ShiftBookings(ctx, ids, plan.ShiftMinutes, travel); err != nil {
 		if errors.Is(err, ErrSlotUnavailable) {
 			// The evaluation said it fitted and the constraint disagreed,
 			// which means the day changed underneath us between resolving
@@ -403,21 +418,20 @@ func (s *Service) resolveShift(ctx context.Context, userID uuid.UUID, req ShiftP
 
 	// Buffer lookups are per store pair and hit the database, so they are
 	// resolved once here rather than from inside the pure evaluation.
-	isWeekend := !weekdays[date.Weekday()]
+	// travelMinutes, the one rule the slot list and the write path use too
+	// (audit T4): it was copied here, one-directional, until 2026-10-10.
 	buffers := make(map[uuid.UUID]int, len(crossStore))
 	for _, csb := range crossStore {
 		if _, done := buffers[csb.StoreID]; done {
 			continue
 		}
-		mins := store.WeekdayBufferMin
-		if isWeekend {
-			mins = store.WeekendBufferMin
+		other, err := s.repo.GetStoreTravel(ctx, csb.StoreID)
+		if err != nil {
+			return nil, uuid.Nil, fmt.Errorf("preview shift day: other store: %w", err)
 		}
-		if override, err := s.repo.GetArtistStoreBuffer(ctx, artistID, csb.StoreID, storeID); err == nil && override != nil {
-			mins = override.WeekdayBufferMin
-			if isWeekend {
-				mins = override.WeekendBufferMin
-			}
+		mins, err := s.travelMinutes(ctx, artistID, store, other, dayStart)
+		if err != nil {
+			return nil, uuid.Nil, fmt.Errorf("preview shift day: %w", err)
 		}
 		buffers[csb.StoreID] = mins
 	}
@@ -453,4 +467,14 @@ func validateScheduleDate(date, now time.Time) error {
 			fmt.Sprintf("Date must be within %d years of today", scheduleDateWindowYears))
 	}
 	return nil
+}
+
+// occupiedUntil is when the artist is free of a booking: after its cleanup.
+// blocked_until is never before end_time in the table; max() only guards a
+// value that was never set.
+func occupiedUntil(b *EnrichedBooking) time.Time {
+	if b.BlockedUntil.After(b.EndTime) {
+		return b.BlockedUntil
+	}
+	return b.EndTime
 }

@@ -206,6 +206,15 @@ type Booking struct {
 	CreatedAt          time.Time  `db:"created_at"`
 	UpdatedAt          time.Time  `db:"updated_at"`
 	DeletedAt          *time.Time `db:"deleted_at"`
+
+	// travel is what a booking being WRITTEN needs between its store and
+	// each other store the artist works at, in minutes. Never read from or
+	// stored in the table: the service sets it before a hold or a booking is
+	// inserted, and the inserting transaction re-checks it under a
+	// per-artist lock (lockArtistAndCheckTravel), because two holds in the
+	// same second can both have read "free". Nil checks nothing - a fixture
+	// written straight to the repository.
+	travel map[uuid.UUID]int
 }
 
 // HoldGuestSlotResponse is returned when a guest holds a slot.

@@ -68,6 +68,17 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		return nil, err
 	}
 
+	// Only a time the slot list offers (assertOffered), and the travel it
+	// needs carried to the transaction, which re-checks it under a
+	// per-artist lock for the hold that arrives in the same second.
+	if err := s.assertOffered(ctx, artistID, storeID, serviceID, startTime.UTC(), store); err != nil {
+		return nil, err
+	}
+	travel, err := s.travelFromStore(ctx, artistID, store, startTime)
+	if err != nil {
+		return nil, fmt.Errorf("hold guest slot: %w", err)
+	}
+
 	// If this slot falls before the store's early-bird cutoff, the surcharge
 	// the picker badged this slot with must actually be charged - otherwise
 	// the badge is decorative and the customer is quoted a price that never
@@ -105,6 +116,7 @@ func (s *Service) HoldGuestSlot(ctx context.Context, req HoldGuestSlotRequest) (
 		FinalPrice:     finalPrice,
 		DepositAmount:  service.DepositAmount,
 		Channel:        ChannelCustomerPWA,
+		travel:         travel,
 	}
 
 	// nil: a hold has no real customer yet - CustomerID is

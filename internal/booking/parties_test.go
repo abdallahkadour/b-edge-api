@@ -49,7 +49,9 @@ func holdReq() HoldGuestSlotRequest {
 		ArtistID:  uuid.New().String(),
 		StoreID:   uuid.New().String(),
 		ServiceID: uuid.New().String(),
-		StartTime: time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339),
+		// A time the slot list offers on an open day (defaultBusinessHours):
+		// since 2026-10-10 nothing else can be held.
+		StartTime: beirutTime(2027, 3, 1, 10, 0).UTC().Format(time.RFC3339),
 	}
 }
 
@@ -71,7 +73,7 @@ func TestHoldGuestSlot_MatchingParties_Succeeds(t *testing.T) {
 	// POSITIVE CONTROL. Breaks if the guard refuses a legitimate booking -
 	// which would satisfy every refusal test below while making the product
 	// unusable.
-	repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore()}
+	repo := &mockRepo{getServiceSvc: defaultService(), getStoreStore: defaultStore(), getBusinessHoursBH: defaultBusinessHours()}
 
 	_, err := newTestService(repo).HoldGuestSlot(context.Background(), holdReq())
 
@@ -250,7 +252,7 @@ func TestHoldGuestSlot_ReturnsWhatItCharged(t *testing.T) {
 	svc := defaultService()
 	svc.Price = decimal.RequireFromString("200.00")
 	svc.DepositAmount = decimal.RequireFromString("60.00")
-	repo := &mockRepo{getServiceSvc: svc, getStoreStore: defaultStore()}
+	repo := &mockRepo{getServiceSvc: svc, getStoreStore: defaultStore(), getBusinessHoursBH: defaultBusinessHours()}
 
 	res, err := newTestService(repo).HoldGuestSlot(context.Background(), holdReq())
 

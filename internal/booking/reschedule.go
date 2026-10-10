@@ -96,7 +96,23 @@ func (s *Service) RescheduleBooking(ctx context.Context, bookingID, requesterUse
 	tail := b.BlockedUntil.Sub(b.EndTime)
 	newEnd := newStart.Add(duration)
 
-	rows, err := s.repo.RescheduleBooking(ctx, b.ID, newStart, newEnd, newEnd.Add(tail), maxReschedules)
+	// The road to her other stores, for the transaction's re-check under
+	// the per-artist lock (lockArtist): the slot list above was a read, and
+	// a hold at another store can land between it and this write.
+	store, err := s.repo.GetStoreTravel(ctx, b.StoreID)
+	if err != nil {
+		return nil, fmt.Errorf("reschedule: store: %w", err)
+	}
+	travel, err := s.travelFromStore(ctx, b.ArtistID, store, newStart)
+	if err != nil {
+		return nil, fmt.Errorf("reschedule: %w", err)
+	}
+
+	rows, err := s.repo.RescheduleBooking(ctx, b.ID, newStart, newEnd, newEnd.Add(tail), maxReschedules, travel)
+	if errors.Is(err, ErrSlotUnavailable) {
+		return nil, apperror.Conflict("SLOT_UNAVAILABLE",
+			"That time is no longer available. Please pick another.")
+	}
 	if err != nil {
 		return nil, err
 	}

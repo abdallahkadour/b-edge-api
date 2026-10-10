@@ -89,9 +89,11 @@ type Repository interface {
 	// CreateGuestUser creates a minimal customer record for a guest booking.
 	// Returns the new user's UUID to use as customer_id on the booking.
 	CreateGuestUser(ctx context.Context, name string, phone string) (uuid.UUID, error)
-	// GetArtistBookingsForDate returns all bookings for an artist on a date
-	// that are in a blocking status. Used to build the blocked time ranges.
-	GetArtistBookingsForDate(ctx context.Context, artistID uuid.UUID, date time.Time) ([]*Booking, error)
+	// GetArtistBookingsBetween returns an artist's blocking bookings that
+	// touch [from, to), at any store. The slot code passes the store's own
+	// day widened by the longest travel, so a booking just outside the day
+	// still casts its travel into it.
+	GetArtistBookingsBetween(ctx context.Context, artistID uuid.UUID, from, to time.Time) ([]*Booking, error)
 
 	// ListEnrichedBookingsForDay returns every one of an artist's bookings
 	// on a calendar day, across ALL stores, with customer and service names
@@ -107,9 +109,9 @@ type Repository interface {
 	// the artist's day and must be shifted with it.
 	ListEnrichedBookingsForDay(ctx context.Context, artistID uuid.UUID, dayStart, dayEnd time.Time) ([]*EnrichedBooking, error)
 
-	// GetArtistCrossStoreBookings returns artist bookings at stores OTHER than
-	// the target store on a given date. Used to calculate travel buffers.
-	GetArtistCrossStoreBookings(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, date time.Time) ([]*Booking, error)
+	// GetArtistCrossStoreBookingsBetween is GetArtistBookingsBetween limited
+	// to stores OTHER than excludeStoreID - the ones that need travel.
+	GetArtistCrossStoreBookingsBetween(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, from, to time.Time) ([]*Booking, error)
 
 	// GetArtistStoreBuffer returns the travel buffer between two stores for an artist.
 	// Returns nil if no specific buffer is configured - caller uses store defaults.
@@ -148,6 +150,16 @@ type Repository interface {
 	// ordered by start_time. No pagination - a week is bounded. Used by the
 	// calendar grid.
 	ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error)
+
+	// ArtistStoreIDs is every store the artist works at (artist_stores).
+	ArtistStoreIDs(ctx context.Context, artistID uuid.UUID) ([]uuid.UUID, error)
+
+	// GetStoreTravel reads a store for its travel defaults whether or not it
+	// is active. GetStore only returns active stores - right for "can this
+	// store be booked", wrong for "how far away is it": a branch the salon
+	// switched off can still have bookings on it, and the artist can still
+	// be placed there (verify-uc1, 2026-10-10: every hold answered 500).
+	GetStoreTravel(ctx context.Context, storeID uuid.UUID) (*Store, error)
 
 	// ListEnrichedBookingsBySalon is every booking made at the salon, newest
 	// first, optionally one artist's and/or one status - the owner's
@@ -196,7 +208,7 @@ type Repository interface {
 	// GIST exclusion constraint remains the final arbiter. Returns rows
 	// affected: zero means the booking was no longer movable or had used up
 	// its reschedules.
-	RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int) (int64, error)
+	RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int, travel map[uuid.UUID]int) (int64, error)
 
 	// GetArtistIDByUserID resolves a requester's users.id to their artists.id.
 	// bookings.artist_id references artists.id, not users.id, so any ownership
@@ -297,7 +309,7 @@ type Repository interface {
 
 	// ShiftBookings moves a set of bookings by a fixed number of minutes,
 	// atomically. Returns ErrSlotUnavailable if the result would overlap.
-	ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int) error
+	ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int, travel map[uuid.UUID]int) error
 
 	// FindStaleWaitlistGroups returns the queues holding a `notified` entry
 	// whose confirm window has passed - the one case lazy cascading cannot
@@ -832,47 +844,41 @@ func (r *pgRepo) GetServiceDepositDeadlineHours(ctx context.Context, serviceID u
 	return hours, nil
 }
 
-// GetArtistBookingsForDate returns all blocking bookings for an artist on a date.
-// Used by the slot algorithm to build blocked time ranges.
-func (r *pgRepo) GetArtistBookingsForDate(ctx context.Context, artistID uuid.UUID, date time.Time) ([]*Booking, error) {
+// GetArtistBookingsBetween - see the interface. Overlap, not "starts on":
+// a booking that began before `from` and is still running counts.
+func (r *pgRepo) GetArtistBookingsBetween(ctx context.Context, artistID uuid.UUID, from, to time.Time) ([]*Booking, error) {
 	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT %s FROM bookings
 		WHERE artist_id = $1
-		AND DATE(start_time AT TIME ZONE 'UTC') = $2::date
-		AND status = ANY($3)
+		AND start_time < $3 AND blocked_until > $2
+		AND status = ANY($4)
 		AND deleted_at IS NULL
 		ORDER BY start_time ASC`,
 		bookingSelectCols),
-		artistID,
-		date,
-		BlockingStatuses,
+		artistID, from, to, BlockingStatuses,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get artist bookings for date: %w", err)
+		return nil, fmt.Errorf("get artist bookings between: %w", err)
 	}
 	defer rows.Close()
 	return scanBookings(rows)
 }
 
-// GetArtistCrossStoreBookings returns artist bookings at stores other than
-// the target store on a given date. Used to calculate travel buffers.
-func (r *pgRepo) GetArtistCrossStoreBookings(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, date time.Time) ([]*Booking, error) {
+// GetArtistCrossStoreBookingsBetween - see the interface.
+func (r *pgRepo) GetArtistCrossStoreBookingsBetween(ctx context.Context, artistID uuid.UUID, excludeStoreID uuid.UUID, from, to time.Time) ([]*Booking, error) {
 	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT %s FROM bookings
 		WHERE artist_id = $1
 		AND store_id != $2
-		AND DATE(start_time AT TIME ZONE 'UTC') = $3::date
-		AND status = ANY($4)
+		AND start_time < $4 AND blocked_until > $3
+		AND status = ANY($5)
 		AND deleted_at IS NULL
 		ORDER BY start_time ASC`,
 		bookingSelectCols),
-		artistID,
-		excludeStoreID,
-		date,
-		BlockingStatuses,
+		artistID, excludeStoreID, from, to, BlockingStatuses,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get artist cross store bookings: %w", err)
+		return nil, fmt.Errorf("get artist cross store bookings between: %w", err)
 	}
 	defer rows.Close()
 	return scanBookings(rows)
@@ -919,10 +925,9 @@ func (r *pgRepo) CreateBooking(ctx context.Context, b *Booking, applied *Applied
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
-	err = insertBookingTx(ctx, tx, b, nil)
-	if err != nil {
-		if isExclusionViolation(err) {
-			return ErrSlotUnavailable
+	if err := writeBookingTx(ctx, tx, b, nil); err != nil {
+		if errors.Is(err, ErrSlotUnavailable) {
+			return err
 		}
 		return fmt.Errorf("create booking: %w", err)
 	}
@@ -973,6 +978,12 @@ func (r *pgRepo) CreateGuestHold(ctx context.Context, b *Booking, client string,
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
 
+	// The artist's lock first, always, so every writer takes locks in the
+	// same order: artist, then (for a guest hold) artist+network.
+	if err := lockArtist(ctx, tx, b.ArtistID); err != nil {
+		return fmt.Errorf("create guest hold: %w", err)
+	}
+
 	var holdClient *string
 	if client != "" {
 		holdClient = &client
@@ -995,9 +1006,9 @@ func (r *pgRepo) CreateGuestHold(ctx context.Context, b *Booking, client string,
 		}
 	}
 
-	if err := insertBookingTx(ctx, tx, b, holdClient); err != nil {
-		if isExclusionViolation(err) {
-			return ErrSlotUnavailable
+	if err := writeBookingTx(ctx, tx, b, holdClient); err != nil {
+		if errors.Is(err, ErrSlotUnavailable) {
+			return err
 		}
 		return fmt.Errorf("create guest hold: %w", err)
 	}
@@ -1107,8 +1118,28 @@ func (r *pgRepo) UpdateBookingStatus(ctx context.Context, id uuid.UUID, status s
 // Guarded on the booking still being in a movable status and on the count, so
 // a client who exhausted their reschedules cannot win a race against their own
 // last attempt. Zero rows means one of those guards refused.
-func (r *pgRepo) RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int) (int64, error) {
-	tag, err := r.db.Exec(ctx, `
+func (r *pgRepo) RescheduleBooking(ctx context.Context, id uuid.UUID, start, end, blockedUntil time.Time, maxReschedules int, travel map[uuid.UUID]int) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reschedule booking: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// The same per-artist lock as every other write to her diary, then the
+	// travel re-check once the row stands at its new time (lockArtist,
+	// travelClash).
+	var artistID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT artist_id FROM bookings WHERE id = $1`, id).Scan(&artistID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reschedule booking: artist: %w", err)
+	}
+	if err := lockArtist(ctx, tx, artistID); err != nil {
+		return 0, fmt.Errorf("reschedule booking: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE bookings
 		   SET start_time        = $2,
 		       end_time          = $3,
@@ -1133,7 +1164,23 @@ func (r *pgRepo) RescheduleBooking(ctx context.Context, id uuid.UUID, start, end
 		id, start, end, blockedUntil, maxReschedules,
 	)
 	if err != nil {
+		if isExclusionViolation(err) {
+			return 0, ErrSlotUnavailable
+		}
 		return 0, fmt.Errorf("reschedule booking: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, nil
+	}
+	clash, err := travelClash(ctx, tx, []uuid.UUID{id}, travel)
+	if err != nil {
+		return 0, fmt.Errorf("reschedule booking: %w", err)
+	}
+	if clash {
+		return 0, ErrSlotUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("reschedule booking: commit: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
@@ -1259,15 +1306,31 @@ func (r *pgRepo) GetWaitlistByArtist(ctx context.Context, artistID uuid.UUID) ([
 // it defers checking to commit, which widens the window in which an invalid
 // state exists inside the transaction. A single statement keeps the guard as
 // tight as it can be while still permitting the move.
-func (r *pgRepo) ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int) error {
+func (r *pgRepo) ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int, travel map[uuid.UUID]int) error {
 	if len(ids) == 0 {
 		return nil
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("shift bookings: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	// One artist's day: the same per-artist lock as every write to her
+	// diary, and travel re-checked with the whole day moved (all or nothing).
+	var artistID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT artist_id FROM bookings WHERE id = $1`, ids[0]).Scan(&artistID); err != nil {
+		return fmt.Errorf("shift bookings: artist: %w", err)
+	}
+	if err := lockArtist(ctx, tx, artistID); err != nil {
+		return fmt.Errorf("shift bookings: %w", err)
 	}
 
 	// make_interval rather than string concatenation: the text form depends
 	// on IntervalStyle, which is a session setting. Same reason migration
 	// 033 could not put this expression in an index.
-	_, err := r.db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE bookings
 		SET start_time        = start_time    + make_interval(mins => $1),
 		    end_time          = end_time      + make_interval(mins => $1),
@@ -1283,6 +1346,16 @@ func (r *pgRepo) ShiftBookings(ctx context.Context, ids []uuid.UUID, minutes int
 			return ErrSlotUnavailable
 		}
 		return fmt.Errorf("shift bookings: %w", err)
+	}
+	clash, err := travelClash(ctx, tx, ids, travel)
+	if err != nil {
+		return fmt.Errorf("shift bookings: %w", err)
+	}
+	if clash {
+		return ErrSlotUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("shift bookings: commit: %w", err)
 	}
 	return nil
 }
@@ -1953,4 +2026,120 @@ func (r *pgRepo) CreateGuestUser(ctx context.Context, name string, phone string)
 		return uuid.Nil, fmt.Errorf("create guest user: %w", err)
 	}
 	return id, nil
+}
+
+// ArtistStoreIDs - see the interface.
+func (r *pgRepo) ArtistStoreIDs(ctx context.Context, artistID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.Query(ctx, `SELECT store_id FROM artist_stores WHERE artist_id = $1`, artistID)
+	if err != nil {
+		return nil, fmt.Errorf("artist store ids: %w", err)
+	}
+	defer rows.Close()
+	out := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("artist store ids: scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// ── Travel between stores, enforced where a booking is written ──────────────
+//
+// Audit 2026-10-10, T1. The service refuses a time the slot list would not
+// offer, but that is a read followed by a write: two holds in the same
+// second - Beirut 10:00 and Tripoli 11:30 - can both read "free", and the
+// GIST exclusion constraint cannot help, because the two appointments do not
+// overlap; only the road between them does. So every write to an artist's
+// diary (a hold, a booking, a reschedule, a day shift) takes one per-artist
+// transaction lock, and re-checks travel inside the transaction once its own
+// row is in. The second writer waits, then sees the first.
+
+// lockArtist serialises writes to one artist's diary until the transaction
+// ends. Advisory locks are re-entrant within a session, so a caller that
+// takes it early for lock ordering (CreateGuestHold) may take it again.
+func lockArtist(ctx context.Context, tx pgx.Tx, artistID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('artist:' || $1::text, 0))`, artistID); err != nil {
+		return fmt.Errorf("lock artist: %w", err)
+	}
+	return nil
+}
+
+// writeBookingTx inserts b under the artist's lock and refuses it if it
+// leaves too little travel to a booking at another store.
+func writeBookingTx(ctx context.Context, tx pgx.Tx, b *Booking, holdClient *string) error {
+	if err := lockArtist(ctx, tx, b.ArtistID); err != nil {
+		return err
+	}
+	if err := insertBookingTx(ctx, tx, b, holdClient); err != nil {
+		if isExclusionViolation(err) {
+			return ErrSlotUnavailable
+		}
+		return err
+	}
+	clash, err := travelClash(ctx, tx, []uuid.UUID{b.ID}, b.travel)
+	if err != nil {
+		return err
+	}
+	if clash {
+		return ErrSlotUnavailable
+	}
+	return nil
+}
+
+// travelClash reports whether any of the bookings ids, as they now stand in
+// this transaction, leaves the artist less than the travel minutes needed
+// to or from a blocking booking at another store. travel is keyed by the
+// other store; a store not in it needs none. Measured from after cleanup on
+// both sides (blocked_until), the same edges the slot list uses.
+func travelClash(ctx context.Context, tx pgx.Tx, ids []uuid.UUID, travel map[uuid.UUID]int) (bool, error) {
+	if len(ids) == 0 || len(travel) == 0 {
+		return false, nil
+	}
+	stores := make([]uuid.UUID, 0, len(travel))
+	mins := make([]int32, 0, len(travel))
+	for id, m := range travel {
+		if m <= 0 {
+			continue
+		}
+		stores = append(stores, id)
+		mins = append(mins, int32(m))
+	}
+	if len(stores) == 0 {
+		return false, nil
+	}
+	var clash bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		    FROM bookings m
+		    JOIN bookings o ON o.artist_id = m.artist_id AND o.store_id <> m.store_id
+		    JOIN unnest($2::uuid[], $3::int[]) AS t(store_id, mins) ON t.store_id = o.store_id
+		   WHERE m.id = ANY($1)
+		     AND o.status = ANY($4) AND o.deleted_at IS NULL
+		     AND o.start_time    < m.blocked_until + make_interval(mins => t.mins)
+		     AND o.blocked_until > m.start_time    - make_interval(mins => t.mins))`,
+		ids, stores, mins, BlockingStatuses).Scan(&clash)
+	if err != nil {
+		return false, fmt.Errorf("travel check: %w", err)
+	}
+	return clash, nil
+}
+
+// GetStoreTravel - see the interface.
+func (r *pgRepo) GetStoreTravel(ctx context.Context, storeID uuid.UUID) (*Store, error) {
+	s := &Store{}
+	err := r.db.QueryRow(ctx, `
+		SELECT id, salon_id, name, weekday_buffer_min, weekend_buffer_min, is_active, timezone
+		  FROM stores WHERE id = $1`, storeID,
+	).Scan(&s.ID, &s.SalonID, &s.Name, &s.WeekdayBufferMin, &s.WeekendBufferMin, &s.IsActive, &s.Timezone)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrStoreNotFound
+		}
+		return nil, fmt.Errorf("get store travel: %w", err)
+	}
+	return s, nil
 }

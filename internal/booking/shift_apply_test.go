@@ -174,3 +174,23 @@ func TestShiftDay_ZeroMinutesRejected(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, "SHIFT_MINUTES_ZERO", appErr.Code)
 }
+
+// The shift hands the road to her other stores to the transaction, which
+// re-checks it with the whole day moved under the per-artist lock (audit
+// 2026-10-10). Without it the repository has nothing to check against.
+func TestShiftDay_CarriesTheTravelToTheTransaction(t *testing.T) {
+	repo, storeID := shiftRepo(t)
+	here := defaultStore()
+	here.ID = storeID
+	other := defaultStore()
+	repo.storesByID = storesByID(here, other)
+	repo.artistStoreIDs = []uuid.UUID{storeID, other.ID}
+	req := shiftReq(30)
+	req.StoreID = storeID.String()
+	repo.enrichedForDay[0].StoreID = storeID
+
+	_, err := newTestService(repo).ShiftDay(context.Background(), uuid.New(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[uuid.UUID]int{other.ID: 150}, repo.shiftTravel)
+}

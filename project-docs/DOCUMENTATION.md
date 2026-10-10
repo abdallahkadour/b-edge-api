@@ -34,7 +34,7 @@
 > throwaway apps and missed 24 registered with a `base+` prefix),
 > **1390 Go tests**, **28 environment variable names** read via `os.Getenv`
 > (test files included). Frontend: **50 Angular routes**, **31 spec files**
-> carrying **171 passing tests** (shared 55, artist-dashboard 74,
+> carrying **173 passing tests** (shared 55, artist-dashboard 76,
 > customer-pwa 42), **56 help topics** (17 customer, 34 artist, 5 admin).
 >
 > These numbers are now **generated, not typed**:

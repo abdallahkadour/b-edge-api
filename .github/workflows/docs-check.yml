@@ -35,6 +35,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # api_swagger_paths is counted from docs/swagger.json, which is
+      # generated and gitignored. Without this step the checkout has no such
+      # file, the fact reads "unknown", and the job failed on EVERY push from
+      # the day that fact was added until 2026-10-09 - unnoticed, because
+      # nobody was looking at the runs. Reproduced in a Linux container on a
+      # clean checkout: "unknown" without it, all facts matching with it.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate the Swagger spec the check counts
+        run: go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/main.go -o docs
+
       - name: Check documentation against code
         run: ./scripts/check-docs.sh --facts-only
 

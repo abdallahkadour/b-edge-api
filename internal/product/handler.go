@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
@@ -27,7 +28,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 	repo := NewRepository(pool)
 	// promo.NewService satisfies DiscountResolver structurally - wired at the
 	// composition root so neither domain imports the other's service.
-	svc := NewService(repo).WithDiscounts(promo.NewService(promo.NewRepository(pool)))
+	svc := NewService(repo).WithDiscounts(promo.NewService(promo.NewRepository(pool))).WithAudit(audit.NewRepository(pool))
 	handler := &Handler{svc: svc}
 
 	auth := middleware.RequireAuth()

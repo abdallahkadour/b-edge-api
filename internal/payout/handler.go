@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/httpcache"
@@ -39,7 +40,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 //     GET    /api/v1/artists/salon/no-show-policy       - the no-show deposit rule (D29)
 //     PUT    /api/v1/artists/salon/no-show-policy       - change it (owner)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
-	handler := NewHandler(NewService(NewRepository(pool)))
+	handler := NewHandler(NewService(NewRepository(pool)).WithAudit(audit.NewRepository(pool)))
 
 	app.Get("/api/v1/salons/:salon_id/payment-methods", handler.ListPublic)
 

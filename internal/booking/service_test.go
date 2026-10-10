@@ -90,34 +90,42 @@ type mockRepo struct {
 	// captures the redemption written alongside a booking, so a test can
 	lastApplied *AppliedDiscount
 	// Bulk schedule preview (migration 029)
-	enrichedForDay                        []*EnrichedBooking
-	enrichedForDayErr                     error
-	getStoreStore                         *Store
-	getStoreErr                           error
-	getBusinessHoursBH                    *BusinessHours
-	getBusinessHoursErr                   error
-	getBusinessHoursExceptionEx           *BusinessHoursException
-	getBusinessHoursExceptionErr          error
-	getServiceSvc                         *SalonService
-	getServiceErr                         error
-	getArtistBookingsBookings             []*Booking
-	getArtistBookingsErr                  error
-	getCrossStoreBookings                 []*Booking
-	getCrossStoreErr                      error
-	getArtistStoreBufferBuf               *ArtistStoreBuffer
-	getArtistStoreBufferErr               error
-	createBookingErr                      error
-	getBookingByIDBooking                 *Booking
-	getBookingByIDErr                     error
-	getBookingsByArtistBookings           []*Booking
-	getBookingsByArtistErr                error
-	getBookingsByCustomerBookings         []*Booking
-	getBookingsByCustomerErr              error
-	getBookingsBySalonBookings            []*Booking
-	getBookingsBySalonErr                 error
-	updateBookingStatusErr                error
-	attachGuestAndSubmitErr               error
-	getEnrichedBookingByIDBooking         *EnrichedBooking
+	enrichedForDay                []*EnrichedBooking
+	enrichedForDayErr             error
+	getStoreStore                 *Store
+	getStoreErr                   error
+	getBusinessHoursBH            *BusinessHours
+	getBusinessHoursErr           error
+	getBusinessHoursExceptionEx   *BusinessHoursException
+	getBusinessHoursExceptionErr  error
+	getServiceSvc                 *SalonService
+	getServiceErr                 error
+	getArtistBookingsBookings     []*Booking
+	getArtistBookingsErr          error
+	getCrossStoreBookings         []*Booking
+	getCrossStoreErr              error
+	getArtistStoreBufferBuf       *ArtistStoreBuffer
+	getArtistStoreBufferErr       error
+	createBookingErr              error
+	getBookingByIDBooking         *Booking
+	getBookingByIDErr             error
+	getBookingsByArtistBookings   []*Booking
+	getBookingsByArtistErr        error
+	getBookingsByCustomerBookings []*Booking
+	getBookingsByCustomerErr      error
+	getBookingsBySalonBookings    []*Booking
+	getBookingsBySalonErr         error
+	updateBookingStatusErr        error
+	attachGuestAndSubmitErr       error
+	getEnrichedBookingByIDBooking *EnrichedBooking
+
+	// The owner's salon-wide lists.
+	salonListSalon                        uuid.UUID
+	salonListArtist                       *uuid.UUID
+	salonListStatus                       string
+	salonListLimit                        int
+	salonWeekStart                        time.Time
+	salonList                             []*EnrichedBooking
 	getEnrichedBookingByIDErr             error
 	listEnrichedByArtistBookings          []*EnrichedBooking
 	listEnrichedByArtistLimit             int
@@ -2899,4 +2907,14 @@ func TestApproveBooking_NoDeposit_MessageSkipsTheDepositAsk(t *testing.T) {
 	msg := repo.enqueuedNotifications[len(repo.enqueuedNotifications)-1].Message
 	assert.NotContains(t, msg, "$", "a zero-deposit booking must not ask for a deposit")
 	assert.Contains(t, msg, "final confirmation shortly")
+}
+
+func (m *mockRepo) ListEnrichedBookingsBySalon(_ context.Context, salonID uuid.UUID, artistID *uuid.UUID, status string, _ time.Time, limit int) ([]*EnrichedBooking, error) {
+	m.salonListSalon, m.salonListArtist, m.salonListStatus, m.salonListLimit = salonID, artistID, status, limit
+	return m.salonList, nil
+}
+
+func (m *mockRepo) ListEnrichedBookingsForSalonWeek(_ context.Context, salonID uuid.UUID, artistID *uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error) {
+	m.salonListSalon, m.salonListArtist, m.salonWeekStart = salonID, artistID, weekStart
+	return m.salonList, nil
 }

@@ -10,11 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
 )
@@ -60,7 +62,8 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 	// billing's repository satisfies SubscriptionStatusReader above. Wired at
 	// the composition root so neither domain imports the other's service.
 	svc := NewService(repo, billing.NewRepository(pool), log).
-		WithDiscounts(promo.NewService(promo.NewRepository(pool)))
+		WithDiscounts(promo.NewService(promo.NewRepository(pool))).
+		WithAudit(audit.NewRepository(pool))
 	handler := NewHandler(svc, log)
 
 	// ── Admin - every salon's bookings, read-only ─────────────────────────────
@@ -86,6 +89,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 
 	// Booking lifecycle
 	b.Post("/", handler.CreateBooking)
+	// The owner's whole-salon lists. Registered before /:id, which would
+	// otherwise take "salon" for a booking id.
+	canSeeSalon := middleware.RequireSalonCapability(salonrole.CalendarSalonRead)
+	b.Get("/salon", middleware.RequireRole("artist"), canSeeSalon, handler.GetSalonBookings)
+	b.Get("/salon/calendar", middleware.RequireRole("artist"), canSeeSalon, handler.GetSalonCalendar)
 	b.Get("/:id", handler.GetBookingByID)
 	b.Patch("/:id/submit", handler.SubmitBooking)
 	b.Patch("/:id/approve", handler.ApproveBooking)
@@ -946,4 +954,65 @@ func (h *Handler) AdminBookingSummary(c *fiber.Ctx) error {
 		return err
 	}
 	return response.OK(c, s)
+}
+
+// GetSalonBookings godoc
+// @Summary      Every booking in the salon (owner only)
+// @Description  The owner's "whole team" bookings list: every booking made at her salon,
+// @Description  newest first, whichever artist took it - including an artist who has since
+// @Description  left. Optional ?artist_id= narrows to one artist, ?status= to one status.
+// @Description  Salon capability calendar:salon:read; a member gets 403 SALON_ROLE_FORBIDDEN.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        artist_id query  string false "One artist's bookings (artists.id)"
+// @Param        status    query  string false "Filter by booking status"
+// @Param        cursor    query  string false "Pagination cursor"
+// @Param        limit     query  int    false "Page size (default 20, max 100)"
+// @Success      200 {object} response.Body{data=[]EnrichedBookingResponse}
+// @Failure      400 {object} response.ErrorBody "INVALID_ARTIST_ID or INVALID_STATUS"
+// @Failure      403 {object} response.ErrorBody "NO_SALON or SALON_ROLE_FORBIDDEN"
+// @Router       /bookings/salon [get]
+func (h *Handler) GetSalonBookings(c *fiber.Ctx) error {
+	cursor, limit := parsePaginationParams(c)
+	rows, hasMore, err := h.svc.ListSalonBookings(c.UserContext(), *middleware.SalonIDFromContext(c),
+		c.Query("artist_id"), c.Query("status"), cursor, limit)
+	if err != nil {
+		return err
+	}
+	var next string
+	if hasMore && len(rows) > 0 {
+		next = rows[len(rows)-1].CreatedAt.Format(time.RFC3339Nano)
+	}
+	return response.List(c, rows, &response.Meta{NextCursor: next, HasMore: hasMore})
+}
+
+// GetSalonCalendar godoc
+// @Summary      The salon's week, every artist (owner only)
+// @Description  The owner's team calendar: committed appointments (approved, deposit paid,
+// @Description  confirmed, completed, no-show) for the 7 days from week_start, every artist's or,
+// @Description  with ?artist_id=, one artist's. Salon capability calendar:salon:read.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        week_start query string true  "YYYY-MM-DD"
+// @Param        artist_id  query string false "One artist (artists.id)"
+// @Success      200 {object} response.Body{data=[]EnrichedBookingResponse}
+// @Failure      400 {object} response.ErrorBody "MISSING_WEEK_START, INVALID_WEEK_START or INVALID_ARTIST_ID"
+// @Failure      403 {object} response.ErrorBody "NO_SALON or SALON_ROLE_FORBIDDEN"
+// @Router       /bookings/salon/calendar [get]
+func (h *Handler) GetSalonCalendar(c *fiber.Ctx) error {
+	raw := c.Query("week_start")
+	if raw == "" {
+		return apperror.BadRequest("MISSING_WEEK_START", "week_start query parameter is required (YYYY-MM-DD)")
+	}
+	weekStart, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return apperror.BadRequest("INVALID_WEEK_START", "week_start must be in YYYY-MM-DD format")
+	}
+	rows, err := h.svc.ListSalonWeek(c.UserContext(), *middleware.SalonIDFromContext(c), c.Query("artist_id"), weekStart)
+	if err != nil {
+		return err
+	}
+	return response.List(c, rows, &response.Meta{HasMore: false})
 }

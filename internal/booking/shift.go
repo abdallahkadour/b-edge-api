@@ -281,6 +281,7 @@ func (s *Service) ShiftDay(ctx context.Context, userID uuid.UUID, req ShiftPrevi
 		return nil, fmt.Errorf("shift day: %w", err)
 	}
 
+	s.recordShift(ctx, artistID, req.Date, plan.ShiftMinutes, len(ids))
 	s.announceShift(ctx, artistID, plan)
 	return plan, nil
 }

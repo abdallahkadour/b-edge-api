@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/caller"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/clientip"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/jwt"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 )
@@ -61,6 +63,14 @@ func RequireAuth() fiber.Handler {
 		c.Locals("salon_id", salonID)
 		c.Locals("role", claims.Role)
 		c.Locals("salon_role", sr)
+
+		// The same caller, for the services below the handler: the activity
+		// log names who acted, and the booking guards let an owner act on a
+		// member's booking. See internal/pkg/caller.
+		c.SetUserContext(caller.With(c.UserContext(), caller.Caller{
+			UserID: claims.UserID, Role: claims.Role,
+			SalonID: salonID, SalonRole: sr, IP: clientip.From(c),
+		}))
 
 		return c.Next()
 	}

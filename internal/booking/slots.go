@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/openinghours"
@@ -109,6 +110,9 @@ type Service struct {
 	// keeps every existing newTestService working untouched and makes the
 	// feature impossible to half-wire.
 	discounts DiscountResolver
+	// activity is OPTIONAL for the same reason: nil records nothing. See
+	// activity.go.
+	activity audit.Logger
 }
 
 // GetAvailableSlots runs the 7-step slot availability algorithm and returns

@@ -117,6 +117,7 @@ func TestCan_MemberCannotWriteSharedSalonResources(t *testing.T) {
 		ServicesWrite, StoresWrite, StoreHoursWrite, DiscountsWrite,
 		ProductsWrite, PaymentMethodsWrite, BillingWrite, MembersWrite,
 		EarningsSalonRead, CalendarSalonRead, BookingsAnyWrite, MemberServicesWrite,
+		ActivitySalonRead,
 	}
 	for _, c := range forbidden {
 		if Can(Member, c) {

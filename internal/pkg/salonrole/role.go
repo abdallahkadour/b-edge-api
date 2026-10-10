@@ -82,6 +82,11 @@ const (
 	CalendarSalonRead   Capability = "calendar:salon:read"
 	BookingsAnyWrite    Capability = "bookings:any:write"
 	MemberServicesWrite Capability = "member_services:write"
+	// ActivitySalonRead is the salon's activity log: who approved, refunded,
+	// cancelled, changed a price or a payment account (2026-10-10). The
+	// owner's, as the person accountable for the salon's money - a member
+	// sees her own bookings' history on the bookings themselves.
+	ActivitySalonRead Capability = "activity:salon:read"
 )
 
 // The personal capabilities. Every member holds these; they are what makes a
@@ -103,6 +108,7 @@ var all = []Capability{
 	ServicesWrite, StoresWrite, StoreHoursWrite, DiscountsWrite,
 	ProductsWrite, PaymentMethodsWrite, BillingWrite, MembersWrite,
 	EarningsSalonRead, CalendarSalonRead, BookingsAnyWrite, MemberServicesWrite,
+	ActivitySalonRead,
 	MembersRead, OwnScheduleWrite, OwnBookingsWrite, OwnProfileWrite,
 	OwnEarningsRead, ClientNotesWrite, OwnServicesWrite,
 }
@@ -132,6 +138,7 @@ var matrix = map[Role]map[Capability]bool{
 		CalendarSalonRead:   true,
 		BookingsAnyWrite:    true,
 		MemberServicesWrite: true, // PP-3: owner can change any member's services or prices.
+		ActivitySalonRead:   true,
 
 		// Personal — an owner is also someone who does the work.
 		MembersRead:      true,
@@ -157,6 +164,7 @@ var matrix = map[Role]map[Capability]bool{
 		CalendarSalonRead:   false,
 		BookingsAnyWrite:    false,
 		MemberServicesWrite: false, // PP-3: member cannot change a colleague's services or prices.
+		ActivitySalonRead:   false,
 
 		// Personal — everything needed to run their own day.
 		//

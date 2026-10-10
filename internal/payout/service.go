@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 )
@@ -20,6 +21,25 @@ var ErrNotFound = errors.New("payment method not found")
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
+	// activity is the salon activity log; nil records nothing.
+	activity audit.Logger
+}
+
+// WithAudit records every change to the salon's payment accounts and its
+// no-show setting in the activity log, with the old values beside the new.
+// A redirected payment account sends customers' deposits to someone else;
+// the owner has to be able to see who changed it, and from what.
+func (s *Service) WithAudit(l audit.Logger) *Service {
+	s.activity = l
+	return s
+}
+
+// accountFacts is what the activity row keeps about a payment account.
+func accountFacts(p *PaymentMethod) map[string]any {
+	return map[string]any{
+		"method": string(p.Method), "account_name": p.AccountName,
+		"account_ref": p.AccountRef, "is_active": p.IsActive,
+	}
 }
 
 // NewService creates a payout service.
@@ -78,9 +98,32 @@ func (s *Service) Upsert(ctx context.Context, salonID uuid.UUID, req UpsertPayme
 		return nil, apperror.BadRequest("INVALID_METHOD", "Choose either Whish or OMT")
 	}
 
+	// What it was, for the activity row. Best-effort: a failed read must not
+	// stop the owner changing her own account, it only leaves the row
+	// without its "before".
+	var before map[string]any
+	if s.activity != nil {
+		if rows, err := s.repo.ListBySalon(ctx, salonID, false); err == nil {
+			for _, r := range rows {
+				if string(r.Method) == req.Method {
+					before = accountFacts(r)
+				}
+			}
+		}
+	}
+
 	p, err := s.repo.Upsert(ctx, salonID, req)
 	if err != nil {
 		return nil, err
+	}
+	ev := audit.Event{SalonID: &salonID, EntityType: audit.EntityPaymentMethod, EntityID: p.ID,
+		Action: audit.ActionPaymentMethodSave, NewValues: accountFacts(p)}
+	if before != nil {
+		ev.OldValues = before
+	}
+	// Saving the account exactly as it was is not a change.
+	if _, changed := audit.Changed(before, accountFacts(p)); before == nil || changed != nil {
+		audit.Record(ctx, s.activity, ev)
 	}
 	out := toResponse(p)
 	return &out, nil
@@ -95,6 +138,12 @@ func (s *Service) SetActive(ctx context.Context, id, salonID uuid.UUID, active b
 		}
 		return nil, err
 	}
+	action := audit.ActionPaymentMethodRetire
+	if active {
+		action = audit.ActionPaymentMethodRestore
+	}
+	audit.Record(ctx, s.activity, audit.Event{SalonID: &salonID, EntityType: audit.EntityPaymentMethod,
+		EntityID: p.ID, Action: action, NewValues: accountFacts(p)})
 	out := toResponse(p)
 	return &out, nil
 }
@@ -116,11 +165,23 @@ func (s *Service) SetNoShowPolicy(ctx context.Context, salonID uuid.UUID, req Se
 	if err := s.validate.Struct(req); err != nil {
 		return nil, validation.MapError(err)
 	}
+	before, beforeErr := 0, errors.New("not read")
+	if s.activity != nil {
+		before, beforeErr = s.repo.GetNoShowPolicy(ctx, salonID)
+	}
 	if err := s.repo.SetNoShowPolicy(ctx, salonID, *req.After); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 		}
 		return nil, err
+	}
+	ev := audit.Event{SalonID: &salonID, EntityType: audit.EntitySalon, EntityID: salonID,
+		Action: audit.ActionSalonNoShowPolicy, NewValues: map[string]any{"after": *req.After}}
+	if beforeErr == nil {
+		ev.OldValues = map[string]any{"after": before}
+	}
+	if beforeErr != nil || before != *req.After {
+		audit.Record(ctx, s.activity, ev)
 	}
 	return &NoShowPolicy{After: *req.After}, nil
 }

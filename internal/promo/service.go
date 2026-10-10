@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/discount"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
@@ -22,6 +23,32 @@ import (
 type Service struct {
 	repo     Repository
 	validate *validator.Validate
+	// activity is the salon activity log; nil records nothing.
+	activity audit.Logger
+}
+
+// WithAudit records creating and changing discount codes in the activity
+// log (2026-10-10). A code takes money off the salon's prices.
+func (s *Service) WithAudit(l audit.Logger) *Service {
+	s.activity = l
+	return s
+}
+
+// codeFacts is what the activity row keeps about a code; values compare as
+// strings so audit.Changed can narrow an update to what moved.
+func codeFacts(d *Discount) map[string]any {
+	f := map[string]any{
+		"code": d.Code, "kind": d.Kind, "value": d.Value.StringFixed(2),
+		"is_active": d.IsActive, "first_time_only": d.FirstTimeOnly,
+		"max_redemptions": 0, "ends_at": "",
+	}
+	if d.MaxRedemptions != nil {
+		f["max_redemptions"] = *d.MaxRedemptions
+	}
+	if d.EndsAt != nil {
+		f["ends_at"] = d.EndsAt.UTC().Format(time.RFC3339)
+	}
+	return f
 }
 
 // NewService creates a promo service.
@@ -240,6 +267,8 @@ func (s *Service) Create(ctx context.Context, salonID uuid.UUID, req CreateDisco
 		}
 		return nil, fmt.Errorf("create discount: %w", err)
 	}
+	audit.Record(ctx, s.activity, audit.Event{SalonID: &salonID, EntityType: audit.EntityDiscount,
+		EntityID: d.ID, Action: audit.ActionDiscountCreate, NewValues: codeFacts(d)})
 
 	res := toDiscountResponse(d, 0)
 	if err := s.withLastDays(ctx, salonID, res); err != nil {
@@ -260,12 +289,27 @@ func (s *Service) Update(ctx context.Context, id, salonID uuid.UUID, req UpdateD
 		}
 	}
 
+	// What it was, for the activity row - only if it is this salon's code;
+	// a foreign id is refused by the update below either way.
+	var before *Discount
+	if s.activity != nil {
+		if b, err := s.repo.GetByID(ctx, id); err == nil && b != nil && b.SalonID == salonID {
+			before = b
+		}
+	}
+
 	d, err := s.repo.Update(ctx, id, salonID, req)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, errDiscountNotFound()
 		}
 		return nil, err
+	}
+	if before != nil {
+		if o, n := audit.Changed(codeFacts(before), codeFacts(d), "code"); n != nil {
+			audit.Record(ctx, s.activity, audit.Event{SalonID: &salonID, EntityType: audit.EntityDiscount,
+				EntityID: d.ID, Action: audit.ActionDiscountUpdate, OldValues: o, NewValues: n})
+		}
 	}
 	res := toDiscountResponse(d, 0)
 	if err := s.withLastDays(ctx, salonID, res); err != nil {

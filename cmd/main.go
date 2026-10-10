@@ -41,6 +41,7 @@ import (
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/activity"
 	"github.com/abdallahkadour/b-edge-api/internal/admin"
 	"github.com/abdallahkadour/b-edge-api/internal/media"
 	"github.com/abdallahkadour/b-edge-api/internal/membership"
@@ -190,6 +191,7 @@ func main() {
 	// fetched link is the only route to a calendar entry at all.
 	calendar.RegisterRoutes(app, pool, logger)
 	earnings.RegisterRoutes(app, pool, logger)
+	activity.RegisterRoutes(app, pool)
 	product.RegisterRoutes(app, pool, logger, codeAttempts)
 	media.RegisterRoutes(app, pool, logger)
 	onboarding.RegisterRoutes(app, pool, logger)

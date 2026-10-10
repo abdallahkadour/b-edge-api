@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/otp"
@@ -69,7 +70,7 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	// package would otherwise have to implement methods it never calls.
 	// otp.Store is shared with customer login, so the code rule and its
 	// ceilings exist once.
-	svc := NewServiceWithPhones(repo, NewPhoneRepo(pool), otp.NewStore(pool))
+	svc := NewServiceWithPhones(repo, NewPhoneRepo(pool), otp.NewStore(pool)).WithAudit(audit.NewRepository(pool))
 	handler := NewHandler(svc, log)
 
 	auth := middleware.RequireAuth()

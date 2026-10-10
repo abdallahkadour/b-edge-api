@@ -121,6 +121,7 @@ func (s *Service) RescheduleBooking(ctx context.Context, bookingID, requesterUse
 	if err != nil {
 		return nil, fmt.Errorf("reschedule: reload: %w", err)
 	}
+	s.recordMove(ctx, updated, b.StartTime)
 	return toResponse(updated), nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
@@ -22,6 +23,8 @@ type Service struct {
 	discounts DiscountResolver
 	repo      Repository
 	validate  *validator.Validate
+	// activity is the salon activity log; nil records nothing.
+	activity audit.Logger
 }
 
 // NewService constructs a Service.
@@ -96,6 +99,8 @@ func (s *Service) CreateProduct(ctx context.Context, salonID uuid.UUID, req Crea
 	if err := s.repo.CreateProduct(ctx, p); err != nil {
 		return nil, fmt.Errorf("create product: %w", err)
 	}
+	audit.Record(ctx, s.activity, audit.Event{SalonID: &salonID, EntityType: audit.EntityProduct,
+		EntityID: p.ID, Action: audit.ActionProductCreate, NewValues: productFacts(p)})
 	return toProductResponse(p), nil
 }
 
@@ -132,6 +137,10 @@ func (s *Service) UpdateProduct(ctx context.Context, productID, salonID uuid.UUI
 	updated, err := s.repo.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("update product: reload: %w", err)
+	}
+	if o, n := audit.Changed(productFacts(existing), productFacts(updated), "name"); n != nil {
+		audit.Record(ctx, s.activity, audit.Event{SalonID: &salonID, EntityType: audit.EntityProduct,
+			EntityID: productID, Action: audit.ActionProductUpdate, OldValues: o, NewValues: n})
 	}
 	return toProductResponse(updated), nil
 }
@@ -483,6 +492,7 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, requesterID uuid.UUI
 	if err != nil {
 		return nil, fmt.Errorf("cancel order: reload: %w", err)
 	}
+	s.recordOrder(ctx, order, order.Status, OrderStatusCancelled)
 	return toOrderResponse(updated, items), nil
 }
 
@@ -514,6 +524,7 @@ func (s *Service) transitionOrder(ctx context.Context, orderID, salonID uuid.UUI
 	if err != nil {
 		return nil, fmt.Errorf("transition order: reload: %w", err)
 	}
+	s.recordOrder(ctx, order, fromStatus, toStatus)
 	return toOrderResponse(updated, items), nil
 }
 

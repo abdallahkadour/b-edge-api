@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
@@ -33,7 +34,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 //	POST   /api/v1/artists/salon/discounts      - create
 //	PATCH  /api/v1/artists/salon/discounts/:id  - edit or deactivate
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
-	handler := NewHandler(NewService(NewRepository(pool)))
+	handler := NewHandler(NewService(NewRepository(pool)).WithAudit(audit.NewRepository(pool)))
 
 	auth := middleware.RequireAuth()
 	artistOnly := middleware.RequireRole("artist", "admin")

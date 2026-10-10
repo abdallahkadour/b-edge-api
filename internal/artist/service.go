@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/money"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
@@ -34,6 +35,9 @@ type Service struct {
 	// NewServiceWithPhones wires them, and only cmd/main.go calls that.
 	phones PhoneVerifyPort
 	otps   OTPStore
+
+	// activity is the salon activity log; nil records nothing (activity.go).
+	activity audit.Logger
 }
 
 // OTPStore is the one-time-code persistence phone verification needs.
@@ -306,6 +310,7 @@ func (s *Service) CreateService(ctx context.Context, salonID uuid.UUID, req Crea
 	if err := s.repo.CreateService(ctx, svc); err != nil {
 		return nil, fmt.Errorf("create service: %w", err)
 	}
+	s.record(ctx, salonID, audit.EntityService, svc.ID, audit.ActionServiceCreate, nil, menuFacts(svc))
 
 	return toServiceResponse(svc), nil
 }
@@ -376,6 +381,9 @@ func (s *Service) UpdateService(ctx context.Context, serviceID uuid.UUID, salonI
 	if err != nil {
 		return nil, fmt.Errorf("update service: get updated: %w", err)
 	}
+	if before, after := audit.Changed(menuFacts(existing), menuFacts(updated), "name"); after != nil {
+		s.record(ctx, salonID, audit.EntityService, serviceID, audit.ActionServiceUpdate, before, after)
+	}
 	return toServiceResponse(updated), nil
 }
 
@@ -419,7 +427,11 @@ func (s *Service) DeleteService(ctx context.Context, serviceID uuid.UUID, salonI
 		return errServiceNotFound()
 	}
 
-	return s.repo.DeleteService(ctx, serviceID)
+	if err := s.repo.DeleteService(ctx, serviceID); err != nil {
+		return err
+	}
+	s.record(ctx, salonID, audit.EntityService, serviceID, audit.ActionServiceDelete, menuFacts(existing), nil)
+	return nil
 }
 
 // ── Business hours ────────────────────────────────────────────────────────────
@@ -491,7 +503,13 @@ func (s *Service) SetBusinessHours(ctx context.Context, storeID, salonID uuid.UU
 		return apperror.BadRequest("INVALID_HOURS", "close_time must be after open_time")
 	}
 
-	return s.repo.SetBusinessHours(ctx, storeID, req)
+	if err := s.repo.SetBusinessHours(ctx, storeID, req); err != nil {
+		return err
+	}
+	s.record(ctx, salonID, audit.EntityStore, storeID, audit.ActionStoreHours, nil, map[string]any{
+		"day_of_week": req.DayOfWeek, "is_open": req.IsOpen, "open_time": req.OpenTime, "close_time": req.CloseTime,
+	})
+	return nil
 }
 
 // GetExceptions returns all business hours exceptions for a store.
@@ -519,7 +537,18 @@ func (s *Service) CreateException(ctx context.Context, storeID, salonID uuid.UUI
 		return apperror.BadRequest("INVALID_DATE", "exception_date must be in YYYY-MM-DD format")
 	}
 
-	return s.repo.CreateException(ctx, storeID, req)
+	if err := s.repo.CreateException(ctx, storeID, req); err != nil {
+		return err
+	}
+	closure := map[string]any{"date": req.ExceptionDate, "is_closed": req.IsClosed}
+	if req.OpenTime != nil && req.CloseTime != nil {
+		closure["open_time"], closure["close_time"] = *req.OpenTime, *req.CloseTime
+	}
+	if req.Reason != nil {
+		closure["reason"] = *req.Reason
+	}
+	s.record(ctx, salonID, audit.EntityStore, storeID, audit.ActionStoreClosureAdd, nil, closure)
+	return nil
 }
 
 // UpdateStore updates a store's settings. The caller must own the salon the
@@ -638,7 +667,14 @@ func (s *Service) UpdateStore(ctx context.Context, storeID uuid.UUID, salonID uu
 		return nil, fmt.Errorf("update store: %w", err)
 	}
 
-	return s.repo.GetStoreByID(ctx, storeID)
+	updated, err := s.repo.GetStoreByID(ctx, storeID)
+	if err != nil {
+		return nil, err
+	}
+	if before, after := audit.Changed(storeFacts(store), storeFacts(updated), "name"); after != nil {
+		s.record(ctx, salonID, audit.EntityStore, storeID, audit.ActionStoreUpdate, before, after)
+	}
+	return updated, nil
 }
 
 // DeleteException removes a business hours exception.
@@ -650,7 +686,11 @@ func (s *Service) DeleteException(ctx context.Context, storeID, salonID uuid.UUI
 	if err != nil {
 		return apperror.BadRequest("INVALID_DATE", "Date must be in YYYY-MM-DD format")
 	}
-	return s.repo.DeleteException(ctx, storeID, date)
+	if err := s.repo.DeleteException(ctx, storeID, date); err != nil {
+		return err
+	}
+	s.record(ctx, salonID, audit.EntityStore, storeID, audit.ActionStoreClosureClear, nil, map[string]any{"date": dateStr})
+	return nil
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

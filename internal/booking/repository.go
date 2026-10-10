@@ -149,6 +149,18 @@ type Repository interface {
 	// calendar grid.
 	ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error)
 
+	// ListEnrichedBookingsBySalon is every booking made at the salon, newest
+	// first, optionally one artist's and/or one status - the owner's
+	// "whole team" bookings list. Scoped by bookings.salon_id, so an artist
+	// who has left still shows with the bookings she made here, and an
+	// artist id from another salon finds nothing. limit+1 rows, like the
+	// artist list.
+	ListEnrichedBookingsBySalon(ctx context.Context, salonID uuid.UUID, artistID *uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBooking, error)
+
+	// ListEnrichedBookingsForSalonWeek is the salon's committed appointments
+	// (CalendarStatuses) in [weekStart, weekStart+7d), every artist or one.
+	ListEnrichedBookingsForSalonWeek(ctx context.Context, salonID uuid.UUID, artistID *uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error)
+
 	// ListEnrichedBookingsByCustomer returns a customer's bookings (keyset
 	// paginated) joined with service and store display names.
 	ListEnrichedBookingsByCustomer(ctx context.Context, customerID uuid.UUID, cursor time.Time, limit int) ([]*EnrichedBooking, error)
@@ -518,6 +530,52 @@ func (r *pgRepo) ListEnrichedBookingsForWeek(ctx context.Context, artistID uuid.
 	rows, err := r.db.Query(ctx, q, artistID, weekStart, weekEnd, CalendarStatuses)
 	if err != nil {
 		return nil, fmt.Errorf("list enriched bookings for week: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
+// ListEnrichedBookingsBySalon - see the interface.
+func (r *pgRepo) ListEnrichedBookingsBySalon(ctx context.Context, salonID uuid.UUID, artistID *uuid.UUID, status string, cursor time.Time, limit int) ([]*EnrichedBooking, error) {
+	where := `WHERE b.salon_id = $1 AND b.created_at < $2 AND b.deleted_at IS NULL`
+	args := []any{salonID, cursor, limit + 1}
+	if artistID != nil {
+		args = append(args, *artistID)
+		where += fmt.Sprintf(` AND b.artist_id = $%d`, len(args))
+	}
+	if status != "" {
+		args = append(args, status)
+		where += fmt.Sprintf(` AND b.status = $%d`, len(args))
+	}
+	q := fmt.Sprintf(`SELECT %s %s
+		%s
+		ORDER BY b.created_at DESC
+		LIMIT $3`, enrichedSelectCols, enrichedFrom, where)
+
+	rows, err := r.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings by salon: %w", err)
+	}
+	defer rows.Close()
+	return scanEnrichedBookings(rows)
+}
+
+// ListEnrichedBookingsForSalonWeek - see the interface.
+func (r *pgRepo) ListEnrichedBookingsForSalonWeek(ctx context.Context, salonID uuid.UUID, artistID *uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error) {
+	args := []any{salonID, weekStart, weekStart.AddDate(0, 0, 7), CalendarStatuses}
+	where := `WHERE b.salon_id = $1 AND b.start_time >= $2 AND b.start_time < $3
+		AND b.status = ANY($4) AND b.deleted_at IS NULL`
+	if artistID != nil {
+		args = append(args, *artistID)
+		where += fmt.Sprintf(` AND b.artist_id = $%d`, len(args))
+	}
+	q := fmt.Sprintf(`SELECT %s %s
+		%s
+		ORDER BY b.start_time ASC`, enrichedSelectCols, enrichedFrom, where)
+
+	rows, err := r.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list enriched bookings for salon week: %w", err)
 	}
 	defer rows.Close()
 	return scanEnrichedBookings(rows)

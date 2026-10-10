@@ -13,9 +13,11 @@ import (
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/audit"
 	"github.com/abdallahkadour/b-edge-api/internal/billing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/phone"
+	"github.com/abdallahkadour/b-edge-api/internal/pkg/salonrole"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/subscription"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/validation"
 	"github.com/abdallahkadour/b-edge-api/internal/promo"
@@ -466,13 +468,19 @@ func (s *Service) GetEnrichedBookingByID(ctx context.Context, bookingID uuid.UUI
 	// artists.id-vs-users.id confusion already fixed in six other booking
 	// methods; this occurrence was missed. Resolve first, compare like
 	// with like.
+	// Its artist, or the owner of its salon, who sees every member's
+	// bookings (salonrole.CalendarSalonRead).
 	isArtist := false
 	if requesterRole == RoleArtist {
-		requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterID)
-		if err != nil && !errors.Is(err, ErrArtistNotFound) {
-			return nil, fmt.Errorf("get enriched booking by id: resolve artist: %w", err)
+		if salonHolds(ctx, requesterID, e.SalonID, salonrole.CalendarSalonRead) {
+			isArtist = true
+		} else {
+			requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterID)
+			if err != nil && !errors.Is(err, ErrArtistNotFound) {
+				return nil, fmt.Errorf("get enriched booking by id: resolve artist: %w", err)
+			}
+			isArtist = err == nil && e.ArtistID == requesterArtistID
 		}
-		isArtist = err == nil && e.ArtistID == requesterArtistID
 	}
 
 	if requesterRole != RoleAdmin && e.CustomerID != requesterID && !isArtist {
@@ -591,16 +599,10 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 
 	// Resolve the JWT user_id to the caller's artists.id. bookings.artist_id
 	// references artists.id, so we must compare like with like.
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("approve booking: resolve artist: %w", err)
-	}
-
-	// Only the artist on the booking can approve it
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -656,11 +658,13 @@ func (s *Service) ApproveBooking(ctx context.Context, bookingID uuid.UUID, reque
 		return nil, fmt.Errorf("approve booking: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusApproved
 	b.DepositDeadline = &depositDeadline
 	if calendarToken != "" {
 		b.CalendarToken = &calendarToken
 	}
+	s.recordTransition(ctx, b, audit.ActionBookingApprove, prev)
 
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
 	if ctxErr == nil {
@@ -704,15 +708,10 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, reque
 		return nil, fmt.Errorf("confirm deposit: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("confirm deposit: resolve artist: %w", err)
-	}
-
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -727,7 +726,9 @@ func (s *Service) ConfirmDeposit(ctx context.Context, bookingID uuid.UUID, reque
 		return nil, fmt.Errorf("confirm deposit: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusConfirmed
+	s.recordTransition(ctx, b, audit.ActionBookingConfirm, prev)
 
 	// This route used to announce NOTHING. Both ConfirmDeposit and
 	// ConfirmDepositReceived reach `confirmed`, but only the latter told
@@ -757,15 +758,10 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 		return nil, fmt.Errorf("mark deposit received: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("mark deposit received: resolve artist: %w", err)
-	}
-
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -777,7 +773,9 @@ func (s *Service) MarkDepositReceived(ctx context.Context, bookingID uuid.UUID, 
 		return nil, fmt.Errorf("mark deposit received: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusDepositPaid
+	s.recordTransition(ctx, b, audit.ActionBookingDepositPaid, prev)
 	return toResponse(b), nil
 }
 
@@ -819,15 +817,10 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 		return nil, fmt.Errorf("confirm deposit received: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("confirm deposit received: resolve artist: %w", err)
-	}
-
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -843,7 +836,9 @@ func (s *Service) ConfirmDepositReceived(ctx context.Context, bookingID uuid.UUI
 	}
 
 	now := time.Now().UTC()
+	prev := b.Status
 	b.Status = StatusConfirmed
+	s.recordTransition(ctx, b, audit.ActionBookingConfirm, prev)
 	b.DepositPaidAt = &now
 	if reference != nil {
 		b.DepositReference = reference
@@ -884,14 +879,10 @@ func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, request
 		return nil, fmt.Errorf("mark refunded: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("mark refunded: resolve artist: %w", err)
-	}
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -928,7 +919,9 @@ func (s *Service) MarkRefunded(ctx context.Context, bookingID uuid.UUID, request
 		return nil, fmt.Errorf("mark refunded: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusRefunded
+	s.recordTransition(ctx, b, audit.ActionBookingRefunded, prev)
 	if reference != nil {
 		b.DepositReference = reference
 	}
@@ -954,13 +947,16 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 	isCustomer := b.CustomerID == requesterID
 	isAdmin := requesterRole == "admin"
 
+	// The salon's side: the booking's artist, or the owner of its salon
+	// (actsForArtist). Either way the salon is calling it off, so the
+	// refund rules below treat it as the salon's cancellation.
 	isArtist := false
 	if requesterRole == "artist" {
-		requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterID)
-		if err != nil && !errors.Is(err, ErrArtistNotFound) {
+		ok, err := s.actsForArtist(ctx, b, requesterID)
+		if err != nil {
 			return nil, fmt.Errorf("cancel booking: resolve artist: %w", err)
 		}
-		isArtist = err == nil && b.ArtistID == requesterArtistID
+		isArtist = ok
 	}
 
 	if !isCustomer && !isArtist && !isAdmin {
@@ -1044,11 +1040,13 @@ func (s *Service) CancelBooking(ctx context.Context, bookingID uuid.UUID, reques
 		return nil, fmt.Errorf("cancel booking: %w", err)
 	}
 
+	prev := b.Status
 	if refundDue {
 		b.Status = StatusRefundDue
 	} else {
 		b.Status = StatusCancelled
 	}
+	s.recordTransition(ctx, b, audit.ActionBookingCancel, prev)
 
 	// D3.5: hand the code back when the customer did not break the booking.
 	//
@@ -1136,15 +1134,10 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 		return nil, fmt.Errorf("complete booking: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("complete booking: resolve artist: %w", err)
-	}
-
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -1166,7 +1159,9 @@ func (s *Service) CompleteBooking(ctx context.Context, bookingID uuid.UUID, requ
 		return nil, fmt.Errorf("complete booking: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusCompleted
+	s.recordTransition(ctx, b, audit.ActionBookingComplete, prev)
 	b.ReviewToken = &reviewToken
 
 	customerName, serviceName, ctxErr := s.repo.GetBookingNotificationContext(ctx, bookingID)
@@ -1200,15 +1195,10 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 		return nil, fmt.Errorf("mark no show: get booking: %w", err)
 	}
 
-	requesterArtistID, err := s.repo.GetArtistIDByUserID(ctx, requesterUserID)
-	if err != nil {
-		if errors.Is(err, ErrArtistNotFound) {
-			return nil, errBookingNotFound()
-		}
+	// The booking's artist, or the owner of its salon (actsForArtist).
+	if ok, err := s.actsForArtist(ctx, b, requesterUserID); err != nil {
 		return nil, fmt.Errorf("mark no show: resolve artist: %w", err)
-	}
-
-	if b.ArtistID != requesterArtistID {
+	} else if !ok {
 		return nil, errBookingNotFound()
 	}
 
@@ -1228,7 +1218,9 @@ func (s *Service) MarkNoShow(ctx context.Context, bookingID uuid.UUID, requester
 		return nil, fmt.Errorf("mark no show: %w", err)
 	}
 
+	prev := b.Status
 	b.Status = StatusNoShow
+	s.recordTransition(ctx, b, audit.ActionBookingNoShow, prev)
 	// A no-show frees the slot: `no_show` is not a blocking status, so the
 	// time is immediately bookable again. It was the largest of the three
 	// silent gaps - the customer who did not turn up is exactly the case a

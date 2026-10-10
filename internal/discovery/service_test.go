@@ -34,6 +34,19 @@ type mockRepo struct {
 	lastHoursStoreIDs []uuid.UUID
 	lastExcFrom       time.Time
 	lastExcTo         time.Time
+	// favourites
+	addFavouriteErr  error
+	addedFavourite   [2]uuid.UUID
+	removedFavourite [2]uuid.UUID
+}
+
+func (m *mockRepo) AddFavourite(_ context.Context, customerID, artistID uuid.UUID) error {
+	m.addedFavourite = [2]uuid.UUID{customerID, artistID}
+	return m.addFavouriteErr
+}
+func (m *mockRepo) RemoveFavourite(_ context.Context, customerID, artistID uuid.UUID) error {
+	m.removedFavourite = [2]uuid.UUID{customerID, artistID}
+	return nil
 }
 
 func (m *mockRepo) ListArtistCards(_ context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error) {

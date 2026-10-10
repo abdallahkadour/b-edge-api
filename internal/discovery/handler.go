@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/abdallahkadour/b-edge-api/internal/middleware"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/apperror"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/response"
 )
@@ -29,6 +30,12 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 //
 //	GET /api/v1/discovery/artists      - browse/search artist cards
 //	GET /api/v1/discovery/artists/:id  - public artist profile (stores + services)
+//
+// And, for a signed-in customer only:
+//
+//	GET    /api/v1/customers/me/favourites           - her saved artists, as cards
+//	PUT    /api/v1/customers/me/favourites/:artistId - save one (repeatable)
+//	DELETE /api/v1/customers/me/favourites/:artistId - forget one (repeatable)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	repo := NewRepository(pool)
 	svc := NewService(repo)
@@ -37,6 +44,14 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger) {
 	d := app.Group("/api/v1/discovery")
 	d.Get("/artists", handler.ListArtists)
 	d.Get("/artists/:id", handler.GetArtistProfile)
+
+	// A signed-in customer's saved artists (migration 056). Not public, and
+	// not under /discovery, because the list is hers - but read through
+	// Discover's card query, so who may be shown is decided in one place.
+	fav := app.Group("/api/v1/customers/me/favourites", middleware.RequireAuth(), middleware.RequireRole("customer"))
+	fav.Get("/", handler.ListFavourites)
+	fav.Put("/:artistId", handler.AddFavourite)
+	fav.Delete("/:artistId", handler.RemoveFavourite)
 }
 
 // ListArtists godoc
@@ -98,4 +113,60 @@ func (h *Handler) GetArtistProfile(c *fiber.Ctx) error {
 	}
 
 	return response.OK(c, profile)
+}
+
+// ListFavourites godoc
+// @Summary      A customer's saved artists
+// @Description  As Discover cards, one per artist, through Discover's own query:
+// @Description  a saved artist Discover would not show is not shown here either.
+// @Tags         discovery
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200 {object} response.Body{data=[]ArtistCard}
+// @Router       /customers/me/favourites [get]
+func (h *Handler) ListFavourites(c *fiber.Ctx) error {
+	cards, err := h.svc.ListFavourites(c.UserContext(), middleware.UserIDFromContext(c))
+	if err != nil {
+		return err
+	}
+	return response.OK(c, cards)
+}
+
+// AddFavourite godoc
+// @Summary      Save an artist
+// @Description  Saving one already saved is not an error.
+// @Tags         discovery
+// @Security     BearerAuth
+// @Param        artistId path string true "Artist UUID"
+// @Success      204
+// @Failure      404 {object} response.ErrorBody "ARTIST_NOT_FOUND"
+// @Router       /customers/me/favourites/{artistId} [put]
+func (h *Handler) AddFavourite(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("artistId"))
+	if err != nil {
+		return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+	}
+	if err := h.svc.AddFavourite(c.UserContext(), middleware.UserIDFromContext(c), artistID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// RemoveFavourite godoc
+// @Summary      Forget a saved artist
+// @Description  Forgetting one never saved is not an error.
+// @Tags         discovery
+// @Security     BearerAuth
+// @Param        artistId path string true "Artist UUID"
+// @Success      204
+// @Router       /customers/me/favourites/{artistId} [delete]
+func (h *Handler) RemoveFavourite(c *fiber.Ctx) error {
+	artistID, err := uuid.Parse(c.Params("artistId"))
+	if err != nil {
+		return c.SendStatus(fiber.StatusNoContent)
+	}
+	if err := h.svc.RemoveFavourite(c.UserContext(), middleware.UserIDFromContext(c), artistID); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }

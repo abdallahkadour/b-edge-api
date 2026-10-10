@@ -196,3 +196,45 @@ func (s *Service) GetArtistProfile(ctx context.Context, artistID uuid.UUID) (*Pu
 		Services:    services,
 	}, nil
 }
+
+// favouritesLimit bounds the saved-artists list. Generous for a person's own
+// list; it exists so the query is bounded like every other card read.
+const favouritesLimit = 100
+
+// ListFavourites is the artists a customer saved, as Discover cards and
+// through Discover's query - so who may be shown is decided in one place.
+// Discover lists an artist once per city she works in; a list of favourites
+// lists her once (her first card, in Discover's order).
+func (s *Service) ListFavourites(ctx context.Context, customerID uuid.UUID) ([]*ArtistCard, error) {
+	rows, err := s.repo.ListArtistCards(ctx, ListArtistCardsParams{FavouritesOf: &customerID, Limit: favouritesLimit})
+	if err != nil {
+		return nil, fmt.Errorf("list favourites: %w", err)
+	}
+	now := s.now().UTC()
+	seen := make(map[uuid.UUID]bool, len(rows))
+	out := make([]*ArtistCard, 0, len(rows))
+	for _, r := range rows {
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		out = append(out, toArtistCard(r, now))
+	}
+	return out, nil
+}
+
+// AddFavourite saves an artist for a customer.
+func (s *Service) AddFavourite(ctx context.Context, customerID, artistID uuid.UUID) error {
+	if err := s.repo.AddFavourite(ctx, customerID, artistID); err != nil {
+		if errors.Is(err, ErrArtistNotFound) {
+			return apperror.NotFound("ARTIST_NOT_FOUND", "Artist not found")
+		}
+		return err
+	}
+	return nil
+}
+
+// RemoveFavourite forgets one.
+func (s *Service) RemoveFavourite(ctx context.Context, customerID, artistID uuid.UUID) error {
+	return s.repo.RemoveFavourite(ctx, customerID, artistID)
+}

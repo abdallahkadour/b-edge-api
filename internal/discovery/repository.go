@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
@@ -34,6 +35,12 @@ type Repository interface {
 	// Ordered verified-first then by rating; capped at Limit (no cursor - the
 	// browse screen loads a bounded top-N, not an infinite scroll).
 	ListArtistCards(ctx context.Context, f ListArtistCardsParams) ([]*ArtistCardRow, error)
+
+	// AddFavourite saves an artist for a customer; saving twice is not an
+	// error. ErrArtistNotFound when no such artist exists.
+	AddFavourite(ctx context.Context, customerID, artistID uuid.UUID) error
+	// RemoveFavourite forgets one; removing one never saved is not an error.
+	RemoveFavourite(ctx context.Context, customerID, artistID uuid.UUID) error
 
 	// GetArtistProfile returns the core artist row for the public profile.
 	// Returns ErrArtistNotFound if the artist does not exist.
@@ -73,6 +80,10 @@ type ListArtistCardsParams struct {
 	Category string
 	Query    string
 	Limit    int
+	// FavouritesOf narrows the cards to the artists this customer saved
+	// (migration 056). Through THIS query, so a saved artist Discover would
+	// not show - lapsed subscription, suspended - is not shown either.
+	FavouritesOf *uuid.UUID
 }
 
 // pgRepo is the PostgreSQL implementation of Repository.
@@ -120,6 +131,13 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 		args = append(args, "%"+f.Query+"%")
 	}
 
+	favJoin := ""
+	if f.FavouritesOf != nil {
+		n++
+		favJoin = fmt.Sprintf(`JOIN customer_favourite_artists fav ON fav.artist_id = a.id AND fav.customer_id = $%d`, n)
+		args = append(args, *f.FavouritesOf)
+	}
+
 	where := ""
 	for i, c := range conds {
 		if i == 0 {
@@ -144,8 +162,9 @@ func (r *pgRepo) ListArtistCards(ctx context.Context, f ListArtistCardsParams) (
 		-- detach listed a departed member at her old salon's city.
 		JOIN stores s        ON s.id  = ast.store_id AND s.salon_id = a.salon_id
 		%s
+		%s
 		ORDER BY a.is_verified DESC, a.rating DESC, u.name ASC, s.city ASC
-		LIMIT $%d`, where, limitPos)
+		LIMIT $%d`, favJoin, where, limitPos)
 
 	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {
@@ -340,4 +359,29 @@ func (r *pgRepo) GetArtistServices(ctx context.Context, artistID uuid.UUID) ([]*
 		return nil, fmt.Errorf("get artist services rows: %w", err)
 	}
 	return result, nil
+}
+
+// AddFavourite - see the interface. The foreign key is the existence check:
+// a violation means the artist id names nobody.
+func (r *pgRepo) AddFavourite(ctx context.Context, customerID, artistID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO customer_favourite_artists (customer_id, artist_id) VALUES ($1, $2)
+		ON CONFLICT (customer_id, artist_id) DO NOTHING`, customerID, artistID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrArtistNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("add favourite: %w", err)
+	}
+	return nil
+}
+
+// RemoveFavourite - see the interface.
+func (r *pgRepo) RemoveFavourite(ctx context.Context, customerID, artistID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx,
+		`DELETE FROM customer_favourite_artists WHERE customer_id = $1 AND artist_id = $2`, customerID, artistID); err != nil {
+		return fmt.Errorf("remove favourite: %w", err)
+	}
+	return nil
 }

@@ -31,7 +31,7 @@ OUT = ROOT / "project-docs" / "B-Edge-ERD.html"
 # Areas, in reading order. Every table belongs to exactly one.
 AREAS = [
     ("Accounts and sign-in", "Every person is one users row; artists and customers sign in differently.",
-     ["users", "refresh_tokens", "password_resets", "customer_otps"]),
+     ["users", "refresh_tokens", "password_resets", "customer_otps", "customer_favourite_artists"]),
     ("Salons and team", "A salon, its owner and members, its stores, and invitations to join.",
      ["salons", "artists", "salon_invitations", "stores", "artist_stores", "artist_store_buffers"]),
     ("Menu and pricing", "The salon's service menu, each artist's switch and own price, and portfolio tags.",

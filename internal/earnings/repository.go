@@ -28,6 +28,17 @@ type Repository interface {
 	// GetServiceBreakdown returns revenue grouped by service name for
 	// completed + no_show bookings in the given date range.
 	GetServiceBreakdown(ctx context.Context, artistID uuid.UUID, from, to time.Time) ([]serviceEarningsRow, error)
+
+	// GetSalonTotals is the salon-wide figures for bookings starting, and
+	// shop orders delivered, in [from, to).
+	GetSalonTotals(ctx context.Context, salonID uuid.UUID, from, to time.Time) (SalonTotals, error)
+
+	// GetSalonWaiting is what is waiting on someone in the salon now.
+	GetSalonWaiting(ctx context.Context, salonID uuid.UUID) (SalonWaiting, error)
+
+	// GetSalonArtists is one row per current member, plus any artist who
+	// has left but had bookings here in [from, to), highest earned first.
+	GetSalonArtists(ctx context.Context, salonID uuid.UUID, from, to time.Time) ([]ArtistOverview, error)
 }
 
 // pgRepo is the PostgreSQL implementation of Repository.
@@ -165,4 +176,98 @@ func (r *pgRepo) GetServiceBreakdown(ctx context.Context, artistID uuid.UUID, fr
 	}
 
 	return result, nil
+}
+
+// GetSalonTotals - see the interface. The earned figures use EarnedCond and
+// PeriodCond exactly as GetPeriodSummary does, with the artist scope widened
+// to the salon, so the salon total is the sum of every artist's own page.
+func (r *pgRepo) GetSalonTotals(ctx context.Context, salonID uuid.UUID, from, to time.Time) (SalonTotals, error) {
+	var t SalonTotals
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(final_price)    FILTER (WHERE `+EarnedCond("")+`), 0),
+			COUNT(*)                     FILTER (WHERE `+EarnedCond("")+`),
+			COALESCE(SUM(deposit_amount) FILTER (WHERE `+EarnedCond("")+`), 0),
+			COUNT(*) FILTER (WHERE status = 'completed'),
+			COUNT(*) FILTER (WHERE status = 'no_show'),
+			COUNT(*) FILTER (WHERE `+CancelledCond("")+`),
+			(SELECT COUNT(*) FROM orders o
+			  WHERE o.salon_id = $1 AND o.status = 'delivered' AND o.deleted_at IS NULL
+			    AND o.delivered_at >= $2 AND o.delivered_at < $3),
+			(SELECT COALESCE(SUM(o.total_amount), 0) FROM orders o
+			  WHERE o.salon_id = $1 AND o.status = 'delivered' AND o.deleted_at IS NULL
+			    AND o.delivered_at >= $2 AND o.delivered_at < $3)
+		FROM bookings
+		WHERE `+SalonScopeCond("", 1)+`
+		  AND `+PeriodCond("", 2, 3)+`
+	`, salonID, from, to).Scan(&t.Earned, &t.EarnedBookings, &t.Deposits,
+		&t.Completed, &t.NoShows, &t.Cancelled, &t.OrdersDelivered, &t.OrdersValue)
+	if err != nil {
+		return SalonTotals{}, fmt.Errorf("get salon totals: %w", err)
+	}
+	return t, nil
+}
+
+// GetSalonWaiting - see the interface. The same buckets as the admin's
+// platform-wide summary, for one salon.
+func (r *pgRepo) GetSalonWaiting(ctx context.Context, salonID uuid.UUID) (SalonWaiting, error) {
+	var w SalonWaiting
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'pending'),
+		       count(*) FILTER (WHERE status IN ('approved', 'deposit_paid')),
+		       count(*) FILTER (WHERE status = 'refund_due'),
+		       COALESCE(sum(deposit_amount) FILTER (WHERE status = 'refund_due'), 0)
+		  FROM bookings
+		 WHERE `+SalonScopeCond("", 1)+` AND deleted_at IS NULL`,
+		salonID).Scan(&w.AwaitingApproval, &w.DepositsToCheck, &w.RefundsOwed, &w.RefundsOwedAmount)
+	if err != nil {
+		return SalonWaiting{}, fmt.Errorf("get salon waiting: %w", err)
+	}
+	return w, nil
+}
+
+// GetSalonArtists - see the interface.
+//
+// The people CTE is what keeps a quiet member on the list (she has no
+// bookings to group by) and an artist who left on it while her bookings
+// here are in the window (she is no longer in artists.salon_id).
+func (r *pgRepo) GetSalonArtists(ctx context.Context, salonID uuid.UUID, from, to time.Time) ([]ArtistOverview, error) {
+	rows, err := r.db.Query(ctx, `
+		WITH people AS (
+			SELECT a.id FROM artists a WHERE a.salon_id = $1
+			UNION
+			SELECT b.artist_id FROM bookings b
+			 WHERE `+SalonScopeCond("b", 1)+` AND `+PeriodCond("b", 2, 3)+`
+		)
+		SELECT a.id, u.name, a.user_id, (a.salon_id IS NOT DISTINCT FROM $1) AS is_member,
+		       COALESCE(SUM(b.final_price) FILTER (WHERE `+EarnedCond("b")+`), 0) AS earned,
+		       COUNT(b.id) FILTER (WHERE `+EarnedCond("b")+`),
+		       COUNT(b.id) FILTER (WHERE b.status = 'completed'),
+		       COUNT(b.id) FILTER (WHERE b.status = 'no_show'),
+		       COUNT(b.id) FILTER (WHERE `+CancelledCond("b")+`),
+		       a.rating, a.review_count
+		  FROM people p
+		  JOIN artists a ON a.id = p.id
+		  JOIN users   u ON u.id = a.user_id
+		  LEFT JOIN bookings b ON b.artist_id = a.id
+		                      AND `+SalonScopeCond("b", 1)+`
+		                      AND `+PeriodCond("b", 2, 3)+`
+		 GROUP BY a.id, u.name, a.user_id, a.salon_id, a.rating, a.review_count
+		 ORDER BY earned DESC, u.name`, salonID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("get salon artists: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ArtistOverview, 0)
+	for rows.Next() {
+		var a ArtistOverview
+		if err := rows.Scan(&a.ArtistID, &a.Name, &a.userID, &a.IsMember,
+			&a.Earned, &a.EarnedBookings, &a.Completed, &a.NoShows, &a.Cancelled,
+			&a.Rating, &a.ReviewCount); err != nil {
+			return nil, fmt.Errorf("get salon artists: scan: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

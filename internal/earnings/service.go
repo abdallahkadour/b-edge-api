@@ -57,11 +57,12 @@ func beirutNow() time.Time {
 // It knows nothing about SQL - all DB access goes through Repository.
 type Service struct {
 	repo Repository
+	now  func() time.Time
 }
 
 // NewService creates a new earnings Service.
 func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+	return &Service{repo: repo, now: time.Now}
 }
 
 // GetSummary returns the earnings summary for the authenticated artist.
@@ -184,6 +185,84 @@ func (s *Service) GetSummary(ctx context.Context, userID uuid.UUID, req GetSumma
 		DailyBreakdown:      daily,
 		ByService:           byService,
 	}, nil
+}
+
+// GetSalonOverview is the owner's view of the whole salon: the period's
+// figures, the same figures for the period before, what is waiting on
+// someone now, and one row per artist.
+//
+// salonID is the caller's salon from the token; the route is guarded by
+// salonrole.EarningsSalonRead, so only the owner reaches this. Members keep
+// GetSummary, which is their own bookings and nobody else's.
+func (s *Service) GetSalonOverview(ctx context.Context, userID, salonID uuid.UUID, req GetSummaryRequest) (*SalonOverviewResponse, error) {
+	from, to, err := parseDateRange(req.From, req.To)
+	if err != nil {
+		return nil, err
+	}
+	prevFrom, prevTo := previousPeriod(from, to, s.now())
+
+	totals, err := s.repo.GetSalonTotals(ctx, salonID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("get salon overview: totals: %w", err)
+	}
+	previous, err := s.repo.GetSalonTotals(ctx, salonID, prevFrom, prevTo)
+	if err != nil {
+		return nil, fmt.Errorf("get salon overview: previous totals: %w", err)
+	}
+	waiting, err := s.repo.GetSalonWaiting(ctx, salonID)
+	if err != nil {
+		return nil, fmt.Errorf("get salon overview: waiting: %w", err)
+	}
+	artists, err := s.repo.GetSalonArtists(ctx, salonID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("get salon overview: artists: %w", err)
+	}
+
+	byArtist := make([]ArtistOverview, 0, len(artists))
+	for _, a := range artists {
+		a.IsYou = a.userID == userID
+		byArtist = append(byArtist, a)
+	}
+
+	return &SalonOverviewResponse{
+		Period:         Period{From: from, To: to},
+		PreviousPeriod: Period{From: prevFrom.UTC(), To: prevTo.UTC()},
+		Totals:         totals,
+		Previous:       previous,
+		Waiting:        waiting,
+		ByArtist:       byArtist,
+	}, nil
+}
+
+// previousPeriod is the window a period is compared with.
+//
+// A whole calendar month is compared with the whole month before it, not
+// with the same number of days: February against 1-28 January would drop the
+// end of January. Any other range is compared with the same number of days
+// immediately before it.
+//
+// While the period is still running, the comparison is cut to the same
+// point: on 10 October at 15:00, October so far is compared with 1 September
+// to 10 September 15:00. Otherwise every month-to-date figure reads as a
+// collapse that is only the calendar.
+func previousPeriod(from, to, now time.Time) (time.Time, time.Time) {
+	f, t := from.In(businessLocation), to.In(businessLocation)
+
+	var prevFrom time.Time
+	if f.Day() == 1 && f.Hour() == 0 && t.Equal(f.AddDate(0, 1, 0)) {
+		prevFrom = f.AddDate(0, -1, 0)
+	} else {
+		days := int(t.Sub(f).Round(24*time.Hour) / (24 * time.Hour))
+		prevFrom = f.AddDate(0, 0, -days)
+	}
+
+	prevTo := f
+	if now.After(from) && now.Before(to) {
+		if cut := prevFrom.Add(now.Sub(from)); cut.Before(f) {
+			prevTo = cut
+		}
+	}
+	return prevFrom.UTC(), prevTo.UTC()
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

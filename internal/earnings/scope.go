@@ -83,3 +83,29 @@ func ArtistScopeCond(alias string, artistParam int) string {
 	}
 	return fmt.Sprintf("%[1]sartist_id = $%[2]d", prefix, artistParam)
 }
+
+// SalonScopeCond is ArtistScopeCond widened to a whole salon: every booking
+// made at the salon, whichever artist took it - including an artist who has
+// since left, whose bookings stay the salon's. Only the owner's overview
+// reads through this (salonrole.EarningsSalonRead).
+func SalonScopeCond(alias string, salonParam int) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	return fmt.Sprintf("%[1]ssalon_id = $%[2]d", prefix, salonParam)
+}
+
+// CancelledCond selects CancelledStatuses, built the way EarnedCond is so the
+// list is written once.
+func CancelledCond(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	quoted := make([]string, 0, len(CancelledStatuses))
+	for _, s := range CancelledStatuses {
+		quoted = append(quoted, "'"+s+"'")
+	}
+	return fmt.Sprintf("%[1]sstatus IN (%[2]s)", prefix, strings.Join(quoted, ", "))
+}

@@ -128,3 +128,78 @@ type ServiceEarnings struct {
 	// Revenue is the total final_price for this service.
 	Revenue decimal.Decimal `json:"revenue"`
 }
+
+// ── Salon overview (owner only) ───────────────────────────────────────────────
+
+// CancelledStatuses are the bookings that were called off after being made:
+// cancelled outright, or cancelled with a deposit to return (refund_due) or
+// already returned (refunded). expired is not here - a request nobody
+// answered, or a checkout hold that lapsed, was never a booking.
+var CancelledStatuses = []string{"cancelled", "refund_due", "refunded"}
+
+// SalonTotals are the salon's figures over one window.
+type SalonTotals struct {
+	// Earned is the same figure each artist's own Earnings page shows
+	// (EarnedCond: completed + no_show at final_price), summed across the
+	// salon. B-Edge holds no money, so this is booked value, not cash.
+	Earned decimal.Decimal `json:"earned"`
+	// EarnedBookings is how many bookings Earned is made of.
+	EarnedBookings int `json:"earned_bookings"`
+	// Deposits is deposit_amount on those same bookings.
+	Deposits  decimal.Decimal `json:"deposits"`
+	Completed int             `json:"completed"`
+	NoShows   int             `json:"no_shows"`
+	// Cancelled counts CancelledStatuses.
+	Cancelled int `json:"cancelled"`
+	// OrdersDelivered and OrdersValue are shop orders delivered in the
+	// window, by delivered_at, at what the customer was charged (after any
+	// discount code).
+	OrdersDelivered int             `json:"orders_delivered"`
+	OrdersValue     decimal.Decimal `json:"orders_value"`
+}
+
+// SalonWaiting is what is waiting on someone in the salon right now. Not
+// tied to the period: a refund owed from last month is still owed.
+type SalonWaiting struct {
+	AwaitingApproval int `json:"awaiting_approval"`
+	// DepositsToCheck is approved (deposit not yet in) and deposit_paid
+	// (customer says paid, not yet confirmed) - the Deposits screen's queue.
+	DepositsToCheck   int             `json:"deposits_to_check"`
+	RefundsOwed       int             `json:"refunds_owed"`
+	RefundsOwedAmount decimal.Decimal `json:"refunds_owed_amount"`
+}
+
+// ArtistOverview is one artist's row in the owner's breakdown.
+type ArtistOverview struct {
+	ArtistID uuid.UUID `json:"artist_id"`
+	Name     string    `json:"name"`
+	// IsYou marks the caller's own row.
+	IsYou bool `json:"is_you"`
+	// IsMember is false for an artist who has left the salon but had
+	// bookings here in the period. Those bookings stay the salon's.
+	IsMember       bool            `json:"is_member"`
+	Earned         decimal.Decimal `json:"earned"`
+	EarnedBookings int             `json:"earned_bookings"`
+	Completed      int             `json:"completed"`
+	NoShows        int             `json:"no_shows"`
+	Cancelled      int             `json:"cancelled"`
+	// Rating and ReviewCount are the artist's all-time figures, the ones
+	// customers see on her profile.
+	Rating      decimal.Decimal `json:"rating"`
+	ReviewCount int             `json:"review_count"`
+
+	userID uuid.UUID
+}
+
+// SalonOverviewResponse is the response for GET /api/v1/earnings/salon.
+type SalonOverviewResponse struct {
+	Period Period `json:"period"`
+	// PreviousPeriod is the window Previous was counted over: the period
+	// before, cut to the same point if the current one is still running, so
+	// the 10th of the month is compared with the 10th of the last.
+	PreviousPeriod Period           `json:"previous_period"`
+	Totals         SalonTotals      `json:"totals"`
+	Previous       SalonTotals      `json:"previous"`
+	Waiting        SalonWaiting     `json:"waiting"`
+	ByArtist       []ArtistOverview `json:"by_artist"`
+}

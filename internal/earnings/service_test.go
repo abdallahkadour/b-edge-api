@@ -37,6 +37,14 @@ type mockRepo struct {
 	// which boundaries each stat actually queried, rather than only seeing
 	// the single canned return value below.
 	periodSummaryCalls []periodSummaryCall
+
+	salonTotals      SalonTotals
+	salonPrevious    SalonTotals
+	salonWaiting     SalonWaiting
+	salonArtists     []ArtistOverview
+	salonErr         error
+	salonTotalsCalls []periodSummaryCall
+	salonIDs         []uuid.UUID
 }
 
 func (m *mockRepo) GetArtistIDByUserID(_ context.Context, _ uuid.UUID) (uuid.UUID, error) {
@@ -56,6 +64,27 @@ func (m *mockRepo) GetDailyBreakdown(_ context.Context, _ uuid.UUID, from, to ti
 
 func (m *mockRepo) GetServiceBreakdown(_ context.Context, _ uuid.UUID, _, _ time.Time) ([]serviceEarningsRow, error) {
 	return m.serviceRows, m.serviceErr
+}
+
+// The salon overview's three reads. salonTotalsCalls records each window the
+// service asked for, so a test can check the comparison window it chose.
+func (m *mockRepo) GetSalonTotals(_ context.Context, salonID uuid.UUID, from, to time.Time) (SalonTotals, error) {
+	m.salonIDs = append(m.salonIDs, salonID)
+	m.salonTotalsCalls = append(m.salonTotalsCalls, periodSummaryCall{From: from, To: to})
+	if len(m.salonTotalsCalls) == 1 {
+		return m.salonTotals, m.salonErr
+	}
+	return m.salonPrevious, m.salonErr
+}
+
+func (m *mockRepo) GetSalonWaiting(_ context.Context, salonID uuid.UUID) (SalonWaiting, error) {
+	m.salonIDs = append(m.salonIDs, salonID)
+	return m.salonWaiting, m.salonErr
+}
+
+func (m *mockRepo) GetSalonArtists(_ context.Context, salonID uuid.UUID, _, _ time.Time) ([]ArtistOverview, error) {
+	m.salonIDs = append(m.salonIDs, salonID)
+	return m.salonArtists, m.salonErr
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

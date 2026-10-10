@@ -401,6 +401,7 @@ def main():
                 pass
         for u in made_users:
             try:
+                sql(f"DELETE FROM audit_events WHERE actor_id='{u}';")  # the activity log names her (2026-10-10)
                 sql(f"DELETE FROM users WHERE id='{u}';")
             except RuntimeError:
                 pass

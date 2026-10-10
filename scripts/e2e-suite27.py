@@ -440,7 +440,9 @@ def teardown():
         except RuntimeError as e:
             print(f"  cleanup: {e}")
     c.cleanup()   # salons, stores, services, artists, subscriptions, tagged users
-    for q in [f"DELETE FROM refresh_tokens WHERE user_id IN ({phones})", f"DELETE FROM users WHERE id IN ({phones})"]:
+    for q in [f"DELETE FROM refresh_tokens WHERE user_id IN ({phones})",
+              f"DELETE FROM audit_events WHERE actor_id IN ({phones})",  # the activity log names them (2026-10-10)
+              f"DELETE FROM users WHERE id IN ({phones})"]:
         try:
             c.sql(q)
         except RuntimeError as e:

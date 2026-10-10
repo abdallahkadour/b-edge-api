@@ -295,6 +295,7 @@ if __name__ == "__main__":
             except RuntimeError:
                 pass
         try:
+            sql("DELETE FROM audit_events WHERE actor_id IN (SELECT id FROM users WHERE name IN ('Enum Probe'))")
             sql("DELETE FROM users WHERE name IN ('Enum Probe')")
         except RuntimeError:
             pass

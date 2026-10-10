@@ -590,6 +590,7 @@ def teardown():
             print(f"  cleanup: {e}")
     c.cleanup()
     for q in [f"DELETE FROM refresh_tokens WHERE user_id IN ({guests})",
+              f"DELETE FROM audit_events WHERE actor_id IN ({guests})",  # the activity log names them (2026-10-10)
               f"DELETE FROM users WHERE id IN ({guests})"]:
         try:
             c.sql(q)

@@ -25,6 +25,26 @@ the wrong system:
 
 ## 1. The travel buffer between stores
 
+> **Fixed the same day (2026-10-10).** All six findings below are closed:
+> one symmetric `travelMinutes`, the store's own day widened by 12 hours,
+> travel measured from after cleanup on both sides, the hold and the booking
+> asking the slot list (`assertOffered`), and every write to an artist's
+> diary - hold, booking, reschedule, day shift - taking a per-artist
+> transaction lock and re-checking travel inside it (`lockArtist`,
+> `travelClash`). Re-measured live with the same throwaway salon: the three
+> holds that were 201 are **409 `SLOT_UNAVAILABLE`**, the two stores now
+> agree in both orders, and an early-morning booking at the other store
+> blocks the travel after it. Decision D31 records the travel rule.
+>
+> **One regression, caught before it shipped.** The first version read the
+> other stores through `GetStore`, which only returns *active* stores. Rania
+> is still placed at a branch that was switched off, so every hold for her
+> answered **500** — found by `verify-uc1` (B1, E5, E6) in the regression
+> run. Travel figures are now read with `GetStoreTravel`, which ignores
+> `is_active`: a closed branch cannot be booked, but bookings can remain on
+> it and it is still somewhere the artist would have to travel to. Pinned by
+> a service test, a slot test and a database test, each watched failing.
+
 ### What works
 
 Slot generation (`internal/booking/slots.go`, step 5) adds travel time as
@@ -42,7 +62,7 @@ the whole-day shift (`shift.go`) both check travel too.
 | T2 | Hold at Store A **03:00** (store closed) | **201** | High |
 | T3 | Hold at **13:07** (off the 15-minute grid) | **201** | Low |
 | **T4** | Store B's buffer 30, Store A's 150. A booked 10–11 → B offers 11:30? / B booked 11:30 → A offers 10:00? | **Yes / No.** The same pair of appointments is allowed or refused depending on **which was booked first**. | High |
-| T5 | Booking at Store B **01:30–02:30** Beirut (the previous UTC day); Store A open 05:00 | A offers **05:00**, inside the 150 minutes after it | Medium (bridal 5am starts are real) |
+| T5 | A booking at Store B in the first hours of Beirut's day (the previous UTC day) | Not read at all by the slot list, so the travel after it was ignored | Medium (bridal 5am starts are real) |
 | T6 | Code reading: travel after the other store's booking starts at its `end_time`, not after its cleanup (`blocked_until`) | Under-reserves by the cleanup minutes (e.g. 15) | Medium |
 
 **Why T1–T3:** `HoldGuestSlot` and `CreateBooking` never ask whether the
@@ -60,6 +80,15 @@ never caught.
 override up in **one direction** (`csb.StoreID → storeID`) for both the
 "before" and "after" intervals. `shift.go` copies the same rule. Travel
 between two places is one road; the rule must be symmetric.
+
+**Correction to T5's evidence.** The probe first written for it booked
+Store B 01:30–02:30 and reported Store A offering 05:00 "inside" the travel
+after it - but 02:30 + 150 minutes is exactly 05:00, the first legal time,
+so that probe proved nothing either way. The defect stands on the query
+(`DATE(start_time AT TIME ZONE 'UTC')` cannot return a booking at 02:00
+Beirut, which is 23:00 UTC the day before) and on a unit test that pins the
+window; the corrected probe (02:00–03:00, free from 05:30) shows the fix
+live: 05:00 refused, 05:30 offered.
 
 **Why T5:** `GetArtistBookingsForDate` and `GetArtistCrossStoreBookings`
 filter `DATE(start_time AT TIME ZONE 'UTC') = $date`. Beirut's day starts
@@ -703,15 +732,18 @@ Team table.
 
 ## Recommended order
 
-1. **The travel/hours write-path fix (1d, 1e) with 1(a)–(c)** — a client can
-   be confirmed for a time the artist cannot physically keep. Test-first,
-   including the concurrent-hold database test.
-2. **The PWA's error copy (4.4)** — small, and it becomes more visible once
-   (1) makes the API refuse more.
+1. ~~**The travel/hours write-path fix (1d, 1e) with 1(a)–(c)**~~ —
+   **done 2026-10-10**, test-first, including a deterministic two-writer
+   database test (the second hold waits on the lock, then is refused).
+2. ~~**The PWA's error copy (4.4)**~~ — **done 2026-10-10**: only a 409
+   "no longer available" goes to the "choose another time" screen, which no
+   longer claims someone else booked it; a hold that ran out says so; a lost
+   connection or server fault stays on the picker; "your details have been
+   saved" only appears when they were.
 3. **Reassignment (section 2)** — needs one founder decision first: does the
    client keep her price when moved to a dearer artist? (Proposed: yes.)
 4. **Reporting: location split, Yesterday/custom range, the daily rollup.**
 5. Pair travel times, sick-day warnings, owner-made bookings.
 
-All code above is **proposed and not yet applied**; none of it changes
-behaviour until it is built with its tests.
+Section 1's code and the PWA copy fix (4.4) are **applied** (2026-10-10);
+the code in sections 2 and 3 is still proposed.

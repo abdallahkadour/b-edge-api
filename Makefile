@@ -1,4 +1,4 @@
-.PHONY: run dev test coverage migrate migrate-test swagger build image docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 e2e-suite27 e2e-suite28 e2e-journeys verify-security-salon chaos-booking verify verify-security
+.PHONY: run dev test coverage migrate migrate-test swagger build image docker-up docker-down lint docs-check docs-facts verify-uc1 verify-uc2 verify-uc6 verify-uc7 e2e-suite22 e2e-suite23 e2e-suite27 e2e-suite28 e2e-suite30 e2e-journeys verify-security-salon chaos-booking verify verify-security
 
 run:
 	go run cmd/main.go
@@ -129,6 +129,16 @@ e2e-suite27:
 ##                                     # this machine's code budget for 10 min
 e2e-suite28:
 	python3 scripts/e2e-suite28.py $(ARGS)
+
+## e2e-suite30: the salon owner's dashboard (decision D30)
+##
+## The overview's figures against the database, the team's bookings and week,
+## the owner acting on a member's booking (and the member refused on hers),
+## and the activity log: who is named, old beside new, this salon only,
+## owner only. The screens are b-edge-web: node scripts/e2e-suite30-ui.mjs.
+## Builds and destroys its own salon of two. Needs -tags devbypass (make dev).
+e2e-suite30:
+	python3 scripts/e2e-suite30.py
 
 ## e2e-journeys: E2E suites 2-16, the behaviour half
 ##

@@ -440,7 +440,9 @@ stateDiagram-v2
 | `GET` | `/api/v1/invitations/:token` | *(public)* | 200 preview | 404 `INVITATION_NOT_FOUND` · 410 `INVITATION_EXPIRED` |
 | `POST` | `/api/v1/invitations/:token/accept` | *(authenticated)* | 200 | 404 · 410 · 409 `ALREADY_IN_SALON` |
 | `PUT` | `/api/v1/artists/me/schedule` | `own_schedule:write` | 200 | 403 · 422 |
-| `GET` | `/api/v1/salon/earnings/breakdown` | `earnings:salon:read` | 200 | 403 |
+| `GET` | `/api/v1/earnings/salon` *(shipped 2026-10-10 under this path, not the planned `/salon/earnings/breakdown`)* | `earnings:salon:read` | 200 | 403 |
+| `GET` | `/api/v1/bookings/salon`, `/api/v1/bookings/salon/calendar` | `calendar:salon:read` | 200 | 403 · 400 `INVALID_ARTIST_ID` |
+| `GET` | `/api/v1/salon/activity` | `activity:salon:read` | 200 | 403 · 400 `INVALID_KIND` / `INVALID_ACTOR` |
 
 **`GET /invitations/:token` is public and therefore an enumeration surface.** It must
 return the salon name and inviter's display name and **nothing else** — no member list, no

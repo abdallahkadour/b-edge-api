@@ -80,9 +80,9 @@ one with `scripts/wa-status.sh`. This gates customer login, booking
 messages, review requests and the calendar link. Tracked as **D8**; SMS
 (`TWILIO_SMS_FROM`) is a second transport the worker already supports.
 
-**2. Decisions live in `B-Edge-Decision-Register-v1.md`.** One list, 20
+**2. Decisions live in `B-Edge-Decision-Register-v1.md`.** One list, 21
 resolved with the file each landed in, 9 open with who can settle each
-(counted 2026-10-09). Read
+(counted 2026-10-10). Read
 it before planning any sprint. The monetization spec's §11 is **history** and
 says so.
 

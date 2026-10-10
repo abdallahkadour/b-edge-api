@@ -152,6 +152,13 @@ type Repository interface {
 	// paginated) joined with service and store display names.
 	ListEnrichedBookingsByCustomer(ctx context.Context, customerID uuid.UUID, cursor time.Time, limit int) ([]*EnrichedBooking, error)
 
+	// ListBookingsForAdmin is every salon's bookings, newest first, with the
+	// salon's name; optionally one status and/or one salon. Returns up to
+	// limit+1 rows so the caller can tell there is another page.
+	ListBookingsForAdmin(ctx context.Context, status string, salonID *uuid.UUID, cursor time.Time, limit int) ([]*AdminBooking, error)
+	// AdminBookingSummary counts what is waiting on someone, platform-wide.
+	AdminBookingSummary(ctx context.Context) (*AdminBookingSummary, error)
+
 	// GetBookingsByArtist returns paginated bookings for an artist.
 	// cursor is the created_at of the last item on the previous page.
 	GetBookingsByArtist(ctx context.Context, artistID uuid.UUID, cursor time.Time, limit int) ([]*Booking, error)
@@ -407,8 +414,8 @@ const enrichedFrom = `
 
 // scanEnrichedBooking scans a row (booking columns + joined names) into an
 // EnrichedBooking. Column order must match enrichedSelectCols exactly.
-func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
-	return row.Scan(
+func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking, extra ...any) error {
+	dest := []any{
 		&e.ID, &e.SalonID, &e.StoreID, &e.ArtistID, &e.CustomerID, &e.ServiceID,
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
@@ -418,7 +425,11 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking) error {
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
 		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
 		&e.CustomerName, &e.CustomerPhone, &e.ArtistName, &e.ServiceName, &e.StoreName, &e.StoreCity,
-	)
+	}
+	// Extra columns a query selects AFTER enrichedSelectCols (the admin list's
+	// salon name) - appended here rather than copied into a second scan list
+	// that would drift from this one.
+	return row.Scan(append(dest, extra...)...)
 }
 
 // scanEnrichedBookings scans multiple enriched rows.
@@ -524,6 +535,58 @@ func (r *pgRepo) ListEnrichedBookingsForDay(ctx context.Context, artistID uuid.U
 	}
 	defer rows.Close()
 	return scanEnrichedBookings(rows)
+}
+
+// ListBookingsForAdmin - see the interface. Keyset pagination on created_at,
+// like the artist and customer lists; the status and salon conditions are
+// appended only when given, each with its own parameter.
+func (r *pgRepo) ListBookingsForAdmin(ctx context.Context, status string, salonID *uuid.UUID, cursor time.Time, limit int) ([]*AdminBooking, error) {
+	where := `WHERE b.created_at < $1 AND b.deleted_at IS NULL`
+	args := []any{cursor, limit + 1}
+	if status != "" {
+		args = append(args, status)
+		where += fmt.Sprintf(` AND b.status = $%d`, len(args))
+	}
+	if salonID != nil {
+		args = append(args, *salonID)
+		where += fmt.Sprintf(` AND b.salon_id = $%d`, len(args))
+	}
+	q := fmt.Sprintf(`SELECT %s, sa.name AS salon_name %s
+		JOIN salons sa ON sa.id = b.salon_id
+		%s
+		ORDER BY b.created_at DESC
+		LIMIT $2`, enrichedSelectCols, enrichedFrom, where)
+
+	rows, err := r.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list bookings for admin: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*AdminBooking, 0)
+	for rows.Next() {
+		a := &AdminBooking{}
+		if err := scanEnrichedBooking(rows, &a.EnrichedBooking, &a.SalonName); err != nil {
+			return nil, fmt.Errorf("scan admin booking: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// AdminBookingSummary - see the interface. One pass over live bookings.
+func (r *pgRepo) AdminBookingSummary(ctx context.Context) (*AdminBookingSummary, error) {
+	s := &AdminBookingSummary{}
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'refund_due'),
+		       COALESCE(sum(deposit_amount) FILTER (WHERE status = 'refund_due'), 0),
+		       count(*) FILTER (WHERE status = 'pending'),
+		       count(*) FILTER (WHERE status IN ('approved', 'deposit_paid'))
+		  FROM bookings
+		 WHERE deleted_at IS NULL`).Scan(&s.RefundsOwed, &s.RefundsOwedAmount, &s.AwaitingApproval, &s.AwaitingDeposit)
+	if err != nil {
+		return nil, fmt.Errorf("admin booking summary: %w", err)
+	}
+	return s, nil
 }
 
 // ListEnrichedBookingsByCustomer returns a customer's bookings with display names,

@@ -46,6 +46,13 @@ type enqueuedNotification struct {
 }
 
 type mockRepo struct {
+	// admin views
+	adminBookings []*AdminBooking
+	adminStatus   string
+	adminSalon    *uuid.UUID
+	adminLimit    int
+	adminSummary  *AdminBookingSummary
+
 	createWaitlistEntryCalled bool
 	// Where the artist belongs, for validateBookingParties. Zero values mean
 	// "a member of testSalonID who works at the requested store", so the
@@ -293,6 +300,13 @@ func (m *mockRepo) ListEnrichedBookingsForDay(_ context.Context, _ uuid.UUID, _,
 
 func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _ time.Time) ([]*EnrichedBooking, error) {
 	return m.listEnrichedForWeekBookings, m.listEnrichedForWeekErr
+}
+func (m *mockRepo) ListBookingsForAdmin(_ context.Context, status string, salonID *uuid.UUID, _ time.Time, limit int) ([]*AdminBooking, error) {
+	m.adminStatus, m.adminSalon, m.adminLimit = status, salonID, limit
+	return m.adminBookings, nil
+}
+func (m *mockRepo) AdminBookingSummary(_ context.Context) (*AdminBookingSummary, error) {
+	return m.adminSummary, nil
 }
 func (m *mockRepo) ListEnrichedBookingsByCustomer(_ context.Context, _ uuid.UUID, _ time.Time, _ int) ([]*EnrichedBooking, error) {
 	return m.listEnrichedByCustomerBookings, m.listEnrichedByCustomerErr

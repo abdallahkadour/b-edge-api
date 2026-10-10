@@ -63,6 +63,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 		WithDiscounts(promo.NewService(promo.NewRepository(pool)))
 	handler := NewHandler(svc, log)
 
+	// ── Admin - every salon's bookings, read-only ─────────────────────────────
+	adm := app.Group("/api/v1/admin/bookings", middleware.RequireAuth(), middleware.RequireRole("admin"))
+	adm.Get("/", handler.AdminListBookings)
+	adm.Get("/summary", handler.AdminBookingSummary)
+
 	// ── Public routes - no authentication required ────────────────────────────
 	// Registered BEFORE the protected group so Fiber matches /slots and /guest/*
 	// before the parametric /:id route in the protected group.
@@ -895,4 +900,50 @@ func (h *Handler) RescheduleSlots(c *fiber.Ctx) error {
 		return err
 	}
 	return response.OK(c, slots)
+}
+
+// AdminListBookings godoc
+// @Summary      Every salon's bookings (admin, read-only)
+// @Description  Newest first, keyset-paginated on created_at like the artist list.
+// @Description  Optionally one status (e.g. refund_due) and/or one salon. Each row
+// @Description  carries salon_name. Read-only: the admin sees, the artist acts.
+// @Tags         admin
+// @Security     BearerAuth
+// @Produce      json
+// @Param        status   query string false "One booking status"
+// @Param        salon_id query string false "One salon"
+// @Param        cursor   query string false "created_at of the last row seen (RFC3339Nano)"
+// @Param        limit    query int    false "Page size, 1-100 (default 20)"
+// @Success      200 {object} response.Body{data=[]AdminBookingResponse}
+// @Failure      400 {object} response.ErrorBody "INVALID_STATUS or INVALID_SALON_ID"
+// @Failure      403 {object} response.ErrorBody
+// @Router       /admin/bookings [get]
+func (h *Handler) AdminListBookings(c *fiber.Ctx) error {
+	cursor, limit := parsePaginationParams(c)
+	rows, hasMore, err := h.svc.AdminListBookings(c.UserContext(), c.Query("status"), c.Query("salon_id"), cursor, limit)
+	if err != nil {
+		return err
+	}
+	var next string
+	if hasMore && len(rows) > 0 {
+		next = rows[len(rows)-1].CreatedAt.Format(time.RFC3339Nano)
+	}
+	return response.List(c, rows, &response.Meta{NextCursor: next, HasMore: hasMore})
+}
+
+// AdminBookingSummary godoc
+// @Summary      What is waiting on someone, platform-wide (admin)
+// @Description  Refunds owed (count and total deposits), requests awaiting the
+// @Description  artist's approval, and deposits awaiting her check.
+// @Tags         admin
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200 {object} response.Body{data=AdminBookingSummary}
+// @Router       /admin/bookings/summary [get]
+func (h *Handler) AdminBookingSummary(c *fiber.Ctx) error {
+	s, err := h.svc.AdminBookingSummary(c.UserContext())
+	if err != nil {
+		return err
+	}
+	return response.OK(c, s)
 }

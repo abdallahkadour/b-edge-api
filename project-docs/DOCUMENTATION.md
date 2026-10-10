@@ -29,13 +29,13 @@
 > **Verified against code 2026-10-08:** **54 migrations**
 > (latest `054_order_request_id`), **36 tables**, **20 route-bearing
 > domains** (26 directories under `internal/`, excluding `pkg`), **20 leaf
-> packages**, **159 route registrations** across **137 swagger paths** (corrected
+> packages**, **161 route registrations** across **139 swagger paths** (corrected
 > 2026-09-26: the counter had included ~30 routes that tests mount on
 > throwaway apps and missed 24 registered with a `base+` prefix),
-> **1279 Go tests**, **28 environment variable names** read via `os.Getenv`
-> (test files included). Frontend: **47 Angular routes**, **21 spec files**
-> carrying **107 passing tests** (shared 55, artist-dashboard 18,
-> customer-pwa 34), **50 help topics** (16 customer, 30 artist, 4 admin).
+> **1285 Go tests**, **28 environment variable names** read via `os.Getenv`
+> (test files included). Frontend: **47 Angular routes**, **22 spec files**
+> carrying **111 passing tests** (shared 55, artist-dashboard 22,
+> customer-pwa 34), **51 help topics** (16 customer, 30 artist, 5 admin).
 >
 > These numbers are now **generated, not typed**:
 > `./scripts/doc-facts.sh` recomputes them from the repository and
@@ -76,6 +76,7 @@ founder decision and no procurement.
 
 | Area | What changed | Where to read |
 |---|---|---|
+| **The admin sees every salon's bookings** | New **Bookings** tab on `/admin`, read-only: led by **refunds owed** (count and the deposits salons owe back — $130 across 2 on the dev database), **awaiting approval** and **deposits to check**, each tappable; status pills; salon, artist, customer and phone on every row; paging. `GET /admin/bookings` and `/admin/bookings/summary`. The PRD's launch list asked for it; the admin page had no bookings at all. | E2E plan Suite 29.1 · `internal/booking/admin.go` · `admin-bookings.component.ts` · admin help "See every salon's bookings" |
 | **CI and a production image** | Until now the only CI job was the docs check, and nothing was containerised. `ci.yml` in each repo now runs every Go tier (unit, database against a Postgres 15 service, dev-bypass), builds the untagged binary and the image; the web job builds the shared library, runs all three unit suites and builds both apps. The `Dockerfile` builds without `-tags devbypass` — verified: `000000` is refused even with `APP_ENV=development`. Its first local build stopped migrations at 004: eight migration files are `0600` on this disk and the image runs as nonroot, now fixed with `COPY --chmod`. Both workflows were run step by step in a fresh git worktree before being committed. | `B-Edge-Deployment-Runbook-v1.md` (top note) · `Dockerfile` · `.github/workflows/ci.yml` |
 | **Customers can move a booking** | **Change time** on the booking (customer app) opens the funnel's time picker in a "move" mode; at most two moves, price and deposit unchanged, the artist told. Its times come from the new `GET /bookings/:id/reschedule-slots`, which leaves the booking itself out of the artist's occupancy — the public slots list hid every time overlapping it. The booking now says whether it can move (`can_reschedule`, `reschedules_left`). Closes E2E 28.10, the "no screen" gap. | E2E plan 28.10 · `internal/booking/reschedule.go` · `move-booking.page.ts` · customer help "Change the time of a booking" |
 

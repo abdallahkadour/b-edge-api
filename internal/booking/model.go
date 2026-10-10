@@ -532,6 +532,35 @@ func toResponse(b *Booking) *BookingResponse {
 	}
 }
 
+// ── Admin views ───────────────────────────────────────────────────────────────
+
+// AdminBooking is an enriched booking plus the salon it belongs to - the
+// admin's list spans every salon, so the salon is the first thing to read.
+type AdminBooking struct {
+	EnrichedBooking
+	SalonName string `db:"salon_name"`
+}
+
+// AdminBookingResponse is AdminBooking for the wire: every enriched field,
+// flattened, plus salon_name.
+type AdminBookingResponse struct {
+	*EnrichedBookingResponse
+	SalonName string `json:"salon_name"`
+}
+
+// AdminBookingSummary is what is waiting on someone across the platform.
+//
+// RefundsOwedAmount is the deposits the platform's salons owe back to
+// customers right now - money B-Edge never holds (deposits go straight to
+// the salon), so it can only be seen, chased and confirmed, which is what
+// this view is for.
+type AdminBookingSummary struct {
+	RefundsOwed       int             `json:"refunds_owed"`
+	RefundsOwedAmount decimal.Decimal `json:"refunds_owed_amount"`
+	AwaitingApproval  int             `json:"awaiting_approval"`
+	AwaitingDeposit   int             `json:"awaiting_deposit"`
+}
+
 // ── Enriched booking types ────────────────────────────────────────────────────
 
 // EnrichedBooking is a Booking joined with the human-readable names every

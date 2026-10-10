@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/pricing"
 	"github.com/abdallahkadour/b-edge-api/internal/pkg/schedule"
@@ -158,6 +159,13 @@ type Repository interface {
 	ListBookingsForAdmin(ctx context.Context, status string, salonID *uuid.UUID, cursor time.Time, limit int) ([]*AdminBooking, error)
 	// AdminBookingSummary counts what is waiting on someone, platform-wide.
 	AdminBookingSummary(ctx context.Context) (*AdminBookingSummary, error)
+
+	// NoShowHistory is the salon's no-show setting and how many of this
+	// customer's bookings at this salon since `since` ended as no_show (D29).
+	NoShowHistory(ctx context.Context, salonID, customerID uuid.UUID, since time.Time) (after int, count int, err error)
+	// RequireNoShowDeposit sets a deposit on a booking that had none and
+	// marks it as asked for by the no-show rule. 0 rows when it already had one.
+	RequireNoShowDeposit(ctx context.Context, bookingID uuid.UUID, amount decimal.Decimal) (int64, error)
 
 	// GetBookingsByArtist returns paginated bookings for an artist.
 	// cursor is the created_at of the last item on the previous page.
@@ -350,7 +358,7 @@ func scanBooking(row pgx.Row, b *Booking) error {
 		&b.DepositPaidAt,
 		&b.DepositReference,
 		&b.DepositPayerPhone,
-		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
+		&b.ReviewToken, &b.CalendarToken, &b.BufferMin, &b.BlockedUntil, &b.RescheduleCount, &b.NoShowDeposit,
 		&b.Channel,
 		&b.SpecialRequests,
 		&b.CancellationReason,
@@ -372,7 +380,7 @@ const bookingSelectCols = `
 	start_time, end_time, held_until, status,
 	original_price, discount_amount, final_price, discount_code,
 	deposit_amount, deposit_deadline, deposit_paid_at, deposit_reference, deposit_payer_phone, review_token, calendar_token,
-	buffer_min, blocked_until, reschedule_count,
+	buffer_min, blocked_until, reschedule_count, no_show_deposit,
 	channel, special_requests, cancellation_reason,
 	cancelled_at, completed_at, no_show_at,
 	created_at, updated_at, deleted_at`
@@ -386,7 +394,7 @@ const enrichedSelectCols = `
 	b.start_time, b.end_time, b.held_until, b.status,
 	b.original_price, b.discount_amount, b.final_price,
 	b.deposit_amount, b.deposit_deadline, b.deposit_paid_at, b.deposit_reference, b.deposit_payer_phone, b.review_token, b.calendar_token,
-	b.buffer_min, b.blocked_until, b.reschedule_count,
+	b.buffer_min, b.blocked_until, b.reschedule_count, b.no_show_deposit,
 	b.channel, b.special_requests, b.cancellation_reason,
 	b.cancelled_at, b.completed_at, b.no_show_at,
 	b.created_at, b.updated_at, b.deleted_at,
@@ -420,7 +428,7 @@ func scanEnrichedBooking(row pgx.Row, e *EnrichedBooking, extra ...any) error {
 		&e.StartTime, &e.EndTime, &e.HeldUntil, &e.Status,
 		&e.OriginalPrice, &e.DiscountAmount, &e.FinalPrice,
 		&e.DepositAmount, &e.DepositDeadline, &e.DepositPaidAt, &e.DepositReference, &e.DepositPayerPhone, &e.ReviewToken, &e.CalendarToken,
-		&e.BufferMin, &e.BlockedUntil, &e.RescheduleCount,
+		&e.BufferMin, &e.BlockedUntil, &e.RescheduleCount, &e.NoShowDeposit,
 		&e.Channel, &e.SpecialRequests, &e.CancellationReason,
 		&e.CancelledAt, &e.CompletedAt, &e.NoShowAt,
 		&e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
@@ -571,6 +579,34 @@ func (r *pgRepo) ListBookingsForAdmin(ctx context.Context, status string, salonI
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// NoShowHistory - see the interface. Reads the partial index from migration 055.
+func (r *pgRepo) NoShowHistory(ctx context.Context, salonID, customerID uuid.UUID, since time.Time) (int, int, error) {
+	var after, count int
+	err := r.db.QueryRow(ctx, `
+		SELECT s.no_show_deposit_after,
+		       (SELECT count(*) FROM bookings b
+		         WHERE b.salon_id = s.id AND b.customer_id = $2
+		           AND b.status = 'no_show' AND b.deleted_at IS NULL
+		           AND b.start_time >= $3)
+		  FROM salons s WHERE s.id = $1`, salonID, customerID, since).Scan(&after, &count)
+	if err != nil {
+		return 0, 0, fmt.Errorf("no-show history: %w", err)
+	}
+	return after, count, nil
+}
+
+// RequireNoShowDeposit - see the interface. The deposit_amount = 0 guard is
+// in the statement, so a deposit already asked for is never replaced.
+func (r *pgRepo) RequireNoShowDeposit(ctx context.Context, bookingID uuid.UUID, amount decimal.Decimal) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE bookings SET deposit_amount = $2, no_show_deposit = true, updated_at = NOW()
+		 WHERE id = $1 AND deposit_amount = 0 AND deleted_at IS NULL`, bookingID, amount)
+	if err != nil {
+		return 0, fmt.Errorf("require no-show deposit: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // AdminBookingSummary - see the interface. One pass over live bookings.
@@ -1789,7 +1825,7 @@ func scanBookings(rows pgx.Rows) ([]*Booking, error) {
 			&b.StartTime, &b.EndTime, &b.HeldUntil, &b.Status,
 			&b.OriginalPrice, &b.DiscountAmount, &b.FinalPrice, &b.DiscountCode,
 			&b.DepositAmount, &b.DepositDeadline, &b.DepositPaidAt, &b.DepositReference, &b.DepositPayerPhone, &b.ReviewToken, &b.CalendarToken,
-			&b.BufferMin, &b.BlockedUntil, &b.RescheduleCount,
+			&b.BufferMin, &b.BlockedUntil, &b.RescheduleCount, &b.NoShowDeposit,
 			&b.Channel, &b.SpecialRequests, &b.CancellationReason,
 			&b.CancelledAt, &b.CompletedAt, &b.NoShowAt,
 			&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt,

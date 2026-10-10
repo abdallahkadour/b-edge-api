@@ -36,6 +36,8 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 //     GET    /api/v1/artists/salon/payment-methods      - own, including retired
 //     PUT    /api/v1/artists/salon/payment-methods      - add or change one
 //     PATCH  /api/v1/artists/salon/payment-methods/:id  - retire or restore
+//     GET    /api/v1/artists/salon/no-show-policy       - the no-show deposit rule (D29)
+//     PUT    /api/v1/artists/salon/no-show-policy       - change it (owner)
 func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
 	handler := NewHandler(NewService(NewRepository(pool)))
 
@@ -53,6 +55,11 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool) {
 	g.Get("/payment-methods", handler.List)
 	g.Put("/payment-methods", canWritePaymentMethods, handler.Upsert)
 	g.Patch("/payment-methods/:id", canWritePaymentMethods, handler.SetActive)
+
+	// The no-show deposit rule (D29) is a deposit setting, so it lives here
+	// and takes the same owner capability as the account deposits go to.
+	g.Get("/no-show-policy", handler.GetNoShowPolicy)
+	g.Put("/no-show-policy", canWritePaymentMethods, handler.SetNoShowPolicy)
 }
 
 // ListPublic godoc
@@ -158,6 +165,55 @@ func (h *Handler) SetActive(c *fiber.Ctx) error {
 		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
 	}
 	out, err := h.svc.SetActive(c.UserContext(), id, *salonID, *req.IsActive)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
+}
+
+// GetNoShowPolicy godoc
+// @Summary      The salon's no-show deposit rule
+// @Description  After how many missed appointments at this salon in the last 12
+// @Description  months a customer pays half the price as a deposit for a service
+// @Description  that takes none. 0 is off. Decision D29.
+// @Tags         payments
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200 {object} response.Body{data=NoShowPolicy}
+// @Router       /artists/salon/no-show-policy [get]
+func (h *Handler) GetNoShowPolicy(c *fiber.Ctx) error {
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+	out, err := h.svc.NoShowPolicy(c.UserContext(), *salonID)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
+}
+
+// SetNoShowPolicy godoc
+// @Summary      Change the salon's no-show deposit rule (owner)
+// @Tags         payments
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        body body SetNoShowPolicyRequest true "after: 0 (off) to 10"
+// @Success      200 {object} response.Body{data=NoShowPolicy}
+// @Failure      422 {object} response.ErrorBody
+// @Failure      403 {object} response.ErrorBody "SALON_ROLE_FORBIDDEN for a member"
+// @Router       /artists/salon/no-show-policy [put]
+func (h *Handler) SetNoShowPolicy(c *fiber.Ctx) error {
+	salonID := middleware.SalonIDFromContext(c)
+	if salonID == nil {
+		return apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+	var req SetNoShowPolicyRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+	out, err := h.svc.SetNoShowPolicy(c.UserContext(), *salonID, req)
 	if err != nil {
 		return err
 	}

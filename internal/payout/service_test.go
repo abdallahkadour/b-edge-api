@@ -17,6 +17,20 @@ type mockRepo struct {
 	upserted    UpsertPaymentMethodRequest
 	upsertErr   error
 	setActiveEr error
+
+	noShowSalon  uuid.UUID
+	noShowAfter  int
+	noShowWrites int
+}
+
+func (m *mockRepo) GetNoShowPolicy(_ context.Context, _ uuid.UUID) (int, error) {
+	return m.noShowAfter, nil
+}
+
+func (m *mockRepo) SetNoShowPolicy(_ context.Context, salonID uuid.UUID, after int) error {
+	m.noShowSalon, m.noShowAfter = salonID, after
+	m.noShowWrites++
+	return nil
 }
 
 func (m *mockRepo) ListBySalon(_ context.Context, _ uuid.UUID, activeOnly bool) ([]*PaymentMethod, error) {

@@ -212,6 +212,8 @@ func (s *Service) SubmitGuestBooking(ctx context.Context, bookingID uuid.UUID, r
 		b.DiscountAmount = discountAmountOf(applied)
 		b.DiscountCode = discountCodeOf(applied)
 	}
+	// Now that the customer is known: her no-shows at this salon (D29).
+	s.applyNoShowRule(ctx, b)
 	return toResponse(b), nil
 }
 

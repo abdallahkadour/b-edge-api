@@ -98,3 +98,29 @@ func (s *Service) SetActive(ctx context.Context, id, salonID uuid.UUID, active b
 	out := toResponse(p)
 	return &out, nil
 }
+
+// NoShowPolicy reads the salon's no-show deposit setting (D29).
+func (s *Service) NoShowPolicy(ctx context.Context, salonID uuid.UUID) (*NoShowPolicy, error) {
+	after, err := s.repo.GetNoShowPolicy(ctx, salonID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &NoShowPolicy{After: after}, nil
+}
+
+// SetNoShowPolicy changes it: 0 to 10, where 0 turns the rule off.
+func (s *Service) SetNoShowPolicy(ctx context.Context, salonID uuid.UUID, req SetNoShowPolicyRequest) (*NoShowPolicy, error) {
+	if err := s.validate.Struct(req); err != nil {
+		return nil, validation.MapError(err)
+	}
+	if err := s.repo.SetNoShowPolicy(ctx, salonID, *req.After); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperror.Forbidden("NO_SALON", "You are not associated with a salon")
+		}
+		return nil, err
+	}
+	return &NoShowPolicy{After: *req.After}, nil
+}

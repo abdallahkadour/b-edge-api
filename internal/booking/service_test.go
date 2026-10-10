@@ -52,6 +52,12 @@ type mockRepo struct {
 	adminSalon    *uuid.UUID
 	adminLimit    int
 	adminSummary  *AdminBookingSummary
+	// D29 no-show rule
+	noShowAfter, noShowCount, requireNoShowCalls int
+	noShowSalon, noShowCustomer                  uuid.UUID
+	noShowSince                                  time.Time
+	requireNoShowRows                            int64
+	requiredNoShowAmount                         decimal.Decimal
 
 	createWaitlistEntryCalled bool
 	// Where the artist belongs, for validateBookingParties. Zero values mean
@@ -304,6 +310,15 @@ func (m *mockRepo) ListEnrichedBookingsForWeek(_ context.Context, _ uuid.UUID, _
 func (m *mockRepo) ListBookingsForAdmin(_ context.Context, status string, salonID *uuid.UUID, _ time.Time, limit int) ([]*AdminBooking, error) {
 	m.adminStatus, m.adminSalon, m.adminLimit = status, salonID, limit
 	return m.adminBookings, nil
+}
+func (m *mockRepo) NoShowHistory(_ context.Context, salonID, customerID uuid.UUID, since time.Time) (int, int, error) {
+	m.noShowSalon, m.noShowCustomer, m.noShowSince = salonID, customerID, since
+	return m.noShowAfter, m.noShowCount, nil
+}
+func (m *mockRepo) RequireNoShowDeposit(_ context.Context, _ uuid.UUID, amount decimal.Decimal) (int64, error) {
+	m.requireNoShowCalls++
+	m.requiredNoShowAmount = amount
+	return m.requireNoShowRows, nil
 }
 func (m *mockRepo) AdminBookingSummary(_ context.Context) (*AdminBookingSummary, error) {
 	return m.adminSummary, nil

@@ -110,3 +110,16 @@ func toPublicResponse(p *PaymentMethod) PublicPaymentMethodResponse {
 		AccountRef:  p.AccountRef,
 	}
 }
+
+// NoShowPolicy is the salon's no-show deposit rule (decision D29): a customer
+// who has missed After appointments here in the last 12 months pays half the
+// price as a deposit for a service that takes none. 0 is off.
+type NoShowPolicy struct {
+	After int `json:"after"`
+}
+
+// SetNoShowPolicyRequest - a pointer so an absent value is refused rather
+// than read as 0, which would silently turn the rule off.
+type SetNoShowPolicyRequest struct {
+	After *int `json:"after" validate:"required,min=0,max=10"`
+}

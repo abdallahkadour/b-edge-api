@@ -189,7 +189,11 @@ type Booking struct {
 	// RescheduleCount is how many times the client has moved this booking.
 	// Capped by maxReschedules: a slot moved repeatedly is a slot nobody else
 	// can book, with no deposit ever at risk (migration 042).
-	RescheduleCount int     `db:"reschedule_count"`
+	RescheduleCount int `db:"reschedule_count"`
+	// NoShowDeposit is true when this booking's deposit was asked for because
+	// its customer had missed appointments at this salon (decision D29,
+	// migration 055) - so the artist and the customer can both be told why.
+	NoShowDeposit   bool    `db:"no_show_deposit"`
 	Channel         string  `db:"channel"`
 	SpecialRequests *string `db:"special_requests"`
 	// DiscountCode is denormalised beside discount_amount so a receipt renders
@@ -483,27 +487,30 @@ type CancelBookingRequest struct {
 
 // BookingResponse is the safe representation of a booking returned to clients.
 type BookingResponse struct {
-	ID                 uuid.UUID       `json:"id"`
-	SalonID            uuid.UUID       `json:"salon_id"`
-	StoreID            uuid.UUID       `json:"store_id"`
-	ArtistID           uuid.UUID       `json:"artist_id"`
-	CustomerID         uuid.UUID       `json:"customer_id"`
-	ServiceID          uuid.UUID       `json:"service_id"`
-	StartTime          time.Time       `json:"start_time"`
-	EndTime            time.Time       `json:"end_time"`
-	Status             string          `json:"status"`
-	OriginalPrice      decimal.Decimal `json:"original_price"`
-	DiscountAmount     decimal.Decimal `json:"discount_amount"`
-	FinalPrice         decimal.Decimal `json:"final_price"`
-	DepositAmount      decimal.Decimal `json:"deposit_amount"`
-	DepositDeadline    *time.Time      `json:"deposit_deadline,omitempty"`
-	DepositPaidAt      *time.Time      `json:"deposit_paid_at,omitempty"`
-	DepositReference   *string         `json:"deposit_reference,omitempty"`
-	DepositPayerPhone  *string         `json:"deposit_payer_phone,omitempty"`
-	Channel            string          `json:"channel"`
-	SpecialRequests    *string         `json:"special_requests,omitempty"`
-	CancellationReason *string         `json:"cancellation_reason,omitempty"`
-	CreatedAt          time.Time       `json:"created_at"`
+	ID                uuid.UUID       `json:"id"`
+	SalonID           uuid.UUID       `json:"salon_id"`
+	StoreID           uuid.UUID       `json:"store_id"`
+	ArtistID          uuid.UUID       `json:"artist_id"`
+	CustomerID        uuid.UUID       `json:"customer_id"`
+	ServiceID         uuid.UUID       `json:"service_id"`
+	StartTime         time.Time       `json:"start_time"`
+	EndTime           time.Time       `json:"end_time"`
+	Status            string          `json:"status"`
+	OriginalPrice     decimal.Decimal `json:"original_price"`
+	DiscountAmount    decimal.Decimal `json:"discount_amount"`
+	FinalPrice        decimal.Decimal `json:"final_price"`
+	DepositAmount     decimal.Decimal `json:"deposit_amount"`
+	DepositDeadline   *time.Time      `json:"deposit_deadline,omitempty"`
+	DepositPaidAt     *time.Time      `json:"deposit_paid_at,omitempty"`
+	DepositReference  *string         `json:"deposit_reference,omitempty"`
+	DepositPayerPhone *string         `json:"deposit_payer_phone,omitempty"`
+	// NoShowDeposit: the deposit is asked for because of earlier no-shows at
+	// this salon (D29). The confirmation screen says so, neutrally.
+	NoShowDeposit      bool      `json:"no_show_deposit"`
+	Channel            string    `json:"channel"`
+	SpecialRequests    *string   `json:"special_requests,omitempty"`
+	CancellationReason *string   `json:"cancellation_reason,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // toResponse converts a Booking to its safe client representation.
@@ -525,6 +532,7 @@ func toResponse(b *Booking) *BookingResponse {
 		DepositDeadline:    b.DepositDeadline,
 		DepositPaidAt:      b.DepositPaidAt,
 		DepositReference:   b.DepositReference,
+		NoShowDeposit:      b.NoShowDeposit,
 		Channel:            b.Channel,
 		SpecialRequests:    b.SpecialRequests,
 		CancellationReason: b.CancellationReason,
@@ -641,6 +649,8 @@ type EnrichedBookingResponse struct {
 	// screen never offers a move the server would refuse.
 	CanReschedule   bool `json:"can_reschedule"`
 	ReschedulesLeft int  `json:"reschedules_left"`
+	// NoShowDeposit - see BookingResponse.NoShowDeposit (D29).
+	NoShowDeposit bool `json:"no_show_deposit"`
 	// Meta
 	Channel            string    `json:"channel"`
 	SpecialRequests    *string   `json:"special_requests,omitempty"`
@@ -657,6 +667,7 @@ func toEnrichedResponse(e *EnrichedBooking) *EnrichedBookingResponse {
 	return &EnrichedBookingResponse{
 		CanReschedule:        isMovableStatus(e.Status) && left > 0 && e.StartTime.After(time.Now()),
 		ReschedulesLeft:      left,
+		NoShowDeposit:        e.NoShowDeposit,
 		ID:                   e.ID,
 		SalonID:              e.SalonID,
 		StoreID:              e.StoreID,

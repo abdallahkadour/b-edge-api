@@ -2,6 +2,7 @@ package payout
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -14,6 +15,10 @@ type Repository interface {
 	ListBySalon(ctx context.Context, salonID uuid.UUID, activeOnly bool) ([]*PaymentMethod, error)
 	Upsert(ctx context.Context, salonID uuid.UUID, req UpsertPaymentMethodRequest) (*PaymentMethod, error)
 	SetActive(ctx context.Context, id, salonID uuid.UUID, active bool) (*PaymentMethod, error)
+
+	// The no-show deposit rule's setting (decision D29, migration 055).
+	GetNoShowPolicy(ctx context.Context, salonID uuid.UUID) (int, error)
+	SetNoShowPolicy(ctx context.Context, salonID uuid.UUID, after int) error
 }
 
 type repository struct{ db *pgxpool.Pool }
@@ -103,4 +108,29 @@ func (r *repository) SetActive(ctx context.Context, id, salonID uuid.UUID, activ
 		return nil, err
 	}
 	return p, nil
+}
+
+func (r *repository) GetNoShowPolicy(ctx context.Context, salonID uuid.UUID) (int, error) {
+	var after int
+	err := r.db.QueryRow(ctx,
+		`SELECT no_show_deposit_after FROM salons WHERE id = $1 AND deleted_at IS NULL`, salonID).Scan(&after)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get no-show policy: %w", err)
+	}
+	return after, nil
+}
+
+func (r *repository) SetNoShowPolicy(ctx context.Context, salonID uuid.UUID, after int) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE salons SET no_show_deposit_after = $2 WHERE id = $1 AND deleted_at IS NULL`, salonID, after)
+	if err != nil {
+		return fmt.Errorf("set no-show policy: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

@@ -370,6 +370,7 @@ func (s *Service) SubmitBooking(ctx context.Context, bookingID uuid.UUID, custom
 	}
 
 	b.Status = StatusPending
+	s.applyNoShowRule(ctx, b) // D29, as for a guest's submit
 	return toResponse(b), nil
 }
 

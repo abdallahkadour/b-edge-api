@@ -152,7 +152,7 @@ One table. One function. In a leaf package so middleware and every domain can re
 | `members:read` | ✅ | ✅ | roster is visible to all members |
 | `earnings:salon:read` | ✅ | ❌ | per-member breakdown, salon total |
 | `calendar:salon:read` | ✅ | ❌ | all-member calendar |
-| `bookings:any:write` | ✅ | ❌ | approve, confirm, refund, cancel, complete, no-show another member's booking (since 2026-10-10, D30) |
+| `bookings:any:write` | ✅ | ❌ | approve, confirm, refund, cancel, complete, no-show, and move to another artist (D32) another member's booking (since 2026-10-10, D30) |
 | `activity:salon:read` | ✅ | ❌ | the salon activity log, `GET /salon/activity` (added 2026-10-10, D30) |
 | `own_schedule:write` | ✅ | ✅ | `artist_schedules`, personal exceptions |
 | `own_bookings:write` | ✅ | ✅ | confirm, complete, cancel, refund own |

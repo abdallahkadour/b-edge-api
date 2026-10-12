@@ -443,6 +443,8 @@ stateDiagram-v2
 | `GET` | `/api/v1/earnings/salon` *(shipped 2026-10-10 under this path, not the planned `/salon/earnings/breakdown`)* | `earnings:salon:read` | 200 | 403 |
 | `GET` | `/api/v1/bookings/salon`, `/api/v1/bookings/salon/calendar` | `calendar:salon:read` | 200 | 403 · 400 `INVALID_ARTIST_ID` |
 | `GET` | `/api/v1/salon/activity` | `activity:salon:read` | 200 | 403 · 400 `INVALID_KIND` / `INVALID_ACTOR` |
+| `GET` | `/api/v1/bookings/:id/reassign-candidates` | `bookings:any:write` (in the service) | 200 | 404 · 409 `BOOKING_NOT_REASSIGNABLE` |
+| `PATCH` | `/api/v1/bookings/:id/reassign` | `bookings:any:write` (in the service) | 200 | 400 `SAME_ARTIST` · 404 · 409 `ARTIST_NOT_ELIGIBLE` / `ARTIST_NOT_FREE` / `BOOKING_NOT_REASSIGNABLE` |
 
 **`GET /invitations/:token` is public and therefore an enumeration surface.** It must
 return the salon name and inviter's display name and **nothing else** — no member list, no

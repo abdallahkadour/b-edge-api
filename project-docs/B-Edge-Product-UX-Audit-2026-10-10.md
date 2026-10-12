@@ -279,6 +279,17 @@ and E2E 3.5 extended from "not in the list" to "a hold there is 409".
 
 ## 2. Reassigning a booking when an artist is sick
 
+> **Built 2026-10-10 (decision D32: the client keeps her price).** The owner
+> opens **Move to another artist** on any upcoming booking; every other
+> artist is listed, eligible or with the reason. The server re-asks the slot
+> list for the new artist and the move runs under both artists' locks with
+> the travel re-check (section 1's machinery), in one statement guarded by
+> the old artist. Two departures from the proposal below: the reasons are
+> four, not five - "busy" and "travel" are one **not free at this time**,
+> because telling them apart would mean re-deriving the slot list's own
+> reasoning beside it; and friction items 2 (booking on a client's behalf)
+> and 3 (a sick day surfacing its bookings) are not built yet.
+
 ### UX friction log — owner, today
 
 1. **There is no reassign action.** With Artist A sick, the owner's only
@@ -740,10 +751,10 @@ Team table.
    longer claims someone else booked it; a hold that ran out says so; a lost
    connection or server fault stays on the picker; "your details have been
    saved" only appears when they were.
-3. **Reassignment (section 2)** — needs one founder decision first: does the
-   client keep her price when moved to a dearer artist? (Proposed: yes.)
+3. ~~**Reassignment (section 2)**~~ — **done 2026-10-10**; the founder
+   decided the client keeps her price (D32).
 4. **Reporting: location split, Yesterday/custom range, the daily rollup.**
 5. Pair travel times, sick-day warnings, owner-made bookings.
 
-Section 1's code and the PWA copy fix (4.4) are **applied** (2026-10-10);
-the code in sections 2 and 3 is still proposed.
+Sections 1 and 2 and the PWA copy fix (4.4) are **applied** (2026-10-10);
+the reporting code in section 3 is still proposed.

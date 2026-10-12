@@ -154,6 +154,16 @@ type Repository interface {
 	// ArtistStoreIDs is every store the artist works at (artist_stores).
 	ArtistStoreIDs(ctx context.Context, artistID uuid.UUID) ([]uuid.UUID, error)
 
+	// SalonArtists is every artist placed in the salon (artists.salon_id),
+	// with her user id and name.
+	SalonArtists(ctx context.Context, salonID uuid.UUID) ([]SalonArtist, error)
+
+	// ReassignBooking hands booking id from artist `from` to artist `to` in
+	// one statement guarded by the old artist, under both artists' locks,
+	// re-checking the new artist's travel (travel) inside the transaction.
+	// 0 rows: the booking is no longer `from`'s, or no longer movable.
+	ReassignBooking(ctx context.Context, id, from, to uuid.UUID, travel map[uuid.UUID]int) (int64, error)
+
 	// GetStoreTravel reads a store for its travel defaults whether or not it
 	// is active. GetStore only returns active stores - right for "can this
 	// store be booked", wrong for "how far away is it": a branch the salon
@@ -2142,4 +2152,85 @@ func (r *pgRepo) GetStoreTravel(ctx context.Context, storeID uuid.UUID) (*Store,
 		return nil, fmt.Errorf("get store travel: %w", err)
 	}
 	return s, nil
+}
+
+// SalonArtists - see the interface.
+func (r *pgRepo) SalonArtists(ctx context.Context, salonID uuid.UUID) ([]SalonArtist, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT a.id, a.user_id, u.name
+		  FROM artists a JOIN users u ON u.id = a.user_id
+		 WHERE a.salon_id = $1
+		 ORDER BY u.name`, salonID)
+	if err != nil {
+		return nil, fmt.Errorf("salon artists: %w", err)
+	}
+	defer rows.Close()
+	out := make([]SalonArtist, 0)
+	for rows.Next() {
+		var a SalonArtist
+		if err := rows.Scan(&a.ArtistID, &a.UserID, &a.Name); err != nil {
+			return nil, fmt.Errorf("salon artists: scan: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ReassignBooking - see the interface.
+//
+// Both artists' diaries change, so both are locked - in a fixed order, so two
+// owners moving bookings in opposite directions cannot deadlock. The UPDATE
+// is guarded by the OLD artist: a reassignment working from a stale idea of
+// who has the booking changes nothing. The GIST constraint checks the new
+// artist's diary in the same statement; travel is checked after it, inside
+// the transaction (travelClash).
+func (r *pgRepo) ReassignBooking(ctx context.Context, id, from, to uuid.UUID, travel map[uuid.UUID]int) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reassign booking: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful commit
+
+	first, second := from, to
+	if second.String() < first.String() {
+		first, second = second, first
+	}
+	for _, a := range []uuid.UUID{first, second} {
+		if err := lockArtist(ctx, tx, a); err != nil {
+			return 0, fmt.Errorf("reassign booking: %w", err)
+		}
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE bookings
+		   SET artist_id         = $3,
+		       -- The client's calendar event changes artist: SEQUENCE moves so
+		       -- it updates in place (migration 031).
+		       calendar_sequence = calendar_sequence + 1,
+		       updated_at        = NOW()
+		 WHERE id = $1 AND artist_id = $2
+		   AND deleted_at IS NULL
+		   AND status IN ('pending', 'approved', 'deposit_paid', 'confirmed')
+		   AND start_time > NOW()`,
+		id, from, to)
+	if err != nil {
+		if isExclusionViolation(err) {
+			return 0, ErrSlotUnavailable
+		}
+		return 0, fmt.Errorf("reassign booking: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, nil
+	}
+	clash, err := travelClash(ctx, tx, []uuid.UUID{id}, travel)
+	if err != nil {
+		return 0, fmt.Errorf("reassign booking: %w", err)
+	}
+	if clash {
+		return 0, ErrSlotUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("reassign booking: commit: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

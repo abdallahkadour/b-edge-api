@@ -30,8 +30,8 @@ func (m *mockRepo) GetArtistRotaDay(_ context.Context, _, _ uuid.UUID, dow int) 
 // Approved by default. Every pre-existing slot and booking test assumes a
 // working artist, and defaulting this to false would fail all of them for a
 // reason unrelated to what they test.
-func (m *mockRepo) ArtistIsApproved(context.Context, uuid.UUID) (bool, error) {
-	if m.artistNotApproved {
+func (m *mockRepo) ArtistIsApproved(_ context.Context, artistID uuid.UUID) (bool, error) {
+	if m.artistNotApproved || m.unapproved[artistID] {
 		return false, m.artistApprovedErr
 	}
 	return true, m.artistApprovedErr

@@ -124,6 +124,17 @@ type mockRepo struct {
 	storesByID     map[uuid.UUID]*Store
 	buffersByPair  map[[2]uuid.UUID]*ArtistStoreBuffer
 	artistStoreIDs []uuid.UUID
+	// Reassignment (2026-10-10): per-artist answers, the salon's roster, and
+	// what was written.
+	notOffered           map[uuid.UUID]bool
+	notAtStore           map[uuid.UUID]bool
+	unapproved           map[uuid.UUID]bool
+	serviceByArtist      map[uuid.UUID]*SalonService
+	bookingsByArtist     map[uuid.UUID][]*Booking
+	salonArtists         []SalonArtist
+	salonArtistsAskedFor uuid.UUID
+	reassigned           []reassignCall
+	reassignErr          error
 	// Stores GetStore treats as closed for business (is_active = false).
 	inactiveStoreIDs map[uuid.UUID]bool
 	// The windows the slot code asked the day's bookings for.
@@ -234,7 +245,11 @@ func (m *mockRepo) GetBusinessHoursException(_ context.Context, _ uuid.UUID, _ t
 // ArtistPlacement defaults to "a member of testSalonID who works at the
 // requested store" - a VALID booking - so each cross-salon test states the one
 // fact it changes.
-func (m *mockRepo) ArtistPlacement(_ context.Context, _, _ uuid.UUID) (*uuid.UUID, bool, error) {
+func (m *mockRepo) ArtistPlacement(_ context.Context, artistID, _ uuid.UUID) (*uuid.UUID, bool, error) {
+	if m.notAtStore[artistID] {
+		salon := testSalonID
+		return &salon, false, nil
+	}
 	if m.placementErr != nil {
 		return nil, false, m.placementErr
 	}
@@ -247,7 +262,13 @@ func (m *mockRepo) ArtistPlacement(_ context.Context, _, _ uuid.UUID) (*uuid.UUI
 	}
 	return &salon, !m.placementUnlinked, nil
 }
-func (m *mockRepo) GetOfferedService(_ context.Context, _, _ uuid.UUID) (*SalonService, error) {
+func (m *mockRepo) GetOfferedService(_ context.Context, artistID, _ uuid.UUID) (*SalonService, error) {
+	if m.notOffered[artistID] {
+		return nil, nil
+	}
+	if svc, ok := m.serviceByArtist[artistID]; ok {
+		return svc, nil
+	}
 	return m.getServiceSvc, m.getServiceErr
 }
 func (m *mockRepo) GetServiceDepositDeadlineHours(_ context.Context, _ uuid.UUID) (int, error) {
@@ -256,9 +277,23 @@ func (m *mockRepo) GetServiceDepositDeadlineHours(_ context.Context, _ uuid.UUID
 	}
 	return m.getServiceSvc.DepositDeadlineHours, m.getServiceErr
 }
-func (m *mockRepo) GetArtistBookingsBetween(_ context.Context, _ uuid.UUID, from, to time.Time) ([]*Booking, error) {
+func (m *mockRepo) GetArtistBookingsBetween(_ context.Context, artistID uuid.UUID, from, to time.Time) ([]*Booking, error) {
 	m.dayWindowFrom, m.dayWindowTo = from, to
+	if m.bookingsByArtist != nil {
+		return m.bookingsByArtist[artistID], nil
+	}
 	return m.getArtistBookingsBookings, m.getArtistBookingsErr
+}
+func (m *mockRepo) SalonArtists(_ context.Context, salonID uuid.UUID) ([]SalonArtist, error) {
+	m.salonArtistsAskedFor = salonID
+	return m.salonArtists, nil
+}
+func (m *mockRepo) ReassignBooking(_ context.Context, id, from, to uuid.UUID, travel map[uuid.UUID]int) (int64, error) {
+	m.reassigned = append(m.reassigned, reassignCall{ID: id, From: from, To: to, Travel: travel})
+	if m.reassignErr != nil {
+		return 0, m.reassignErr
+	}
+	return 1, nil
 }
 func (m *mockRepo) GetArtistCrossStoreBookingsBetween(_ context.Context, _ uuid.UUID, _ uuid.UUID, from, to time.Time) ([]*Booking, error) {
 	m.crossWindowFrom, m.crossWindowTo = from, to
@@ -2963,4 +2998,9 @@ func (m *mockRepo) ListEnrichedBookingsBySalon(_ context.Context, salonID uuid.U
 func (m *mockRepo) ListEnrichedBookingsForSalonWeek(_ context.Context, salonID uuid.UUID, artistID *uuid.UUID, weekStart time.Time) ([]*EnrichedBooking, error) {
 	m.salonListSalon, m.salonListArtist, m.salonWeekStart = salonID, artistID, weekStart
 	return m.salonList, nil
+}
+
+type reassignCall struct {
+	ID, From, To uuid.UUID
+	Travel       map[uuid.UUID]int
 }

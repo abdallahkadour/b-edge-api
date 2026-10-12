@@ -117,6 +117,10 @@ func RegisterRoutes(app *fiber.App, pool *pgxpool.Pool, log *zap.Logger, codeAtt
 	b.Get("/artist/:artist_id/waitlist", middleware.RequireRole("artist", "admin"), handler.GetWaitlistByArtist)
 	b.Get("/customer/me", handler.GetBookingsByCustomer)
 	b.Patch("/:id/reschedule", handler.RescheduleBooking)
+	// The owner moving a booking to another artist (2026-10-10). The guard
+	// is in the service, as for every booking action.
+	b.Get("/:id/reassign-candidates", middleware.RequireRole("artist"), handler.ReassignCandidates)
+	b.Patch("/:id/reassign", middleware.RequireRole("artist"), handler.ReassignBooking)
 	b.Get("/:id/reschedule-slots", handler.RescheduleSlots)
 }
 
@@ -1015,4 +1019,66 @@ func (h *Handler) GetSalonCalendar(c *fiber.Ctx) error {
 		return err
 	}
 	return response.List(c, rows, &response.Meta{HasMore: false})
+}
+
+// ReassignCandidates godoc
+// @Summary      Who could take this booking (salon owner)
+// @Description  Every other artist of the booking's salon, each either able to take it or with
+// @Description  the reason she cannot: NOT_OFFERED (does not offer the service), NOT_AT_STORE
+// @Description  (does not work at that location), NOT_ACCEPTING (not approved, or her subscription
+// @Description  stops new bookings), NOT_FREE (off, busy, or could not travel there in time).
+// @Description  price is her price for the service; the client keeps hers either way.
+// @Description  Owner only (salon capability bookings:any:write); anyone else gets 404.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Produce      json
+// @Param        id  path  string  true  "Booking UUID"
+// @Success      200 {object} response.Body{data=[]ReassignCandidate}
+// @Failure      404 {object} response.ErrorBody "BOOKING_NOT_FOUND"
+// @Failure      409 {object} response.ErrorBody "BOOKING_NOT_REASSIGNABLE"
+// @Router       /bookings/{id}/reassign-candidates [get]
+func (h *Handler) ReassignCandidates(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+	out, err := h.svc.ReassignCandidates(c.UserContext(), id, middleware.UserIDFromContext(c))
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
+}
+
+// ReassignBooking godoc
+// @Summary      Move a booking to another artist (salon owner)
+// @Description  Hands an upcoming booking to another artist of the same salon, who must be able
+// @Description  to take it exactly as if the client had booked her (approved, offers the service,
+// @Description  works at the location, free at that time with travel counted). The client keeps
+// @Description  the price she agreed; the deposit stays where it was paid. Recorded in the salon's
+// @Description  activity log with both names; the client and both artists are told.
+// @Tags         bookings
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        id    path  string           true  "Booking UUID"
+// @Param        body  body  ReassignRequest  true  "The artist to move it to"
+// @Success      200 {object} response.Body{data=BookingResponse}
+// @Failure      400 {object} response.ErrorBody "SAME_ARTIST or INVALID_ARTIST_ID"
+// @Failure      404 {object} response.ErrorBody "BOOKING_NOT_FOUND"
+// @Failure      409 {object} response.ErrorBody "ARTIST_NOT_ELIGIBLE, ARTIST_NOT_FREE or BOOKING_NOT_REASSIGNABLE"
+// @Router       /bookings/{id}/reassign [patch]
+func (h *Handler) ReassignBooking(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return apperror.BadRequest("INVALID_ID", "Invalid booking ID")
+	}
+	var req ReassignRequest
+	if err := c.BodyParser(&req); err != nil {
+		return validation.MapBodyError(err)
+	}
+	out, err := h.svc.ReassignBooking(c.UserContext(), id, middleware.UserIDFromContext(c), req)
+	if err != nil {
+		return err
+	}
+	return response.OK(c, out)
 }

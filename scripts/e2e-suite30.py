@@ -17,6 +17,13 @@ The API half; the screens are driven by b-edge-web/scripts/e2e-suite30-ui.mjs.
   30.10 a member and a customer are refused the feed
   30.11 the feed's filters
   30.12 a menu price changed is in the feed with both prices
+  30.13 who could take a member's booking: the owner, with her price
+  30.14 the owner moves it to herself: the client keeps her price, the
+        calendar event updates, the move is in the feed with both names,
+        the client and the member are told - the owner is not
+  30.15 a member cannot list or move anyone's booking
+  30.16 a move into the new artist's own appointment is refused
+  30.17 a finished booking stays where it is
 
 Builds its own salon of two artists and destroys it in a finally block,
 reporting the residual count. Helpers come from chaos-booking.py. Requires
@@ -137,6 +144,10 @@ def main():
     c.seat_plan(salon, "multi")
     owner_tok = c.login(owner_email)
     owner_user = sql(f"SELECT user_id FROM artists WHERE id='{owner}'")
+    # Real opening hours: a move asks the slot list, as a booking would.
+    for dow in range(7):
+        call("POST", f"/artists/stores/{store}/hours",
+             {"day_of_week": dow, "open_time": "09:00:00", "close_time": "18:00:00", "is_open": True}, owner_tok)
 
     member_email = artist("member", 5301)
     member = c.join(owner_tok, member_email, PHONE.format(5301), "s30-member", admin_tok)
@@ -305,6 +316,74 @@ def main():
         rec("30.12", "PASS", "menu price 150.00 -> 175.00 in the feed, with the service's name")
     else:
         rec("30.12", "FAIL", f"{st} {err(r)} feed={ups[:1]}")
+
+    reassignment(salon, store, service, owner, member, owner_tok, member_tok, customer, member_user, owner_user)
+
+
+def reassignment(salon, store, service, owner, member, owner_tok, member_tok, customer, member_user, owner_user):
+    def beirut(days, hm):
+        d = (datetime.now(timezone.utc) + timedelta(days=days)).date()
+        off = 3 if 4 <= d.month <= 10 else 2
+        h, m = map(int, hm.split(":"))
+        return datetime(d.year, d.month, d.day, h, m, tzinfo=timezone.utc) - timedelta(hours=off)
+
+    move = booking(salon, store, service, member, customer, beirut(4, "12:00"), "confirmed", "150.00", "30.00")
+    busy = booking(salon, store, service, member, customer, beirut(4, "15:00"), "confirmed")
+    booking(salon, store, service, owner, customer, beirut(4, "15:30"), "confirmed")  # the owner is busy then
+    done = booking(salon, store, service, member, customer, beirut(-3, "12:00"), "completed")
+
+    # 30.13
+    st, r = call("GET", f"/bookings/{move}/reassign-candidates", None, owner_tok)
+    cands = data(r) if st == 200 else []
+    me = [x for x in cands if x["artist_id"] == owner]
+    if st == 200 and len(cands) == 1 and me and me[0]["eligible"] and me[0]["name"] == "s30 Owner":
+        rec("30.13", "PASS", f"candidates for the member's 12:00: the owner, eligible, her price ${me[0]['price']}")
+    else:
+        rec("30.13", "FAIL", f"{st} {err(r)} {cands}")
+
+    # 30.14
+    seq0 = sql(f"SELECT calendar_sequence FROM bookings WHERE id='{move}'")
+    st, r = call("PATCH", f"/bookings/{move}/reassign", {"artist_id": owner}, owner_tok)
+    row = sql(f"SELECT artist_id::text||'|'||final_price::text||'|'||deposit_amount::text||'|'||calendar_sequence FROM bookings WHERE id='{move}'")
+    a, price, dep, seq = row.split("|")
+    feed = sql(f"""SELECT old_values->>'artist_name'||'>'||(new_values->>'artist_name')||'|'||actor_id::text
+                   FROM audit_events WHERE entity_id='{move}' AND action='booking.reassign'""")
+    told = set(sql(f"SELECT user_id::text FROM notifications WHERE booking_id='{move}' AND template_name LIKE 'booking_reassigned%'").split())
+    if st != 200 or a != owner:
+        rec("30.14", "FAIL", f"{st} {err(r)} artist now {a}")
+    elif price != "150.00" or dep != "30.00" or int(seq) != int(seq0) + 1:
+        rec("30.14", "FAIL", f"price {price}, deposit {dep}, sequence {seq0}->{seq}")
+    elif feed != f"s30 Member>s30 Owner|{owner_user}":
+        rec("30.14", "FAIL", f"activity row: {feed!r}")
+    elif told != {customer, member_user}:
+        rec("30.14", "FAIL", f"told {told}, expected the client and the member only")
+    else:
+        rec("30.14", "PASS", "moved to the owner; $150 and the $30 deposit unchanged; calendar event updates; "
+                             "feed 's30 Member > s30 Owner' by the owner; the client and the member told, not the owner")
+
+    # 30.15
+    st1, r1 = call("GET", f"/bookings/{busy}/reassign-candidates", None, member_tok)
+    st2, r2 = call("PATCH", f"/bookings/{busy}/reassign", {"artist_id": owner}, member_tok)
+    still = sql(f"SELECT artist_id FROM bookings WHERE id='{busy}'")
+    if (st1, err(r1), st2, err(r2)) == (404, "BOOKING_NOT_FOUND", 404, "BOOKING_NOT_FOUND") and still == member:
+        rec("30.15", "PASS", "a member: 404 on both, nothing moved")
+    else:
+        rec("30.15", "FAIL", f"list {st1} {err(r1)}, move {st2} {err(r2)}, artist {still}")
+
+    # 30.16
+    st, r = call("PATCH", f"/bookings/{busy}/reassign", {"artist_id": owner}, owner_tok)
+    still = sql(f"SELECT artist_id FROM bookings WHERE id='{busy}'")
+    if st == 409 and err(r) == "ARTIST_NOT_FREE" and still == member:
+        rec("30.16", "PASS", "into the owner's own 15:30: 409 ARTIST_NOT_FREE, nothing moved")
+    else:
+        rec("30.16", "FAIL", f"{st} {err(r)} artist {still}")
+
+    # 30.17
+    st, r = call("PATCH", f"/bookings/{done}/reassign", {"artist_id": owner}, owner_tok)
+    if st == 409 and err(r) == "BOOKING_NOT_REASSIGNABLE":
+        rec("30.17", "PASS", "a completed booking: 409 BOOKING_NOT_REASSIGNABLE")
+    else:
+        rec("30.17", "FAIL", f"{st} {err(r)}")
 
 
 def teardown():

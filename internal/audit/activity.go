@@ -37,6 +37,7 @@ const (
 	ActionBookingNoShow      = "booking.no_show"
 	ActionBookingReschedule  = "booking.reschedule"
 	ActionBookingShiftDay    = "booking.shift_day"
+	ActionBookingReassign    = "booking.reassign"
 
 	ActionPaymentMethodSave    = "payment_method.save"
 	ActionPaymentMethodRetire  = "payment_method.retire"
